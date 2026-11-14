@@ -1,0 +1,1 @@
+export { createScaffoldCommand } from "./scaffold.js";

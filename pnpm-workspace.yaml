@@ -1,0 +1,10 @@
+packages:
+  - "packages/*"
+  - "examples/*"
+  - "apps/*"
+
+allowBuilds:
+  canvas: true
+  esbuild: false
+  midi: true
+  unrs-resolver: true

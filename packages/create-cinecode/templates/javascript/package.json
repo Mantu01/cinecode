@@ -1,0 +1,28 @@
+{
+  "name": "{{PROJECT_NAME}}",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "cinecode dev --config ./cinecode.config.js",
+    "render": "cinecode render --props ./cinecode.config.js",
+    "render:all": "cinecode render --all --props ./cinecode.config.js",
+    "generate": "cinecode generate --config ./cinecode.config.js",
+    "generate:image": "cinecode generate image --all --config ./cinecode.config.js",
+    "generate:audio": "cinecode generate audio --all --config ./cinecode.config.js",
+    "generate:scene": "cinecode generate scene --all --config ./cinecode.config.js",
+    "generate:timeline": "cinecode generate timeline --all --config ./cinecode.config.js",
+    "generate:all": "cinecode generate all --all --config ./cinecode.config.js",
+    "preview": "cinecode preview --props ./cinecode.config.js",
+    "still": "cinecode still --props ./cinecode.config.js",
+    "inspect": "cinecode inspect --props ./cinecode.config.js",
+    "validate": "cinecode validate --config ./cinecode.config.js",
+    "doctor": "cinecode doctor --config ./cinecode.config.js",
+    "clean": "cinecode clean --config ./cinecode.config.js",
+    "media:list": "cinecode media:list --config ./cinecode.config.js",
+    "media:download": "cinecode media:download --config ./cinecode.config.js"
+  },
+  "dependencies": {
+    "cinecode": "{{CINECODE_DEP}}"
+  }
+}

@@ -1,0 +1,128 @@
+import { authoringIssue, AUTHORING_CODES } from "../validation/errors.js";
+import type { AnimatableValue } from "../types/animatable.js";
+import type { EasingDescriptor } from "../types/easing.js";
+import { type FrameConversion, timeInputToFrames } from "../time/convert.js";
+import { mixColors, parseColor } from "../easing/colors.js";
+import { interpolateKeyframeValue, keyframeProgress } from "./interpolate.js";
+import type { KeyframeInterpolationInput } from "./types.js";
+
+export interface EngineKeyframe {
+  readonly atFrames: number;
+  readonly value: AnimatableValue;
+  readonly interpolation?: KeyframeInterpolationInput;
+  readonly easing?: EasingDescriptor;
+}
+
+export function createEngineKeyframe(
+  atFrames: number,
+  value: AnimatableValue,
+  easing?: EasingDescriptor,
+  interpolation?: KeyframeInterpolationInput,
+): EngineKeyframe {
+  const base: EngineKeyframe = { atFrames, value };
+  return {
+    ...base,
+    ...(easing === undefined ? {} : { easing }),
+    ...(interpolation === undefined ? {} : { interpolation }),
+  };
+}
+
+export type AnimatablePropertyMap = Readonly<Record<string, readonly EngineKeyframe[]>>;
+
+export function buildPropertyMap(
+  entries: readonly (readonly [property: string, keyframes: readonly EngineKeyframe[]])[],
+): AnimatablePropertyMap {
+  const map: Record<string, readonly EngineKeyframe[]> = {};
+  for (const [property, list] of entries) {
+    map[property] = list;
+  }
+  return map;
+}
+
+export function validateKeyframes(
+  property: string,
+  keyframes: readonly EngineKeyframe[],
+  position?: { file: string; line: number; column: number },
+): void {
+  for (let i = 1; i < keyframes.length; i += 1) {
+    const previous = keyframes[i - 1]!;
+    const current = keyframes[i]!;
+    if (current.atFrames < previous.atFrames) {
+      throw authoringIssue(
+        AUTHORING_CODES.invalidKeyframes,
+        `Keyframes for "${property}" are not sorted by time`,
+        { position },
+      );
+    }
+    if (current.atFrames === previous.atFrames) {
+      throw authoringIssue(
+        AUTHORING_CODES.invalidKeyframes,
+        `Keyframes for "${property}" have a duplicate time at ${current.atFrames} frames`,
+        { position },
+      );
+    }
+  }
+}
+
+export function sortKeyframes(keyframes: readonly EngineKeyframe[]): readonly EngineKeyframe[] {
+  return [...keyframes].sort((a, b) => a.atFrames - b.atFrames);
+}
+
+export interface InterpolationContext {
+  readonly conversion: FrameConversion;
+  readonly fps: number;
+}
+
+export function interpolateProperty(
+  keyframes: readonly EngineKeyframe[],
+  clipFrame: number,
+  context: InterpolationContext,
+): AnimatableValue {
+  if (keyframes.length === 0) {
+    throw new RangeError("interpolateProperty requires at least one keyframe");
+  }
+  const first = keyframes[0]!;
+  if (clipFrame <= first.atFrames) {
+    return first.value;
+  }
+  const last = keyframes[keyframes.length - 1]!;
+  if (clipFrame >= last.atFrames) {
+    return last.value;
+  }
+  let index = 0;
+  for (let i = 1; i < keyframes.length; i += 1) {
+    if (keyframes[i]!.atFrames > clipFrame) {
+      index = i - 1;
+      break;
+    }
+  }
+  const from = keyframes[index]!;
+  const to = keyframes[index + 1]!;
+  const span = to.atFrames - from.atFrames;
+  const localTime = (clipFrame - from.atFrames) / span;
+  const progress = keyframeProgress(from.interpolation, from.easing, context.fps);
+  const eased = evaluationSafe(progress(localTime));
+  return interpolateValues(from.value, to.value, eased);
+}
+
+function evaluationSafe(progress: number): number {
+  if (!Number.isFinite(progress)) {
+    return 1;
+  }
+  return Math.min(1, Math.max(0, progress));
+}
+
+export function interpolateValues(from: AnimatableValue, to: AnimatableValue, t: number): AnimatableValue {
+  return interpolateKeyframeValue(from, to, t) as AnimatableValue;
+}
+
+export function colorAt(from: string, to: string, t: number): string {
+  return mixColors(from, to, t);
+}
+
+export function sampleHexString(hex: string): { r: number; g: number; b: number } {
+  const rgba = parseColor(hex);
+  return { r: rgba.r, g: rgba.g, b: rgba.b };
+}
+
+export { timeInputToFrames };

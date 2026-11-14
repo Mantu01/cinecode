@@ -1,0 +1,71 @@
+import { defineConfig } from "cinecode";
+
+const WIDTH = {{WIDTH}};
+const HEIGHT = {{HEIGHT}};
+const FPS = {{FPS}};
+
+const BACKGROUND = "#0a0a0a";
+
+/**
+ * Global project configuration.
+ *
+ * Video quality is fully controlled here — the renderer never silently
+ * downgrades a render. Bump `render.quality` to "lossless" (or set an explicit
+ * `render.crf: 0`) for a pristine master.
+ */
+export default defineConfig({
+  schemaVersion: 2,
+
+  project: {
+    name: "{{PROJECT_NAME}}",
+    entry: "./main.js",
+    sourceDir: "./src",
+    outputDir: "./output",
+    cacheDir: ".cinecode/cache",
+  },
+
+  video: {
+    title: "{{PROJECT_NAME}}",
+    author: "",
+    tags: [],
+    width: WIDTH,
+    height: HEIGHT,
+    fps: FPS,
+    background: BACKGROUND,
+    colorSpace: "srgb",
+    pixelAspectRatio: 1,
+  },
+
+  render: {
+    format: "mp4",
+    // draft | preview | medium | final | lossless
+    quality: "final",
+    // h264 | h265 | av1 | prores | vp9
+    codec: "h264",
+    // 0 = lossless. Leave undefined to use the quality profile's CRF.
+    // crf: 0,
+    preset: "slow",
+    hardwareAcceleration: "off",
+    concurrency: "auto",
+    chunkSize: 32,
+  },
+
+  images: {
+    defaultFormat: "png",
+    quality: 92,
+    scaleFactor: 1,
+  },
+
+  audio: {
+    sampleRate: 48000,
+    channels: 2,
+    masterVolume: 1,
+  },
+
+  dev: {
+    port: 3000,
+    host: "localhost",
+    hmr: true,
+    open: false,
+  },
+});
