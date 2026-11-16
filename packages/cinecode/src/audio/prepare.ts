@@ -20,7 +20,9 @@ interface AuthoredAudioClip {
   readonly pan?: number;
   readonly muted?: boolean;
   readonly name?: string;
-  readonly position3d?: SpatialPosition & { readonly velocity?: { readonly x?: number; readonly y?: number; readonly z?: number } };
+  readonly position3d?: SpatialPosition & {
+    readonly velocity?: { readonly x?: number; readonly y?: number; readonly z?: number };
+  };
   readonly sidechainFrom?: string;
   readonly stem?: StemName;
   readonly stemModel?: string;
@@ -35,12 +37,16 @@ export interface AudioPrepareOptions {
   readonly stemCacheDir?: string;
 }
 
-function toSeconds(value: number | string | undefined, fallback: number): number {
+function toSeconds(
+  value: number | string | undefined,
+  fallback: number,
+  fallbackFps: number = 30,
+): number {
   if (value === undefined) return fallback;
   if (typeof value === "number") return Number.isFinite(value) ? value : fallback;
   if (value.includes(":")) {
     const [h = 0, m = 0, s = 0, f = 0] = value.split(":").map(Number);
-    return h * 3600 + m * 60 + s + f / 30;
+    return h * 3600 + m * 60 + s + f / fallbackFps;
   }
   const parsed = Number.parseFloat(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -48,7 +54,7 @@ function toSeconds(value: number | string | undefined, fallback: number): number
 
 async function sourceBuffer(
   authored: AuthoredAudioClip,
-  options: AudioPrepareOptions
+  options: AudioPrepareOptions,
 ): Promise<AudioBuffer | null> {
   if (authored.buffer) return authored.buffer;
   let src = authored.src;
@@ -79,14 +85,11 @@ function slice(
   fromFrame: number,
   frameCount: number,
   fadeInFrames: number,
-  fadeOutFrames: number
+  fadeOutFrames: number,
 ): AudioBuffer {
   const channels = source.channels;
   const unchanged =
-    fromFrame === 0 &&
-    frameCount === source.length &&
-    fadeInFrames === 0 &&
-    fadeOutFrames === 0;
+    fromFrame === 0 && frameCount === source.length && fadeInFrames === 0 && fadeOutFrames === 0;
   if (unchanged) return source;
 
   const data = new Float32Array(frameCount * channels);
@@ -113,26 +116,31 @@ function slice(
  */
 export async function prepareAudioTracks(
   clips: readonly (AudioClip | SoundClip | TtsClip)[],
-  options: AudioPrepareOptions
+  options: AudioPrepareOptions,
 ): Promise<AudioTrackState[]> {
   const { sampleRate, duration } = options;
   const tracks: AudioTrackState[] = [];
 
   for (const clip of clips) {
-    const authored: AuthoredAudioClip = clip.type === "tts"
-      ? { ...(clip as TtsClip), buffer: await synthesizeTts(clip as TtsClip) }
-      : (clip as AuthoredAudioClip);
+    const authored: AuthoredAudioClip =
+      clip.type === "tts"
+        ? { ...(clip as TtsClip), buffer: await synthesizeTts(clip as TtsClip) }
+        : (clip as AuthoredAudioClip);
     const source = await sourceBuffer(authored, options);
     if (!source) continue;
 
     const start = Math.max(0, toSeconds(authored.start, 0));
-    const fromFrame = Math.min(Math.round(Math.max(0, toSeconds(authored.trimStart, 0)) * sampleRate), source.length);
+    const fromFrame = Math.min(
+      Math.round(Math.max(0, toSeconds(authored.trimStart, 0)) * sampleRate),
+      source.length,
+    );
     const available = source.length - fromFrame;
     if (available <= 0) continue;
 
-    const requested = authored.duration === undefined
-      ? Math.round(Math.max(0, duration - start) * sampleRate)
-      : Math.round(Math.max(0, toSeconds(authored.duration, 0)) * sampleRate);
+    const requested =
+      authored.duration === undefined
+        ? Math.round(Math.max(0, duration - start) * sampleRate)
+        : Math.round(Math.max(0, toSeconds(authored.duration, 0)) * sampleRate);
     const frameCount = Math.min(requested, available);
     if (frameCount <= 0) continue;
 
@@ -141,7 +149,7 @@ export async function prepareAudioTracks(
       fromFrame,
       frameCount,
       Math.round(Math.max(0, toSeconds(authored.fadeIn, 0)) * sampleRate),
-      Math.round(Math.max(0, toSeconds(authored.fadeOut, 0)) * sampleRate)
+      Math.round(Math.max(0, toSeconds(authored.fadeOut, 0)) * sampleRate),
     );
     const buffer = authored.position3d ? applySpatialPanning(sliced, authored.position3d) : sliced;
 

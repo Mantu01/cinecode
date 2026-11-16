@@ -1,4 +1,4 @@
-export { parseSrt, parseVtt, parseVttCueStyles, type SubtitleEntry, type SubtitleCueStyle } from "./parser.js";
+export { parseSrt, parseVtt, parseAss, assColorToCss, parseVttCueStyles, type SubtitleEntry, type SubtitleCueStyle } from "./parser.js";
 export {
   loadSubtitles,
   detectSubtitleFormat,

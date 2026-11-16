@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { CinecodeConfig } from "../core/types/index.js";
+import { defineConfig as coreDefineConfig } from "../core/define/definitions.js";
 
 export function defineConfig(config: CinecodeConfig): CinecodeConfig {
-  return config;
+  return coreDefineConfig(config);
 }
 
 export interface ScaffoldConfigOptions {

@@ -105,8 +105,7 @@ export function collectEntries(
     case "timeline":
       return manifest.timelines ?? [];
     case "character":
-      return manifest.characters ?? [];
     case "motion":
-      return manifest.motions ?? [];
+      return [];
   }
 }

@@ -5,6 +5,7 @@ import { extractDefs } from "./defs.js";
 
 export function parseSvgSource(svgString: string): SvgElement {
   const tree = parse(svgString);
+  if (!tree || typeof tree !== "object") throw new Error("Invalid SVG AST");
   const root = findRootSvg(tree);
   if (root === undefined) {
     throw new Error("Invalid SVG source: no root <svg> element found");

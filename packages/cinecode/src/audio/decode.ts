@@ -30,10 +30,14 @@ export async function getAudioInfo(filePath: string): Promise<{
   const ffprobeStatic = await getFfprobeStatic();
   return new Promise((resolve, reject) => {
     const args = [
-      "-v", "error",
-      "-select_streams", "a:0",
-      "-show_entries", "stream=sample_rate,channels,duration,codec_name",
-      "-of", "json",
+      "-v",
+      "error",
+      "-select_streams",
+      "a:0",
+      "-show_entries",
+      "stream=sample_rate,channels,duration,codec_name",
+      "-of",
+      "json",
       filePath,
     ];
 
@@ -41,8 +45,12 @@ export async function getAudioInfo(filePath: string): Promise<{
     let stdout = "";
     let stderr = "";
 
-    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
-    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
 
     child.on("close", (code) => {
       if (code !== 0) {
@@ -75,7 +83,7 @@ export async function getAudioInfo(filePath: string): Promise<{
 
 export async function decodeAudioFile(
   filePath: string,
-  options: AudioDecodeOptions
+  options: AudioDecodeOptions,
 ): Promise<DecodedAudio> {
   const cacheKey = `audio-${filePath}-${options.targetSampleRate}-${options.targetChannels}`;
   const cache = options.cache;
@@ -99,14 +107,19 @@ export async function decodeAudioFile(
   }
 
   const info = await getAudioInfo(filePath);
-  
+
   return new Promise((resolve, reject) => {
     const args = [
-      "-v", "error",
-      "-i", filePath,
-      "-f", "f32le",
-      "-ar", String(options.targetSampleRate),
-      "-ac", String(options.targetChannels),
+      "-v",
+      "error",
+      "-i",
+      filePath,
+      "-f",
+      "f32le",
+      "-ar",
+      String(options.targetSampleRate),
+      "-ac",
+      String(options.targetChannels),
       "-",
     ];
 
@@ -114,8 +127,12 @@ export async function decodeAudioFile(
     const chunks: Buffer[] = [];
     let stderr = "";
 
-    child.stdout.on("data", (chunk) => { chunks.push(chunk); });
-    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+    child.stdout.on("data", (chunk) => {
+      chunks.push(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
 
     child.on("close", async (code) => {
       if (code !== 0) {
@@ -125,7 +142,7 @@ export async function decodeAudioFile(
 
       const buffer = Buffer.concat(chunks);
       const float32 = new Float32Array(buffer.buffer, buffer.byteOffset, buffer.byteLength / 4);
-      
+
       const decoded: DecodedAudio = {
         buffer: {
           sampleRate: options.targetSampleRate,
@@ -138,15 +155,17 @@ export async function decodeAudioFile(
         originalChannels: info.channels,
       };
 
-      await cache?.setMetadata(cacheKey, {
+      await cache
+        ?.setMetadata(cacheKey, {
           duration: decoded.duration,
           width: 0,
           height: 0,
           fps: 0,
           hasAudio: true,
           sampleRate: options.targetSampleRate,
-        }).catch(() => {});
-        await cache?.setFrame(cacheKey, 0, Buffer.from(float32.buffer)).catch(() => {});
+        })
+        .catch(() => {});
+      await cache?.setFrame(cacheKey, 0, Buffer.from(float32.buffer)).catch(() => {});
 
       resolve(decoded);
     });
@@ -159,7 +178,7 @@ export async function decodeAudioFile(
 
 export async function decodeVideoAudioTrack(
   filePath: string,
-  options: AudioDecodeOptions
+  options: AudioDecodeOptions,
 ): Promise<DecodedAudio | null> {
   const info = await getAudioInfo(filePath);
   if (!info || info.duration === 0) return null;
@@ -169,7 +188,7 @@ export async function decodeVideoAudioTrack(
 export function createAudioBufferFromData(
   data: Float32Array,
   sampleRate: number,
-  channels: number
+  channels: number,
 ): AudioBuffer {
   return {
     sampleRate,

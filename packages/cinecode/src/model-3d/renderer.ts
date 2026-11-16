@@ -106,7 +106,7 @@ export class Model3dRenderer {
   async loadModel(src: string): Promise<void> {
     const { readFile } = await import("node:fs/promises");
     const buffer = await readFile(src);
-    const api = await import("./gltf-parser.js").then(m => m.parseGLB(new Uint8Array(buffer)));
+    const api = await import("./gltf-parser.js").then((m) => m.parseGLB(new Uint8Array(buffer)));
     this.api = api;
     this.skeleton = buildSkeletonState(api, 0);
     this.skinBindings = buildSkinBindings(api);
@@ -151,8 +151,49 @@ export class Model3dRenderer {
     if (this.api) {
       await this.renderScene(gl, frame, fps, options);
     }
+    this.readback(gl, canvas, options.width, options.height);
 
     return canvas;
+  }
+
+  private readback(gl: Gl, canvas: Canvas, width: number, height: number): void {
+    const pixels = new Uint8Array(width * height * 4);
+    gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    const flipped = new Uint8ClampedArray(width * height * 4);
+    for (let row = 0; row < height; row++) {
+      const src = (height - 1 - row) * width * 4;
+      flipped.set(pixels.subarray(src, src + width * 4), row * width * 4);
+    }
+    const ImageDataCtor = (
+      globalThis as { ImageData?: new (data: Uint8ClampedArray, w: number, h: number) => unknown }
+    ).ImageData;
+    const ctx = canvas.getContext("2d");
+    const imageData = ImageDataCtor
+      ? new (
+          ImageDataCtor as new (
+            data: Uint8ClampedArray,
+            w: number,
+            h: number,
+          ) => { data: Uint8ClampedArray }
+        )(flipped, width, height)
+      : ctx.createImageData(width, height);
+    if (imageData.data !== flipped) imageData.data.set(flipped);
+    ctx.putImageData(imageData as never, 0, 0);
+  }
+
+  dispose(): void {
+    if (this.gl) {
+      const gl = this.gl;
+      for (const buffer of [this.vertexBuffer, this.colorBuffer, this.indexBuffer]) {
+        if (buffer) gl.deleteBuffer(buffer);
+      }
+      if (this.program) gl.deleteProgram(this.program);
+    }
+    this.gl = null;
+    this.program = null;
+    this.vertexBuffer = null;
+    this.colorBuffer = null;
+    this.indexBuffer = null;
   }
 
   private setupGL(gl: Gl, _options: Model3dOptions): void {
@@ -219,7 +260,11 @@ export class Model3dRenderer {
       const rotation = node.rotation ?? [0, 0, 0, 1];
       const scale = node.scale ?? [1, 1, 1];
       localMatrix = this.multiply(
-        this.fromRotationTranslationScale(rotation as readonly number[], translation as readonly number[], scale as readonly number[]),
+        this.fromRotationTranslationScale(
+          rotation as readonly number[],
+          translation as readonly number[],
+          scale as readonly number[],
+        ),
         localMatrix,
       );
     }
@@ -251,7 +296,8 @@ export class Model3dRenderer {
     if (!mesh) return;
 
     const mvp = this.multiply(projection, this.multiply(view, modelMatrix));
-    const skinMatrices = skinIndex !== undefined ? this.resolveSkinMatrices(skinIndex, options) : null;
+    const skinMatrices =
+      skinIndex !== undefined ? this.resolveSkinMatrices(skinIndex, options) : null;
 
     for (const primitive of mesh.primitives) {
       const posAccessor = primitive.attributes.POSITION;
@@ -268,12 +314,25 @@ export class Model3dRenderer {
         const jointsAccessor = primitive.attributes.JOINTS_0;
         const weightsAccessor = primitive.attributes.WEIGHTS_0;
         if (jointsAccessor !== undefined && weightsAccessor !== undefined) {
-          const boneIndices = Float32Array.from(getAccessorData(api, jointsAccessor) as unknown as ArrayLike<number>);
+          const boneIndices = Float32Array.from(
+            getAccessorData(api, jointsAccessor) as unknown as ArrayLike<number>,
+          );
           const rawWeights = getAccessorData(api, weightsAccessor);
-          const boneWeights = rawWeights instanceof Uint8Array || rawWeights instanceof Uint16Array
-            ? Float32Array.from(rawWeights as unknown as ArrayLike<number>, (value: number) => value / 255)
-            : Float32Array.from(rawWeights as unknown as ArrayLike<number>);
-          const skinned = applySkinning(positions, normals, boneIndices, boneWeights, skinMatrices, null);
+          const boneWeights =
+            rawWeights instanceof Uint8Array || rawWeights instanceof Uint16Array
+              ? Float32Array.from(
+                  rawWeights as unknown as ArrayLike<number>,
+                  (value: number) => value / 255,
+                )
+              : Float32Array.from(rawWeights as unknown as ArrayLike<number>);
+          const skinned = applySkinning(
+            positions,
+            normals,
+            boneIndices,
+            boneWeights,
+            skinMatrices,
+            null,
+          );
           positions = skinned.vertices;
           normals = skinned.normals;
         }
@@ -282,13 +341,16 @@ export class Model3dRenderer {
       let indices: Uint16Array | Uint32Array | null = null;
       if (primitive.indices !== undefined) {
         const idxData = getAccessorData(api, primitive.indices);
-        indices = idxData instanceof Uint32Array
-          ? idxData
-          : new Uint16Array(idxData as unknown as ArrayLike<number>);
+        indices =
+          idxData instanceof Uint32Array
+            ? idxData
+            : new Uint16Array(idxData as unknown as ArrayLike<number>);
       }
 
       const material = this.resolveMaterial(api, primitive.material, options);
-      const environmentColor = options.environment ? sampleEnvMap(options.environment, [0, 0, 1]) : undefined;
+      const environmentColor = options.environment
+        ? sampleEnvMap(options.environment, [0, 0, 1])
+        : undefined;
       const colors = computeVertexColors(normals, Math.floor(positions.length / 3), {
         material,
         light: this.resolveLight(options),
@@ -317,7 +379,9 @@ export class Model3dRenderer {
       });
       this.skinCacheFrame = this.currentFrame;
     }
-    return binding.joints.map((nodeIndex) => this.skinCacheMatrices?.get(nodeIndex) ?? identityMat4());
+    return binding.joints.map(
+      (nodeIndex) => this.skinCacheMatrices?.get(nodeIndex) ?? identityMat4(),
+    );
   }
 
   private async drawTriangles(
@@ -418,14 +482,14 @@ export class Model3dRenderer {
     const emissive = definition.emissiveFactor;
     const parsed: PBRMaterial = {
       name: definition.name,
-      baseColorFactor: baseColor && baseColor.length >= 4
-        ? [baseColor[0]!, baseColor[1]!, baseColor[2]!, baseColor[3]!]
-        : DEFAULT_MATERIAL.baseColorFactor,
+      baseColorFactor:
+        baseColor && baseColor.length >= 4
+          ? [baseColor[0]!, baseColor[1]!, baseColor[2]!, baseColor[3]!]
+          : DEFAULT_MATERIAL.baseColorFactor,
       metallicFactor: pbr?.metallicFactor ?? DEFAULT_MATERIAL.metallicFactor,
       roughnessFactor: pbr?.roughnessFactor ?? DEFAULT_MATERIAL.roughnessFactor,
-      emissiveFactor: emissive && emissive.length >= 3
-        ? [emissive[0]!, emissive[1]!, emissive[2]!]
-        : [0, 0, 0],
+      emissiveFactor:
+        emissive && emissive.length >= 3 ? [emissive[0]!, emissive[1]!, emissive[2]!] : [0, 0, 0],
       normalScale: 1,
       doubleSided: definition.doubleSided ?? false,
     };
@@ -437,9 +501,10 @@ export class Model3dRenderer {
     const direction = directional?.direction;
     const color = parseHexColor(directional?.color ?? "#ffffff");
     return {
-      direction: direction && direction.length >= 3
-        ? [direction[0]!, direction[1]!, direction[2]!]
-        : [0.4, -1, 0.6],
+      direction:
+        direction && direction.length >= 3
+          ? [direction[0]!, direction[1]!, direction[2]!]
+          : [0.4, -1, 0.6],
       color,
       intensity: directional?.intensity ?? 1,
     };
@@ -464,13 +529,23 @@ export class Model3dRenderer {
   }
 
   private lookAt(eye: readonly number[], center: readonly number[], up: readonly number[]): Mat4 {
-    const e0 = eye[0] ?? 0, e1 = eye[1] ?? 0, e2 = eye[2] ?? 0;
-    const c0 = center[0] ?? 0, c1 = center[1] ?? 0, c2 = center[2] ?? 0;
-    const u0 = up[0] ?? 0, u1 = up[1] ?? 0, u2 = up[2] ?? 0;
+    const e0 = eye[0] ?? 0,
+      e1 = eye[1] ?? 0,
+      e2 = eye[2] ?? 0;
+    const c0 = center[0] ?? 0,
+      c1 = center[1] ?? 0,
+      c2 = center[2] ?? 0;
+    const u0 = up[0] ?? 0,
+      u1 = up[1] ?? 0,
+      u2 = up[2] ?? 0;
 
-    const zx = e0 - c0, zy = e1 - c1, zz = e2 - c2;
+    const zx = e0 - c0,
+      zy = e1 - c1,
+      zz = e2 - c2;
     const len = Math.sqrt(zx * zx + zy * zy + zz * zz);
-    const z0 = len ? zx / len : 0, z1 = len ? zy / len : 0, z2 = len ? zz / len : 1;
+    const z0 = len ? zx / len : 0,
+      z1 = len ? zy / len : 0,
+      z2 = len ? zz / len : 1;
 
     const xx = u1 * z2 - u2 * z1;
     const xy = u2 * z0 - u0 * z2;
@@ -485,9 +560,15 @@ export class Model3dRenderer {
     const y2 = z0 * x1 - z1 * x0;
 
     const m = new Float32Array(16);
-    m[0] = x0; m[1] = y0; m[2] = z0;
-    m[4] = x1; m[5] = y1; m[6] = z1;
-    m[8] = x2; m[9] = y2; m[10] = z2;
+    m[0] = x0;
+    m[1] = y0;
+    m[2] = z0;
+    m[4] = x1;
+    m[5] = y1;
+    m[6] = z1;
+    m[8] = x2;
+    m[9] = y2;
+    m[10] = z2;
     m[12] = -(x0 * e0 + x1 * e1 + x2 * e2);
     m[13] = -(y0 * e0 + y1 * e1 + y2 * e2);
     m[14] = -(z0 * e0 + z1 * e1 + z2 * e2);
@@ -512,21 +593,32 @@ export class Model3dRenderer {
     translation: readonly number[],
     scale: readonly number[],
   ): Mat4 {
-    const x = quat[0] ?? 0, y = quat[1] ?? 0, z = quat[2] ?? 0, w = quat[3] ?? 1;
-    const xx = x * x, yy = y * y, zz = z * z;
-    const xy = x * y, xz = x * z, yz = y * z;
-    const wx = w * x, wy = w * y, wz = w * z;
-    const sx = scale[0] ?? 1, sy = scale[1] ?? 1, sz = scale[2] ?? 1;
+    const x = quat[0] ?? 0,
+      y = quat[1] ?? 0,
+      z = quat[2] ?? 0,
+      w = quat[3] ?? 1;
+    const xx = x * x,
+      yy = y * y,
+      zz = z * z;
+    const xy = x * y,
+      xz = x * z,
+      yz = y * z;
+    const wx = w * x,
+      wy = w * y,
+      wz = w * z;
+    const sx = scale[0] ?? 1,
+      sy = scale[1] ?? 1,
+      sz = scale[2] ?? 1;
 
     const m = new Float32Array(16);
-    m[0]  = (1 - 2 * (yy + zz)) * sx;
-    m[1]  = 2 * (xy + wz) * sx;
-    m[2]  = 2 * (xz - wy) * sx;
-    m[4]  = 2 * (xy - wz) * sy;
-    m[5]  = (1 - 2 * (xx + zz)) * sy;
-    m[6]  = 2 * (yz + wx) * sy;
-    m[8]  = 2 * (xz + wy) * sz;
-    m[9]  = 2 * (yz - wx) * sz;
+    m[0] = (1 - 2 * (yy + zz)) * sx;
+    m[1] = 2 * (xy + wz) * sx;
+    m[2] = 2 * (xz - wy) * sx;
+    m[4] = 2 * (xy - wz) * sy;
+    m[5] = (1 - 2 * (xx + zz)) * sy;
+    m[6] = 2 * (yz + wx) * sy;
+    m[8] = 2 * (xz + wy) * sz;
+    m[9] = 2 * (yz - wx) * sz;
     m[10] = (1 - 2 * (xx + yy)) * sz;
     m[12] = translation[0] ?? 0;
     m[13] = translation[1] ?? 0;
@@ -548,11 +640,7 @@ export class Model3dRenderer {
       case "orbit": {
         const angle = time * (options.animation.orbitSpeed ?? 0.5);
         const radius = options.animation.orbitRadius ?? 5;
-        const pos: number[] = [
-          Math.cos(angle) * radius,
-          eye[1] ?? 0,
-          Math.sin(angle) * radius,
-        ];
+        const pos: number[] = [Math.cos(angle) * radius, eye[1] ?? 0, Math.sin(angle) * radius];
         return this.lookAt(pos, center, up);
       }
       case "dolly": {
@@ -569,8 +657,16 @@ export class Model3dRenderer {
         const idx = t * (options.animation.path.length - 1);
         const i = Math.floor(idx);
         const frac = idx - i;
-        const p1 = options.animation.path[Math.min(i, options.animation.path.length - 1)] ?? { x: 0, y: 0, z: 0 };
-        const p2 = options.animation.path[Math.min(i + 1, options.animation.path.length - 1)] ?? { x: 0, y: 0, z: 0 };
+        const p1 = options.animation.path[Math.min(i, options.animation.path.length - 1)] ?? {
+          x: 0,
+          y: 0,
+          z: 0,
+        };
+        const p2 = options.animation.path[Math.min(i + 1, options.animation.path.length - 1)] ?? {
+          x: 0,
+          y: 0,
+          z: 0,
+        };
         const pos: number[] = [
           p1.x + (p2.x - p1.x) * frac,
           p1.y + (p2.y - p1.y) * frac,

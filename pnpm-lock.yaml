@@ -134,7 +134,33 @@ importers:
         specifier: ^5
         version: 5.9.3
 
-  examples/cinecode-intro:
+  example/basic-api:
+    dependencies:
+      cinecode:
+        specifier: workspace:*
+        version: link:../../packages/cinecode
+    devDependencies:
+      '@types/node':
+        specifier: ^24.19.1
+        version: 24.19.1
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+
+  example/cinecode-intro:
+    dependencies:
+      cinecode:
+        specifier: workspace:*
+        version: link:../../packages/cinecode
+    devDependencies:
+      '@types/node':
+        specifier: ^24.19.1
+        version: 24.19.1
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
+  example/shorts:
     dependencies:
       cinecode:
         specifier: workspace:*
@@ -153,26 +179,7 @@ importers:
         specifier: 5.9.3
         version: 5.9.3
 
-  examples/shorts:
-    dependencies:
-      cinecode:
-        specifier: workspace:*
-        version: link:../../packages/cinecode
-    devDependencies:
-      '@napi-rs/canvas':
-        specifier: ^1.0.11
-        version: 1.0.11
-      '@types/node':
-        specifier: ^24.19.1
-        version: 24.19.1
-      tsx:
-        specifier: ^4.23.15
-        version: 4.23.15
-      typescript:
-        specifier: 5.9.3
-        version: 5.9.3
-
-  examples/sql:
+  example/sql:
     dependencies:
       cinecode:
         specifier: workspace:*
@@ -251,7 +258,7 @@ importers:
         specifier: ^2.4.2
         version: 2.4.2
       svg-parser:
-        specifier: ^2.1.0
+        specifier: 2.1.0
         version: 2.1.0
       svgo:
         specifier: ^4.1.0

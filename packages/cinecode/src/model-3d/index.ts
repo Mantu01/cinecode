@@ -1,15 +1,40 @@
 export { parseGLB, getAccessorData } from "./gltf-parser.js";
+export {
+  parseGLTF,
+  toGLBScene,
+  buildSceneGraph,
+  type GLBScene,
+  type SceneNode,
+  type GLTFCamera,
+} from "./gltf-parser.js";
 export { buildSkeletonState, buildSkinBindings, parseAnimationClips } from "./skeleton/parse.js";
 export { applySkinning, type SkinnedMeshResult } from "./skeleton/animateMesh.js";
 export {
-  computeBoneWorldMatrices, computeSkinMatrices, computeBoneWorldMatrix,
-  sampleChannel, quatMultiply, quatSlerp, quatNormalize, mat4FromQuat,
-  mat4FromTrs, multiplyMat4, identityMat4,
+  computeBoneWorldMatrices,
+  computeSkinMatrices,
+  computeBoneWorldMatrix,
+  sampleChannel,
+  quatMultiply,
+  quatSlerp,
+  quatNormalize,
+  mat4FromQuat,
+  mat4FromTrs,
+  multiplyMat4,
+  identityMat4,
   type AnimationPlayback,
 } from "./skeleton/skinning.js";
 export type {
-  Bone, AnimationChannel, AnimationClip, SkeletonState, SkinBinding,
-  Mat4, Quat, Vec3, SkinnedVertexData, BoneTargetType, InterpolationMode,
+  Bone,
+  AnimationChannel,
+  AnimationClip,
+  SkeletonState,
+  SkinBinding,
+  Mat4,
+  Quat,
+  Vec3,
+  SkinnedVertexData,
+  BoneTargetType,
+  InterpolationMode,
 } from "./skeleton/types.js";
 export type {
   GLTFBuffer,
@@ -29,30 +54,49 @@ export type {
 } from "./gltf-parser.js";
 
 export {
-  decodeMetallicRoughnessTexture, decodeNormalMap, decodeCanvasNormalMap,
-  decodeCanvasMetallicRoughness, sampleTextureAt, sampleChannelAt, sampleNormalAt,
+  decodeMetallicRoughnessTexture,
+  decodeNormalMap,
+  decodeCanvasNormalMap,
+  decodeCanvasMetallicRoughness,
+  sampleTextureAt,
+  sampleChannelAt,
+  sampleNormalAt,
 } from "./materials/decode.js";
-export { pbrShade, pbrShadeContext, computeVertexColors, resolveLight } from "./materials/pbr.js";
+export {
+  pbrShade,
+  pbrShadeContext,
+  computeVertexColors,
+  resolveLight,
+  toneMapAces,
+} from "./materials/pbr.js";
 export { DEFAULT_MATERIAL } from "./materials/types.js";
 export type {
-  PBRMaterial, PbrLight, PbrContext, PbrEnvironment, RgbaColor, RgbColor,
-  DecodedMetallicRoughness, DecodedNormalMap, AlphaMode,
+  PBRMaterial,
+  PbrLight,
+  PbrContext,
+  PbrEnvironment,
+  RgbaColor,
+  RgbColor,
+  DecodedMetallicRoughness,
+  DecodedNormalMap,
+  AlphaMode,
 } from "./materials/types.js";
 export { applyMaterialOverride, resolveMaterialOverrides } from "./materials/override.js";
 export type { MaterialSlotOverride } from "./materials/types.js";
 
 export {
-  projectToSH, evalSH, rotateSH, rotateVectorByEuler, scaleSH, computeSHFromCubeMap,
+  projectToSH,
+  evalSH,
+  rotateSH,
+  rotateVectorByEuler,
+  scaleSH,
+  computeSHFromCubeMap,
 } from "./environment/sh.js";
 export type { SH9 } from "./environment/sh.js";
-export {
-  calculatePCSS, pcssShadowFactor, POISSON_DISK_32,
-} from "./shadows/soft-shadows.js";
+export { calculatePCSS, pcssShadowFactor, POISSON_DISK_32 } from "./shadows/soft-shadows.js";
 export type { PCSSOptions, PCSSResult, PoissonDiskSample } from "./shadows/soft-shadows.js";
 export type { DepthBuffer } from "./depth-pass.js";
-export {
-  linearizeDepth, calculateCoC, depthBufferToCanvas,
-} from "./depth-pass.js";
+export { linearizeDepth, calculateCoC, depthBufferToCanvas } from "./depth-pass.js";
 
 export {
   createPrimitiveMesh,

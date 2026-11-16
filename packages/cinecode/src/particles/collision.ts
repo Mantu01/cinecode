@@ -1,4 +1,6 @@
-import type { Particle, ParticleCollider, ParticleVector } from "./types.js";
+import type { Particle, ParticleCollider, ParticleBounds, ParticleVector } from "./types.js";
+
+export type { ParticleBounds } from "./types.js";
 
 export interface CollisionContact {
   readonly normal: ParticleVector;
@@ -104,6 +106,36 @@ export function detectCollision(particle: Particle, collider: ParticleCollider):
     default:
       return null;
   }
+}
+
+const DEFAULT_ENERGY_LOSS = 0.3;
+/** Reflects the particle off AABB viewport bounds; returns true on any bounce. */
+export function resolveBoundaryCollision(
+  particle: Particle,
+  bounds: ParticleBounds,
+  restitution: number = 1 - DEFAULT_ENERGY_LOSS,
+): boolean {
+  const radius = particle.size / 2;
+  let bounced = false;
+  if (particle.x - radius < bounds.left) {
+    particle.x = bounds.left + radius;
+    particle.vx = Math.abs(particle.vx) * restitution;
+    bounced = true;
+  } else if (particle.x + radius > bounds.right) {
+    particle.x = bounds.right - radius;
+    particle.vx = -Math.abs(particle.vx) * restitution;
+    bounced = true;
+  }
+  if (particle.y - radius < bounds.top) {
+    particle.y = bounds.top + radius;
+    particle.vy = Math.abs(particle.vy) * restitution;
+    bounced = true;
+  } else if (particle.y + radius > bounds.bottom) {
+    particle.y = bounds.bottom - radius;
+    particle.vy = -Math.abs(particle.vy) * restitution;
+    bounced = true;
+  }
+  return bounced;
 }
 
 export function resolveCollisions(

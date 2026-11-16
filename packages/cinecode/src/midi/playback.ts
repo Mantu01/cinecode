@@ -228,6 +228,15 @@ export async function loadMidiFile(path: string): Promise<ParsedMidiFile> {
   return parseMidiFile(await readFile(path));
 }
 
+export interface MidiTransportSync {
+  getCurrentFrameTime(): number;
+  getFps(): number;
+}
+
+const DRIFT_WARN_MS = 5;
+const DRIFT_WINDOW_SECONDS = 10;
+const DEFAULT_SYNC_FPS = 30;
+
 function toMidiMessage(event: ParsedMidiEvent, port?: string): MidiMessage {
   return {
     type: event.type,
@@ -283,10 +292,15 @@ export function midiEventsToKeyframes(
 
 export class MidiPlayback {
   private readonly file: ParsedMidiFile;
+  private readonly transport: MidiTransportSync | undefined;
   private cursor = 0;
+  private syncCursor = 0;
+  private driftAccumMs = 0;
+  private driftWindowStart = -1;
 
-  constructor(file: ParsedMidiFile) {
+  constructor(file: ParsedMidiFile, transport?: MidiTransportSync) {
     this.file = file;
+    this.transport = transport;
   }
 
   get durationSeconds(): number {
@@ -299,6 +313,9 @@ export class MidiPlayback {
 
   reset(): void {
     this.cursor = 0;
+    this.syncCursor = 0;
+    this.driftAccumMs = 0;
+    this.driftWindowStart = -1;
   }
 
   eventsUntil(timeSeconds: number): readonly ParsedMidiEvent[] {
@@ -314,6 +331,43 @@ export class MidiPlayback {
 
   eventsBetween(startSeconds: number, endSeconds: number): readonly ParsedMidiEvent[] {
     return this.file.events.filter((event) => event.timeSeconds >= startSeconds && event.timeSeconds <= endSeconds);
+  }
+
+  /**
+   * Advances playback to the transport's current frame time. Events snap to the
+   * nearest frame boundary with a 1-frame lookahead so scheduling never
+   * underruns; warns when accumulated quantization drift exceeds 5ms in a
+   * 10-second window.
+   */
+  syncFrame(currentFrameTime?: number): readonly ParsedMidiEvent[] {
+    if (!this.transport && currentFrameTime === undefined) return [];
+    const fps = this.transport ? Math.max(1, this.transport.getFps()) : DEFAULT_SYNC_FPS;
+    const raw = currentFrameTime ?? this.transport!.getCurrentFrameTime();
+    const snapped = Math.round(raw * fps) / fps;
+    const lookahead = 1 / fps;
+    const emitted: ParsedMidiEvent[] = [];
+    while (this.syncCursor < this.file.events.length) {
+      const event = this.file.events[this.syncCursor]!;
+      if (event.timeSeconds > snapped + lookahead) break;
+      emitted.push(event);
+      this.syncCursor += 1;
+    }
+    this.trackDrift(raw, snapped);
+    return emitted;
+  }
+
+  private trackDrift(raw: number, snapped: number): void {
+    if (this.driftWindowStart < 0) this.driftWindowStart = raw;
+    if (Math.abs(raw - this.driftWindowStart) >= DRIFT_WINDOW_SECONDS) {
+      if (this.driftAccumMs > DRIFT_WARN_MS) {
+        console.warn(
+          `[cinecode] MIDI transport drift ${this.driftAccumMs.toFixed(2)}ms exceeded ${DRIFT_WARN_MS}ms over ${DRIFT_WINDOW_SECONDS}s`,
+        );
+      }
+      this.driftWindowStart = raw;
+      this.driftAccumMs = 0;
+    }
+    this.driftAccumMs += Math.abs(raw - snapped) * 1000;
   }
 
   toKeyframes(

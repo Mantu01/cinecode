@@ -1,9 +1,20 @@
 import type { Camera } from "../../renderer/camera/rig.js";
 import type { ParticlePhysicsConfig } from "../../particles/types.js";
 import type { MaterialSlotOverride } from "../../model-3d/materials/types.js";
+import type { AudioBuffer } from "../../audio/types.js";
 import type { AnimatableValue } from "./animatable.js";
 import type { EasingDescriptor } from "./easing.js";
-import type { Anchor, BlendMode, ColorValue, FitMode, Point, Shadow, Size, Stroke, Transform } from "./visual.js";
+import type {
+  Anchor,
+  BlendMode,
+  ColorValue,
+  FitMode,
+  Point,
+  Shadow,
+  Size,
+  Stroke,
+  Transform,
+} from "./visual.js";
 
 export interface TimeRange {
   readonly start?: number | string;
@@ -41,8 +52,20 @@ export interface MaskProps {
 }
 
 export type MaskShape =
-  | { readonly kind: "rectangle"; readonly x: number; readonly y: number; readonly width: number; readonly height: number }
-  | { readonly kind: "ellipse"; readonly cx: number; readonly cy: number; readonly radiusX: number; readonly radiusY: number }
+  | {
+      readonly kind: "rectangle";
+      readonly x: number;
+      readonly y: number;
+      readonly width: number;
+      readonly height: number;
+    }
+  | {
+      readonly kind: "ellipse";
+      readonly cx: number;
+      readonly cy: number;
+      readonly radiusX: number;
+      readonly radiusY: number;
+    }
   | { readonly kind: "path"; readonly segments: readonly PathSegment[] };
 
 export interface MatteProps {
@@ -234,6 +257,8 @@ export interface AudioClip extends TimeRange, AudioLikeProps {
   readonly src: string;
   readonly stem?: AudioStemName;
   readonly stemModel?: string;
+  /** Inline decoded buffer (synthesized or pre-decoded audio). */
+  readonly buffer?: AudioBuffer;
 }
 
 export interface SoundClip extends TimeRange, AudioLikeProps {
@@ -337,6 +362,7 @@ export interface ParticleClip extends VisualProps {
     readonly emitterWidth?: number;
     readonly emitterHeight?: number;
     readonly physics?: ParticlePhysicsConfig;
+    readonly debug?: boolean;
   };
   readonly seed?: number;
   readonly width?: number;
@@ -397,6 +423,7 @@ export interface SubtitleClip extends VisualProps {
     readonly strokeColor?: string;
     readonly strokeWidth?: number;
     readonly outline?: boolean;
+    readonly crossfadeDuration?: number;
   };
   readonly position?: "bottom" | "top" | "custom";
   readonly customY?: number;
@@ -516,7 +543,14 @@ export function isAudioClip(clip: Clip): clip is AudioClip | SoundClip | TtsClip
 }
 
 export function clipSize(clip: VisualClip): Size | undefined {
-  if (clip.type === "shape" || clip.type === "solid" || clip.type === "svg" || clip.type === "particle" || clip.type === "audioVisualizer" || clip.type === "chromakey") {
+  if (
+    clip.type === "shape" ||
+    clip.type === "solid" ||
+    clip.type === "svg" ||
+    clip.type === "particle" ||
+    clip.type === "audioVisualizer" ||
+    clip.type === "chromakey"
+  ) {
     if (clip.width !== undefined && clip.height !== undefined) {
       return { width: clip.width, height: clip.height };
     }

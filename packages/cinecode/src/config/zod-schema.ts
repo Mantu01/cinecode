@@ -88,6 +88,7 @@ export const DevConfigSchema = z.object({
   host: z.string().optional(),
   open: z.boolean().optional(),
   hmr: z.boolean().optional(),
+  metricsPort: z.number().int().min(0).max(65535).optional(),
 });
 
 export const AudioConfigSchema = z.object({

@@ -101,7 +101,6 @@ export interface DrawSkeletonParams {
  * and motion are the caller's responsibility.
  */
 export function drawSkeleton(
-  canvas: Canvas,
   ctx: SKRSContext2D,
   skeleton: Skeleton,
   pose: Pose = {},
@@ -138,7 +137,6 @@ export function drawSkeleton(
       ctx.fill();
     }
   }
-  void canvas;
   return joints;
 }
 

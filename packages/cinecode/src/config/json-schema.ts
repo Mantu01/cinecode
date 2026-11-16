@@ -181,6 +181,7 @@ const CONFIG_DEFINITIONS: Readonly<Record<string, JsonSchemaNode>> = {
     open: bool(),
     hmr: bool(),
     historyDepth: { type: "integer", minimum: 1, maximum: 500 },
+    metricsPort: { type: "integer", minimum: 0, maximum: 65535 },
   }, ["port", "hmr"]),
 
   RenderConfig: objectOf({

@@ -5,7 +5,7 @@
   "license": "MIT",
   "type": "module",
   "bin": {
-    "create-cinecode": "./dist/esm/index.js"
+    "create-cinecode": "./dist/esm/cli.js"
   },
   "exports": {
     ".": {
@@ -26,7 +26,8 @@
     "build": "node ./scripts/build.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint src",
-    "test": "node --test \"src/**/*.test.mjs\""
+    "test": "node --test \"src/**/*.test.mjs\"",
+    "test:e2e": "node --test tests/smoke.test.mjs"
   },
   "devDependencies": {
     "@repo/eslint-config": "workspace:*",

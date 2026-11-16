@@ -11,6 +11,13 @@ import type { ServerMessage, PreviewErrorMessage, CompositionMetadata } from "..
 
 const DEFAULT_DEV_URL = "ws://localhost:3001";
 
+function resolveDevUrl(): string {
+  const search = new URLSearchParams(window.location.search);
+  const fromSearch = search.get("wsUrl");
+  if (fromSearch && fromSearch.trim()) return fromSearch.trim();
+  return DEFAULT_DEV_URL;
+}
+
 export default function Home() {
   const [connected, setConnected] = useState(false);
   const [ws, setWs] = useState<PreviewWebSocket | null>(null);
@@ -26,33 +33,37 @@ export default function Home() {
   const playIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const connect = useCallback(() => {
-    const client = new PreviewWebSocket(DEFAULT_DEV_URL, (msg) => {
-      switch (msg.type) {
-        case "frame":
-          setFrameData(msg.data.buffer);
-          setCurrentFrame(msg.data.frame);
-          break;
-        case "composition":
-          setMetadata(msg.data);
-          setWidth(msg.data.width);
-          setHeight(msg.data.height);
-          setFps(msg.data.fps);
-          setTotalFrames(Math.ceil(msg.data.duration * msg.data.fps));
-          break;
-        case "error":
-          setErrors(prev => [...prev, msg as unknown as PreviewErrorMessage]);
-          break;
-        case "ready":
-          setConnected(true);
-          client.requestMetadata();
-          break;
-        case "heartbeat":
-          break;
-      }
-    }, {
-      onConnect: () => setConnected(true),
-      onDisconnect: () => setConnected(false),
-    });
+    const client = new PreviewWebSocket(
+      resolveDevUrl(),
+      (msg) => {
+        switch (msg.type) {
+          case "frame":
+            setFrameData(msg.data.buffer);
+            setCurrentFrame(msg.data.frame);
+            break;
+          case "composition":
+            setMetadata(msg.data);
+            setWidth(msg.data.width);
+            setHeight(msg.data.height);
+            setFps(msg.data.fps);
+            setTotalFrames(Math.ceil(msg.data.duration * msg.data.fps));
+            break;
+          case "error":
+            setErrors((prev) => [...prev, msg as unknown as PreviewErrorMessage]);
+            break;
+          case "ready":
+            setConnected(true);
+            client.requestMetadata();
+            break;
+          case "heartbeat":
+            break;
+        }
+      },
+      {
+        onConnect: () => setConnected(true),
+        onDisconnect: () => setConnected(false),
+      },
+    );
     setWs(client);
     client.connect();
   }, []);
@@ -65,14 +76,17 @@ export default function Home() {
     if (playIntervalRef.current) clearInterval(playIntervalRef.current);
   }, [ws]);
 
-  const handleScrub = useCallback((frame: number) => {
-    ws?.scrub(frame);
-    ws?.requestPreview(frame, frame + 1);
-    setCurrentFrame(frame);
-  }, [ws]);
+  const handleScrub = useCallback(
+    (frame: number) => {
+      ws?.scrub(frame);
+      ws?.requestPreview(frame, frame + 1);
+      setCurrentFrame(frame);
+    },
+    [ws],
+  );
 
   const togglePlay = useCallback(() => {
-    setIsPlaying(prev => {
+    setIsPlaying((prev) => {
       if (prev) {
         ws?.pause();
         if (playIntervalRef.current) clearInterval(playIntervalRef.current);
@@ -82,7 +96,7 @@ export default function Home() {
       ws?.play(currentFrame);
       ws?.requestPreview(currentFrame, endFrame);
       playIntervalRef.current = setInterval(() => {
-        setCurrentFrame(p => {
+        setCurrentFrame((p) => {
           if (p >= totalFrames - 1) {
             if (playIntervalRef.current) clearInterval(playIntervalRef.current);
             setIsPlaying(false);
@@ -109,7 +123,7 @@ export default function Home() {
         <div className="flex-1" />
         <ConnectionStatus
           connected={connected}
-          url={DEFAULT_DEV_URL}
+          url={resolveDevUrl()}
           onConnect={connect}
           onDisconnect={disconnect}
         />
@@ -144,7 +158,10 @@ export default function Home() {
               {isPlaying ? "Pause" : "Play"}
             </button>
             <button
-              onClick={() => { ws?.requestPreview(0, 1); setCurrentFrame(0); }}
+              onClick={() => {
+                ws?.requestPreview(0, 1);
+                setCurrentFrame(0);
+              }}
               className="px-3 py-1.5 border border-border rounded-md text-sm hover:bg-muted disabled:opacity-50"
               disabled={!connected}
             >
@@ -154,7 +171,7 @@ export default function Home() {
 
           <ErrorDisplay
             errors={errors}
-            onDismiss={(i) => setErrors(prev => prev.filter((_, idx) => idx !== i))}
+            onDismiss={(i) => setErrors((prev) => prev.filter((_, idx) => idx !== i))}
           />
         </div>
 

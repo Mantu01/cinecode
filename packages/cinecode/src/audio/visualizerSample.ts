@@ -40,14 +40,22 @@ export function getAnalysisBuffer(src: string): Promise<AudioBuffer | undefined>
 async function loadAnalysisBuffer(src: string): Promise<AudioBuffer | undefined> {
   try {
     const cache = await ensureCache();
-    const decoded = await decodeAudioFile(src, { cache, targetSampleRate: ANALYSIS_SAMPLE_RATE, targetChannels: 1 });
+    const decoded = await decodeAudioFile(src, {
+      cache,
+      targetSampleRate: ANALYSIS_SAMPLE_RATE,
+      targetChannels: 1,
+    });
     return decoded.buffer;
   } catch {
     return undefined;
   }
 }
 
-export function extractVisualizerSample(buffer: AudioBuffer, startSample: number, windowSize: number): Float32Array {
+export function extractVisualizerSample(
+  buffer: AudioBuffer,
+  startSample: number,
+  windowSize: number,
+): Float32Array {
   const window = new Float32Array(windowSize);
   const channels = Math.max(1, buffer.channels);
   const first = Math.max(0, Math.floor(startSample));

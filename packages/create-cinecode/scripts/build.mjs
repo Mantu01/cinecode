@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFileSync, readdirSync, renameSync, rmSync, writeFileSync, cpSync } from "node:fs";
+import { createRequire } from "node:module";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pkg = path.resolve(here, "..");
@@ -9,10 +10,11 @@ const pkg = path.resolve(here, "..");
 rmSync(path.join(pkg, "dist"), { recursive: true, force: true });
 
 function emit(extraArgs, label) {
-  const result = spawnSync("tsc", ["-p", "tsconfig.build.json", ...extraArgs], {
+  const tscBin = createRequire(path.join(pkg, "package.json")).resolve("typescript/bin/tsc");
+  const result = spawnSync(process.execPath, [tscBin, "-p", "tsconfig.build.json", ...extraArgs], {
     cwd: pkg,
     stdio: "inherit",
-    shell: true,
+    shell: false,
   });
   if (result.status !== 0) {
     console.error(`build: ${label} emit failed`);
@@ -62,7 +64,7 @@ emit(["--module", "nodenext", "--moduleResolution", "nodenext", "--outDir", "dis
 renameCjs(path.join(pkg, "dist", "cjs"));
 copyTemplates();
 
-const binEntry = path.join(pkg, "dist", "esm", "index.js");
+const binEntry = path.join(pkg, "dist", "esm", "cli.js");
 const binSource = readFileSync(binEntry, "utf8");
 if (!binSource.startsWith("#!")) {
   writeFileSync(binEntry, `#!/usr/bin/env node\n${binSource}`, "utf8");

@@ -38,7 +38,12 @@ export function createMixer(options: MixerOptions): {
     mix(): MixResult {
       const output = createSilentBuffer(sampleRate, duration, channels);
       const outputData = output.data;
-      const gainCurves = resolveSidechainGains(tracks, options.sidechains ?? [], totalSamples, sampleRate);
+      const gainCurves = resolveSidechainGains(
+        tracks,
+        options.sidechains ?? [],
+        totalSamples,
+        sampleRate,
+      );
       let peakLevel = 0;
       let limiterEngaged = false;
       let limiterDuration = 0;
@@ -46,33 +51,35 @@ export function createMixer(options: MixerOptions): {
       let inLimiter = false;
       let limiterStartSample = 0;
 
-      const surroundLayout: ChannelLayout | undefined = channels > 2
-        ? Object.values(CHANNEL_LAYOUTS).find((layout) => layout.channels === channels)
-        : undefined;
+      const surroundLayout: ChannelLayout | undefined =
+        channels > 2
+          ? Object.values(CHANNEL_LAYOUTS).find((layout) => layout.channels === channels)
+          : undefined;
 
       for (const track of tracks) {
         if (track.muted) continue;
-        
+
         const trackData = track.buffer.data;
         const trackChannels = track.buffer.channels;
         const startSample = track.startSample;
         const endSample = Math.min(track.endSample, totalSamples);
         const trackLength = endSample - startSample;
-        
+
         if (trackLength <= 0) continue;
 
         const trackVolume = track.volume;
         const gainCurve = gainCurves.get(track.id);
         const pan = track.pan;
-        const panL = Math.cos((pan + 1) * Math.PI / 4);
-        const panR = Math.sin((pan + 1) * Math.PI / 4);
-        const surroundGains = surroundLayout && track.surroundPosition
-          ? surroundGainsForAzimuth(
-              surroundLayout,
-              track.surroundPosition.azimuthDegrees,
-              track.surroundPosition.lfeSend ?? 0,
-            )
-          : null;
+        const panL = Math.cos(((pan + 1) * Math.PI) / 4);
+        const panR = Math.sin(((pan + 1) * Math.PI) / 4);
+        const surroundGains =
+          surroundLayout && track.surroundPosition
+            ? surroundGainsForAzimuth(
+                surroundLayout,
+                track.surroundPosition.azimuthDegrees,
+                track.surroundPosition.lfeSend ?? 0,
+              )
+            : null;
 
         for (let i = 0; i < trackLength; i++) {
           const outIndex = (startSample + i) * channels;
@@ -86,7 +93,8 @@ export function createMixer(options: MixerOptions): {
             if (channels > 2) {
               if (surroundGains) {
                 if (trackChannels === 1) {
-                  for (let target = 0; target < channels; target += 1) outputData[outIndex + target]! += value * (surroundGains[target] ?? 0);
+                  for (let target = 0; target < channels; target += 1)
+                    outputData[outIndex + target]! += value * (surroundGains[target] ?? 0);
                 } else {
                   const target = Math.min(channels - 1, c);
                   outputData[outIndex + target]! += value;
@@ -123,6 +131,13 @@ export function createMixer(options: MixerOptions): {
         if (abs > peakLevel) peakLevel = abs;
       }
 
+      const peak = Math.max(...Array.from(outputData, (v) => Math.abs(v)));
+      if (peak > 1.0) {
+        for (let i = 0; i < outputData.length; i++) {
+          outputData[i]! /= peak;
+        }
+      }
+
       const limiterThreshold = 0.95;
       const lookahead = Math.floor(0.001 * sampleRate);
       const attackTime = 0.003;
@@ -140,7 +155,7 @@ export function createMixer(options: MixerOptions): {
         }
 
         const targetGain = maxAhead > limiterThreshold ? limiterThreshold / maxAhead : 1;
-        
+
         if (targetGain < envValue) {
           const attackRate = 1 / (attackTime * sampleRate);
           envValue = Math.max(targetGain, envValue - attackRate);
@@ -158,14 +173,18 @@ export function createMixer(options: MixerOptions): {
         } else if (envValue >= 1 && inLimiter) {
           inLimiter = false;
           limiterDuration += i - limiterStartSample;
-          const segmentPeak = Math.max(...outputData.slice(limiterStartSample, i).map(v => Math.abs(v!)));
+          const segmentPeak = Math.max(
+            ...outputData.slice(limiterStartSample, i).map((v) => Math.abs(v!)),
+          );
           if (segmentPeak > limiterPeak) limiterPeak = segmentPeak;
         }
       }
 
       if (inLimiter) {
         limiterDuration += outputData.length - limiterStartSample;
-        const segmentPeak = Math.max(...outputData.slice(limiterStartSample).map(v => Math.abs(v!)));
+        const segmentPeak = Math.max(
+          ...outputData.slice(limiterStartSample).map((v) => Math.abs(v!)),
+        );
         if (segmentPeak > limiterPeak) limiterPeak = segmentPeak;
       }
 
@@ -211,19 +230,19 @@ function resolveSidechainGains(
       sampleRate,
       { attackMs: pair.attackMs ?? 10, releaseMs: pair.releaseMs ?? 100 },
     );
-    gains.set(target.id, sidechainGainCurve(envelope, {
-      threshold: pair.threshold ?? -20,
-      ratio: pair.ratio ?? 4,
-      kneeWidth: pair.kneeWidth ?? 0,
-    }));
+    gains.set(
+      target.id,
+      sidechainGainCurve(envelope, {
+        threshold: pair.threshold ?? -20,
+        ratio: pair.ratio ?? 4,
+        kneeWidth: pair.kneeWidth ?? 0,
+      }),
+    );
   }
   return gains;
 }
 
-export function mixAudioTracks(
-  tracks: AudioTrackState[],
-  options: MixerOptions
-): MixResult {
+export function mixAudioTracks(tracks: AudioTrackState[], options: MixerOptions): MixResult {
   const mixer = createMixer(options);
   for (const track of tracks) {
     mixer.addTrack(track);

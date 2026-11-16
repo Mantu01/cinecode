@@ -8,6 +8,23 @@ export interface PdfOptions {
   readonly compress?: boolean;
 }
 
+export interface PdfShapeContent {
+  readonly shapeType: string;
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+  readonly radius?: number;
+  readonly points?: readonly { readonly x: number; readonly y: number }[];
+  readonly path?: readonly {
+    readonly command: string;
+    readonly points: readonly { readonly x: number; readonly y: number }[];
+  }[];
+  readonly fill?: string;
+  readonly stroke?: { readonly color: string; readonly width: number };
+  readonly opacity?: number;
+}
+
 export interface PdfPageContent {
   readonly type: "image" | "text" | "shape" | "canvas";
   readonly data?: Buffer;
@@ -18,6 +35,7 @@ export interface PdfPageContent {
   readonly text?: string;
   readonly fontSize?: number;
   readonly color?: string;
+  readonly shape?: PdfShapeContent;
 }
 
 function hexToRgb(hex: string): ReturnType<typeof rgb> {
@@ -101,7 +119,29 @@ async function renderPdfContent(
       break;
     }
     case "shape": {
-      // vector shapes delegated to vector mode — placeholder
+      const shape = content.shape;
+      if (!shape) return;
+      const { drawRect, drawCircle, drawPath } = await import("./vector.js");
+      const style = { fill: shape.fill, stroke: shape.stroke, opacity: shape.opacity };
+      if (shape.shapeType === "rectangle" || shape.shapeType === "rounded-rectangle") {
+        drawRect(page, shape, style, ctx.height, shape.shapeType === "rounded-rectangle" ? shape.radius : undefined);
+        break;
+      }
+      if (shape.shapeType === "ellipse") {
+        drawCircle(
+          page,
+          {
+            cx: shape.x + shape.width / 2,
+            cy: shape.y + shape.height / 2,
+            radiusX: shape.width / 2,
+            radiusY: shape.height / 2,
+          },
+          style,
+          ctx.height,
+        );
+        break;
+      }
+      drawPath(page, (shape.path ?? []) as never, style, ctx.height, { x: shape.x, y: shape.y });
       break;
     }
   }

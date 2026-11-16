@@ -4,7 +4,7 @@ import type { TrackKind } from "../types/tracks.js";
 import type { Clip } from "../types/clips.js";
 import type { MainManifest } from "../types/manifest.js";
 import type { AudioBuffer } from "../../audio/types.js";
-import type { ValidateProps } from "./props.js";
+import { validateConfigWithZod } from "../../config/zod-schema.js";
 
 export interface TimelineFactory<P> {
   readonly props?: P;
@@ -70,10 +70,7 @@ export interface ComponentDef<P> {
  * @param build - Function that builds a timeline from props
  * @returns A ComponentDef for use in timelines
  */
-export function defineComponent<P>(
-  name: string,
-  build: (props: P) => Timeline,
-): ComponentDef<P> {
+export function defineComponent<P>(name: string, build: (props: P) => Timeline): ComponentDef<P> {
   return { kind: "component", name, build };
 }
 
@@ -107,9 +104,20 @@ export function defineSound<P>(
 // Allow defineConfig to accept either a CinecodeConfig or a Composition object.
 // When a composition is passed (has rootTimeline), it's returned as-is for
 // backward-compat with existing projects that export a raw composition.
-export function defineConfig(config: CinecodeConfig & ValidateProps<CinecodeConfig>): CinecodeConfig;
-export function defineConfig(config: { readonly rootTimeline?: unknown; readonly [key: string]: unknown }): { readonly rootTimeline?: unknown; readonly [key: string]: unknown };
+export function defineConfig(config: CinecodeConfig): CinecodeConfig;
+export function defineConfig(config: {
+  readonly rootTimeline?: unknown;
+  readonly [key: string]: unknown;
+}): { readonly rootTimeline?: unknown; readonly [key: string]: unknown };
 export function defineConfig(config: unknown): unknown {
+  if (typeof config === "object" && config !== null) {
+    const parsed = validateConfigWithZod(config);
+    if (!parsed.valid) {
+      throw new Error(
+        `defineConfig: invalid config — ${parsed.errors.map((e) => `${e.path}: ${e.message}`).join("; ")}`,
+      );
+    }
+  }
   return config;
 }
 

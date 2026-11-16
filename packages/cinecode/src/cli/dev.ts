@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { loadConfig } from "../config/schema.js";
 import { loadManifestProject } from "../manifest/index.js";
 import { DevServer } from "../dev/index.js";
+import { startMetricsServer, type MetricsServerHandle } from "../observability/metrics-server.js";
 
 export interface DevCliOptions {
   config?: string;
@@ -12,6 +13,7 @@ export interface DevCliOptions {
   host?: string;
   open?: boolean;
   hmr?: boolean;
+  metricsPort?: number;
 }
 
 function openBrowser(url: string): void {
@@ -50,12 +52,19 @@ export async function devCommand(options: DevCliOptions): Promise<void> {
   console.log(`Cinecode dev server running at ${server.url}`);
   console.log(`Watching ${config.sourceDir ?? "./src"} — ${server.nodes.length} asset(s) registered`);
 
+  let metricsHandle: MetricsServerHandle | null = null;
+  const metricsPort = options.metricsPort ?? config.dev?.metricsPort ?? (port + 1);
+  if (metricsPort > 0 && process.env.NODE_ENV !== "production") {
+    metricsHandle = await startMetricsServer({ port: metricsPort, host });
+  }
+
   if (options.open ?? config.dev?.open ?? false) {
     openBrowser(server.url);
   }
 
   const shutdown = async (): Promise<void> => {
     console.log("\nShutting down dev server…");
+    await metricsHandle?.close();
     await server.stop();
     process.exit(0);
   };
@@ -74,6 +83,7 @@ export function createDevCommand(): Command {
     .option("--host <host>", "Host to bind")
     .option("--open", "Open the preview in the browser", false)
     .option("--no-hmr", "Disable the HMR socket push")
+    .option("--metrics-port <number>", "Prometheus metrics port (0 disables)", (v) => parseInt(v, 10))
     .action(async (options: DevCliOptions) => {
       await devCommand(options);
     });

@@ -63,6 +63,7 @@ export const DEFAULT_DEV: DevConfig = {
   open: false,
   hmr: true,
   historyDepth: 50,
+  metricsPort: undefined,
 };
 
 const DEFAULT_CONFIG: Required<CinecodeConfig> = {
@@ -257,6 +258,7 @@ export function normalizeConfig(raw: Record<string, unknown>): CinecodeConfig {
       open: rawDev.open ?? DEFAULT_DEV.open,
       hmr: rawDev.hmr ?? DEFAULT_DEV.hmr,
       historyDepth: rawDev.historyDepth ?? DEFAULT_DEV.historyDepth,
+      metricsPort: rawDev.metricsPort ?? DEFAULT_DEV.metricsPort,
     },
     name,
     sourceDir,

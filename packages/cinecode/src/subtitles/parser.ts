@@ -138,3 +138,71 @@ function isCssColor(value: string): boolean {
   if (v.startsWith("#") || v.startsWith("rgb") || v.startsWith("hsl")) return true;
   return NAMED_COLORS.has(v);
 }
+
+const ASS_TIME = /^(\d+):(\d{1,2}):(\d{1,2})[.,](\d{1,2})$/;
+const ASS_COLOR = /^&?H([0-9a-fA-F]{2})?([0-9a-fA-F]{6})&?$/;
+const DEFAULT_EVENT_FORMAT = ["layer", "start", "end", "style", "name", "marginl", "marginr", "marginv", "effect", "text"];
+
+function assTimeToSeconds(value: string): number {
+  const match = ASS_TIME.exec(value.trim());
+  if (!match) return 0;
+  const centiseconds = Number.parseInt(match[4]!.padEnd(2, "0"), 10);
+  return Number.parseInt(match[1]!, 10) * 3600 + Number.parseInt(match[2]!, 10) * 60 + Number.parseInt(match[3]!, 10) + centiseconds / 100;
+}
+
+export function assColorToCss(value: string): string | undefined {
+  const match = ASS_COLOR.exec(value.trim());
+  if (!match) return undefined;
+  const bbggrr = match[2]!;
+  return `#${bbggrr.slice(4, 6)}${bbggrr.slice(2, 4)}${bbggrr.slice(0, 2)}`.toLowerCase();
+}
+
+function cleanAssText(text: string): string {
+  return text
+    .replace(/\\h/g, "\u00a0")
+    .replace(/\\N|\\n/g, "\n")
+    .replace(/\{[^}]*\}/g, "")
+    .trim();
+}
+
+export function parseAss(text: string): SubtitleEntry[] {
+  const entries: SubtitleEntry[] = [];
+  const normalized = text.replace(/\r\n/g, "\n").replace(/^\uFEFF/, "");
+  let section = "";
+  let eventFormat = DEFAULT_EVENT_FORMAT;
+  let autoId = 0;
+  for (const line of normalized.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) continue;
+    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+      section = trimmed.toLowerCase();
+      continue;
+    }
+    if (section !== "[events]") continue;
+    const colon = trimmed.indexOf(":");
+    if (colon <= 0) continue;
+    const kind = trimmed.slice(0, colon).trim().toLowerCase();
+    const body = trimmed.slice(colon + 1);
+    if (kind === "format") {
+      eventFormat = body.split(",").map((field) => field.trim().toLowerCase());
+      continue;
+    }
+    if (kind !== "dialogue") continue;
+    const fields = body.split(",");
+    const index = (name: string): number => eventFormat.indexOf(name);
+    const startIndex = index("start");
+    const endIndex = index("end");
+    const textIndex = index("text");
+    if (startIndex < 0 || endIndex < 0 || textIndex < 0) continue;
+    const raw = fields.slice(textIndex).join(",").trim();
+    if (raw.length === 0) continue;
+    entries.push({
+      id: ++autoId,
+      startTime: assTimeToSeconds(fields[startIndex] ?? "0:00:00.00"),
+      endTime: assTimeToSeconds(fields[endIndex] ?? "0:00:00.00"),
+      text: cleanAssText(raw),
+      rawText: raw,
+    });
+  }
+  return entries;
+}

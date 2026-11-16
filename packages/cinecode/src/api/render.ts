@@ -22,6 +22,8 @@ export interface RenderApiOptions {
   readonly cacheDir?: string;
   /** Override render quality; supersedes config and preview flag. */
   readonly quality?: "final" | "medium" | "low";
+  /** Chunk size in frames for worker parallelism. */
+  readonly chunkSize?: number;
 }
 
 export interface RenderApiResult {
@@ -58,13 +60,19 @@ export async function render(options: RenderApiOptions): Promise<RenderJob> {
   const composition = selectComposition(compositions, compositionName);
 
   const effectiveFps = fps ?? composition.fps;
-  const effectiveResolution = resolution ?? { width: composition.width, height: composition.height };
+  const effectiveResolution = resolution ?? {
+    width: composition.width,
+    height: composition.height,
+  };
 
   let fromFrame = 0;
   let toFrame: number | undefined;
 
   if (composition.duration) {
-    const dur = typeof composition.duration === "number" ? composition.duration : parseFloat(composition.duration as string);
+    const dur =
+      typeof composition.duration === "number"
+        ? composition.duration
+        : parseFloat(composition.duration as string);
     toFrame = Math.ceil(dur * effectiveFps);
   }
 
@@ -90,7 +98,7 @@ export async function render(options: RenderApiOptions): Promise<RenderJob> {
     cacheDir,
     seed,
     concurrency,
-    chunkSize: 8,
+    chunkSize: options.chunkSize ?? 8,
     quality: quality ?? (preview ? "preview" : "final"),
     overwrite,
     fresh,

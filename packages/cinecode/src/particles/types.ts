@@ -7,6 +7,13 @@ export interface ParticleVector {
   readonly y: number;
 }
 
+export interface ParticleBounds {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+
 export interface Particle {
   x: number;
   y: number;
@@ -119,6 +126,8 @@ export interface ParticlePhysicsConfig {
   readonly maxSpeed?: number;
   readonly restitution?: number;
   readonly friction?: number;
+  /** Viewport AABB for boundary bouncing (defaults to no bounds). */
+  readonly bounds?: ParticleBounds;
 }
 
 export interface EmitterConfig {

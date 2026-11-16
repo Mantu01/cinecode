@@ -1,20 +1,43 @@
 import { Canvas, loadImage } from "@napi-rs/canvas";
 import type { SKRSContext2D } from "@napi-rs/canvas";
 import { readFileSync } from "node:fs";
-import type { Composition, VisualClip, AudioClip, SoundClip, EffectRef, VideoClip, SvgClip, ParticleClip, NoiseClip, AudioTrack, AudioVisualizerClip, ChromaKeyClip, Clip, GradientMeshClip, MeshWarpClip, Model3dClip, Text3dClip, MultiCameraClip } from "../core/types/index.js";
+import type {
+  Composition,
+  VisualClip,
+  AudioClip,
+  SoundClip,
+  EffectRef,
+  VideoClip,
+  SvgClip,
+  ParticleClip,
+  NoiseClip,
+  AudioTrack,
+  AudioVisualizerClip,
+  ChromaKeyClip,
+  Clip,
+  GradientMeshClip,
+  MeshWarpClip,
+  Model3dClip,
+  Text3dClip,
+  MultiCameraClip,
+} from "../core/types/index.js";
 import type { FrameConversion } from "../core/time/index.js";
 import { createConversion, createVfrConversion, frameToSeconds } from "../core/time/index.js";
 import { computeClipSpan, validateTimeline } from "../core/validation/index.js";
 import { extractFramesInMemory, type ExtractedFrame } from "../media/frames.js";
-import {
-  calculateSourceFrame,
-  type ConformParams,
-} from "../media/conform.js";
+import { calculateSourceFrame, type ConformParams } from "../media/conform.js";
 import type { Rgba, Gradient } from "./color/types.js";
 import { parseColor } from "./color/index.js";
 import type { BlendMode, ShapeDrawParams, Transform, Rect } from "./shapes/primitives.js";
 import { createDefaultTransform, applyBlendMode, applyTransform } from "./shapes/primitives.js";
-import { drawRectangle, drawRoundedRectangle, drawEllipse, drawLine, drawPolygon, drawPath } from "./shapes/draw.js";
+import {
+  drawRectangle,
+  drawRoundedRectangle,
+  drawEllipse,
+  drawLine,
+  drawPolygon,
+  drawPath,
+} from "./shapes/draw.js";
 import type { TextStyle } from "./text/engine.js";
 import { prepareText, checkMissingGlyphs } from "./text/engine.js";
 import type { CompositedLayer, Mask, Matte } from "./composite/engine.js";
@@ -29,10 +52,18 @@ import { getParticleContext, updateParticleContext } from "../particles/context.
 import { renderParticles } from "../particles/render.js";
 import { generateNoiseTexture } from "../noise/generator.js";
 import {
-  layoutBars, layoutWaveform, layoutRadial, resolveAudioTrack, smoothBands,
+  layoutBars,
+  layoutWaveform,
+  layoutRadial,
+  resolveAudioTrack,
+  smoothBands,
   type VisualizerLayout,
 } from "../audio/visualizer.js";
-import { getAnalysisBuffer, extractVisualizerSample, setVisualizerMediaCache } from "../audio/visualizerSample.js";
+import {
+  getAnalysisBuffer,
+  extractVisualizerSample,
+  setVisualizerMediaCache,
+} from "../audio/visualizerSample.js";
 import { fft, magnitude, extractBands, extractBandsLogarithmic } from "../audio/fft.js";
 import { chromaKeyEffect } from "../effects/chroma-key.js";
 import { renderSubtitles } from "../subtitles/render.js";
@@ -40,20 +71,38 @@ import type { SubtitleClip } from "../core/types/index.js";
 import { layoutChart, interpolateChartData, drawChart, drawNoData } from "../dataviz/index.js";
 import { drawSticker } from "../stickers/index.js";
 import { drawMeshGradient, generateRegularAnchors, type MeshAnchor } from "../gradients/index.js";
-import { createWarpGrid, applyWarpDisplacements, computeAnimatedWarp, applyWarp, isIdentityWarp } from "../warp/index.js";
+import {
+  createWarpGrid,
+  applyWarpDisplacements,
+  computeAnimatedWarp,
+  applyWarp,
+  isIdentityWarp,
+} from "../warp/index.js";
 import { extrudeTextGeometry } from "../text-3d/mesh.js";
 import { createTextStyle3d } from "../text-3d/material.js";
 import { renderTextMesh } from "../text-3d/render.js";
-import { resolveRegions, resolveLayout, drawRegionShadow, drawSourceIntoRegion, type SplitRegion } from "./pip.js";
+import {
+  resolveRegions,
+  resolveLayout,
+  drawRegionShadow,
+  drawSourceIntoRegion,
+  type SplitRegion,
+} from "./pip.js";
 import { loadCubeMap, loadEquirectangular } from "../model-3d/environment/cubeMap.js";
 import { createProceduralSkybox, renderSkybox } from "../model-3d/environment/skybox.js";
 import type { CubeTexture } from "../model-3d/environment/cubeMap.js";
 import { resolveGlobalEffect } from "./postprocess/resolve.js";
 import { createEffectGraphOptimizer, type EffectBatchEntry } from "./postprocess/batch.js";
-import { computeDirtyRect, isFullFrameRect, rectArea, rectsOverlap, transformedAabb } from "./layout/engine.js";
+import {
+  computeDirtyRect,
+  isFullFrameRect,
+  rectArea,
+  rectsOverlap,
+  transformedAabb,
+} from "./layout/engine.js";
 import { clampResolutionScale, scaleComposition } from "./scale.js";
 import { renderMultiCameraFrame } from "./multi-camera.js";
-
+import { evictOldest } from "./pool.js";
 
 export interface RenderContext {
   readonly composition: Composition;
@@ -73,6 +122,12 @@ export interface RenderResult {
 }
 
 const imageCache = new Map<string, Canvas>();
+const IMAGE_CACHE_MAX = 8;
+function rememberImage(src: string, canvas: Canvas): void {
+  imageCache.delete(src);
+  evictOldest(imageCache, IMAGE_CACHE_MAX);
+  imageCache.set(src, canvas);
+}
 
 /**
  * Per-thread RGBA buffers cached by resolution to avoid reallocating on every
@@ -128,6 +183,84 @@ function rememberVideoFrame(src: string, sourceFrame: number, frame: ExtractedFr
   }
   videoFrameCache.set(key, frame);
   videoFrameOrigin.set(key, src);
+}
+
+export function hasVideoFrameCached(src: string, sourceFrame: number): boolean {
+  return videoFrameCache.has(videoFrameKey(src, sourceFrame));
+}
+
+export function storeRemoteVideoFrame(
+  src: string,
+  frame: ExtractedFrame,
+  sourceFrame: number,
+): void {
+  rememberVideoFrame(src, sourceFrame, frame);
+}
+
+export function getMediaCacheForRenderer(): import("../media/cache.js").MediaCache | null {
+  return _mediaCache;
+}
+
+/** Source frames each video clip needs for the given composition frames. */
+export interface VideoFrameRef {
+  readonly src: string;
+  readonly sourceFrame: number;
+}
+
+export async function videoFrameRefsFor(
+  composition: Composition,
+  frames: readonly number[],
+): Promise<readonly VideoFrameRef[]> {
+  if (frames.length === 0) return [];
+  const refs: VideoFrameRef[] = [];
+  const seen = new Set<string>();
+  for (const track of composition.rootTimeline.tracks) {
+    if (track.kind === "audio") continue;
+    for (const clip of track.clips) {
+      if (clip.type !== "video") continue;
+      const src = clip.src;
+      if (!src || seen.has(src)) continue;
+      seen.add(src);
+      if (!_mediaCache) continue;
+      const metadata = await getVideoMetadata(src, _mediaCache);
+      if (!metadata) continue;
+      const clampedMax = maxSourceFrameOf(metadata);
+
+      const media = clip as import("../core/types/clips.js").VideoClip;
+      const trimStart =
+        typeof media.trimStart === "number"
+          ? media.trimStart
+          : parseFloat(media.trimStart as string);
+      const trimEnd =
+        typeof media.trimEnd === "number" ? media.trimEnd : parseFloat(media.trimEnd as string);
+      const conformParams: ConformParams = {
+        trim:
+          !isNaN(trimStart) || !isNaN(trimEnd)
+            ? { trimStart: isNaN(trimStart) ? 0 : trimStart, trimEnd: isNaN(trimEnd) ? 0 : trimEnd }
+            : undefined,
+        speed:
+          media.speed !== undefined || media.reverse !== undefined
+            ? { speed: media.speed ?? 1, reverse: media.reverse ?? false }
+            : undefined,
+      };
+
+      for (const frame of frames) {
+        refs.push({
+          src,
+          sourceFrame: Math.min(
+            clampedMax,
+            calculateSourceFrame(
+              frame,
+              metadata,
+              { fps: composition.fps, width: composition.width, height: composition.height },
+              conformParams,
+            ),
+          ),
+        });
+      }
+    }
+  }
+  return refs;
 }
 
 function recallVideoFrame(src: string, sourceFrame: number): ExtractedFrame | undefined {
@@ -205,21 +338,32 @@ export async function primeVideoFramesForRange(
       const clampedMax = maxSourceFrameOf(metadata);
 
       const media = clip as import("../core/types/clips.js").VideoClip;
-      const trimStart = typeof media.trimStart === "number" ? media.trimStart : parseFloat(media.trimStart as string);
-      const trimEnd = typeof media.trimEnd === "number" ? media.trimEnd : parseFloat(media.trimEnd as string);
+      const trimStart =
+        typeof media.trimStart === "number"
+          ? media.trimStart
+          : parseFloat(media.trimStart as string);
+      const trimEnd =
+        typeof media.trimEnd === "number" ? media.trimEnd : parseFloat(media.trimEnd as string);
       const conformParams: ConformParams = {
-        trim: !isNaN(trimStart) || !isNaN(trimEnd)
-          ? { trimStart: isNaN(trimStart) ? 0 : trimStart, trimEnd: isNaN(trimEnd) ? 0 : trimEnd }
-          : undefined,
-        speed: media.speed !== undefined || media.reverse !== undefined
-          ? { speed: media.speed ?? 1, reverse: media.reverse ?? false }
-          : undefined,
+        trim:
+          !isNaN(trimStart) || !isNaN(trimEnd)
+            ? { trimStart: isNaN(trimStart) ? 0 : trimStart, trimEnd: isNaN(trimEnd) ? 0 : trimEnd }
+            : undefined,
+        speed:
+          media.speed !== undefined || media.reverse !== undefined
+            ? { speed: media.speed ?? 1, reverse: media.reverse ?? false }
+            : undefined,
       };
 
       const sourceFrames = frames.map((frame) =>
         Math.min(
           clampedMax,
-          calculateSourceFrame(frame, metadata, { fps: composition.fps, width: composition.width, height: composition.height }, conformParams),
+          calculateSourceFrame(
+            frame,
+            metadata,
+            { fps: composition.fps, width: composition.width, height: composition.height },
+            conformParams,
+          ),
         ),
       );
       const first = Math.min(...sourceFrames);
@@ -229,10 +373,20 @@ export async function primeVideoFramesForRange(
       // Avoid priming scattered frames (heavy trim/speed ramps) — only
       // contiguous runs make sense for a single decode pass.
       if (last - first + 1 > frames.length * 5) continue;
-      if (videoFrameCache.has(videoFrameKey(src, first)) && videoFrameCache.has(videoFrameKey(src, last))) continue;
+      if (
+        videoFrameCache.has(videoFrameKey(src, first)) &&
+        videoFrameCache.has(videoFrameKey(src, last))
+      )
+        continue;
 
       try {
-        const extracted = await extractFramesInMemory(src, first, last - first + 1, undefined, metadata.fps);
+        const extracted = await extractFramesInMemory(
+          src,
+          first,
+          last - first + 1,
+          undefined,
+          metadata.fps,
+        );
         for (let i = 0; i < extracted.length; i++) {
           rememberVideoFrame(src, first + i, extracted[i]!);
         }
@@ -267,10 +421,12 @@ const EMPTY_CLIPS: VisualClip[] = [];
  * per-clip native allocation that previously exhausted skia's heap.
  */
 const drawBufferCache = new Map<string, [Canvas, Canvas]>();
+const MAX_POOL_SIZE = 8;
 function getDrawBuffers(width: number, height: number): [Canvas, Canvas] {
   const key = `${width}x${height}`;
   let pair = drawBufferCache.get(key);
   if (!pair) {
+    evictOldest(drawBufferCache, MAX_POOL_SIZE);
     pair = [createCanvas(width, height), createCanvas(width, height)];
     drawBufferCache.set(key, pair);
   }
@@ -283,6 +439,7 @@ function getRenderTarget(width: number, height: number): Canvas {
   const key = `${width}x${height}`;
   let c = renderTargetCache.get(key);
   if (!c) {
+    evictOldest(renderTargetCache, MAX_POOL_SIZE);
     c = createCanvas(width, height);
     renderTargetCache.set(key, c);
   }
@@ -295,6 +452,7 @@ function getGroupCanvas(width: number, height: number): Canvas {
   const key = `${width}x${height}`;
   let c = groupCanvasCache.get(key);
   if (!c) {
+    evictOldest(groupCanvasCache, MAX_POOL_SIZE);
     c = createCanvas(width, height);
     groupCanvasCache.set(key, c);
   }
@@ -312,13 +470,19 @@ interface FrameSurfaceState {
 let lastFrameSurface: FrameSurfaceState | null = null;
 
 const DIRTY_RECT_AREA_LIMIT = 0.6;
+const ADAPTIVE_FULL_REDRAW_LIMIT = 3;
+let consecutiveFullRedraws = 0;
 
 function clipScreenRect(clip: VisualClip): Rect {
   const bounds = getClipBounds(clip);
   return transformedAabb(bounds, getClipTransform(clip, bounds.width, bounds.height));
 }
 
-function fillBackgroundRegion(ctx: SKRSContext2D, rect: Rect, background: string | Rgba | Gradient): void {
+function fillBackgroundRegion(
+  ctx: SKRSContext2D,
+  rect: Rect,
+  background: string | Rgba | Gradient,
+): void {
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   if (typeof background === "string") {
@@ -342,6 +506,7 @@ function getTransitionCanvas(width: number, height: number): Canvas {
   const key = `${width}x${height}`;
   let c = transitionCanvasCache.get(key);
   if (!c) {
+    evictOldest(transitionCanvasCache, MAX_POOL_SIZE);
     c = createCanvas(width, height);
     transitionCanvasCache.set(key, c);
   }
@@ -354,6 +519,7 @@ function getParticleCanvas(width: number, height: number): Canvas {
   const key = `${width}x${height}`;
   let c = particleCanvasCache.get(key);
   if (!c) {
+    evictOldest(particleCanvasCache, MAX_POOL_SIZE);
     c = createCanvas(width, height);
     particleCanvasCache.set(key, c);
   }
@@ -369,9 +535,7 @@ function getNoiseTexture(width: number, height: number, clip: NoiseClip, time: n
   const key = `${width}x${height}-${clip.params.kind}-${clip.params.dimensions}-${clip.params.scale}-${clip.params.offsetX ?? 0}-${clip.params.offsetY ?? 0}-${clip.params.animationSpeed ?? 0}-${clip.params.seed ?? 0}-${clip.params.outputType ?? "luminance"}-${bucket}`;
   let canvas = noiseTextureCache.get(key);
   if (canvas === undefined) {
-    if (noiseTextureCache.size >= NOISE_CACHE_MAX) {
-      noiseTextureCache.clear();
-    }
+    evictOldest(noiseTextureCache, NOISE_CACHE_MAX);
     canvas = generateNoiseTexture(width, height, { ...clip.params, time: bucket / 10 });
     noiseTextureCache.set(key, canvas);
   }
@@ -379,6 +543,7 @@ function getNoiseTexture(width: number, height: number, clip: NoiseClip, time: n
 }
 
 const skyboxCache = new Map<string, Promise<CubeTexture>>();
+const SKYBOX_CACHE_MAX = 8;
 
 function resolveSkyboxTexture(composition: Composition): Promise<CubeTexture> | null {
   const config = composition.skybox;
@@ -403,10 +568,14 @@ function resolveSkyboxTexture(composition: Composition): Promise<CubeTexture> | 
     return createProceduralSkybox();
   })();
   skyboxCache.set(key, loading);
+  evictOldest(skyboxCache, SKYBOX_CACHE_MAX);
   return loading;
 }
 
-async function applySkybox(ctx: SKRSContext2D, composition: Composition): Promise<CubeTexture | null> {
+async function applySkybox(
+  ctx: SKRSContext2D,
+  composition: Composition,
+): Promise<CubeTexture | null> {
   const texture = await resolveSkyboxTexture(composition);
   if (!texture) return null;
   renderSkybox(ctx, texture, composition.width, composition.height, {
@@ -435,20 +604,23 @@ function buildCompositionIndex(composition: Composition): CompositionIndex {
       if (span.endFrames > totalFrames) totalFrames = span.endFrames;
       for (let f = span.startFrames; f < span.endFrames; f++) {
         let bucket = activeByFrame.get(f);
-        if (!bucket) { bucket = []; activeByFrame.set(f, bucket); }
+        if (!bucket) {
+          bucket = [];
+          activeByFrame.set(f, bucket);
+        }
         bucket.push(clip);
       }
     }
   }
 
   if (composition.duration !== undefined) {
-    const dur = typeof composition.duration === "number"
-      ? composition.duration
-      : parseFloat(composition.duration as string);
+    const dur =
+      typeof composition.duration === "number"
+        ? composition.duration
+        : parseFloat(composition.duration as string);
     const durFrames = Math.ceil(dur * conversion.fpsFloat);
-    totalFrames = composition.boundaryBehavior === "extend"
-      ? Math.max(totalFrames, durFrames)
-      : durFrames;
+    totalFrames =
+      composition.boundaryBehavior === "extend" ? Math.max(totalFrames, durFrames) : durFrames;
   }
 
   return { totalFrames, activeByFrame, validated: false };
@@ -469,11 +641,24 @@ async function loadCachedImage(src: string): Promise<Canvas> {
   const canvas = new Canvas(img.width, img.height);
   const ctx = canvas.getContext("2d");
   ctx.drawImage(img, 0, 0);
-  imageCache.set(src, canvas);
+  rememberImage(src, canvas);
   return canvas;
 }
 
-function corePaintToRenderer(paint: string | { type: string; color?: string; stops?: readonly { color: string; offset: number }[]; angle?: number; center?: { x: number; y: number }; radius?: number; src?: string } | undefined): string | Rgba | Gradient | Canvas | undefined {
+function corePaintToRenderer(
+  paint:
+    | string
+    | {
+        type: string;
+        color?: string;
+        stops?: readonly { color: string; offset: number }[];
+        angle?: number;
+        center?: { x: number; y: number };
+        radius?: number;
+        src?: string;
+      }
+    | undefined,
+): string | Rgba | Gradient | Canvas | undefined {
   if (!paint) return undefined;
   if (typeof paint === "string") return paint;
   if (paint.type === "solid") return parseColor(paint.color ?? "#000000");
@@ -481,7 +666,7 @@ function corePaintToRenderer(paint: string | { type: string; color?: string; sto
     return {
       type: "linear",
       angle: paint.angle ?? 0,
-      stops: (paint.stops ?? []).map(s => ({ offset: s.offset, color: parseColor(s.color) })),
+      stops: (paint.stops ?? []).map((s) => ({ offset: s.offset, color: parseColor(s.color) })),
     };
   }
   if (paint.type === "radial") {
@@ -490,7 +675,7 @@ function corePaintToRenderer(paint: string | { type: string; color?: string; sto
       centerX: paint.center?.x ?? 0.5,
       centerY: paint.center?.y ?? 0.5,
       radius: paint.radius ?? 0.5,
-      stops: (paint.stops ?? []).map(s => ({ offset: s.offset, color: parseColor(s.color) })),
+      stops: (paint.stops ?? []).map((s) => ({ offset: s.offset, color: parseColor(s.color) })),
     };
   }
   if (paint.type === "conic") {
@@ -499,7 +684,7 @@ function corePaintToRenderer(paint: string | { type: string; color?: string; sto
       angle: paint.angle ?? 0,
       centerX: paint.center?.x ?? 0.5,
       centerY: paint.center?.y ?? 0.5,
-      stops: (paint.stops ?? []).map(s => ({ offset: s.offset, color: parseColor(s.color) })),
+      stops: (paint.stops ?? []).map((s) => ({ offset: s.offset, color: parseColor(s.color) })),
     };
   }
   if (paint.type === "image") {
@@ -513,7 +698,20 @@ function corePaintToRenderer(paint: string | { type: string; color?: string; sto
   return "#000000";
 }
 
-function corePaintToTextRenderer(paint: string | { type: string; color?: string; stops?: readonly { color: string; offset: number }[]; angle?: number; center?: { x: number; y: number }; radius?: number; src?: string } | undefined): Rgba | Gradient | undefined {
+function corePaintToTextRenderer(
+  paint:
+    | string
+    | {
+        type: string;
+        color?: string;
+        stops?: readonly { color: string; offset: number }[];
+        angle?: number;
+        center?: { x: number; y: number };
+        radius?: number;
+        src?: string;
+      }
+    | undefined,
+): Rgba | Gradient | undefined {
   const result = corePaintToRenderer(paint);
   if (typeof result === "string") return parseColor(result);
   if (result instanceof Canvas) return undefined;
@@ -528,10 +726,18 @@ function getClipTransform(clip: VisualClip, _width: number, _height: number): Tr
     rotate: t.rotation ?? 0,
     scaleX: t.scaleX ?? 1,
     scaleY: t.scaleY ?? 1,
-    anchorX: (t.anchor === "top-left" || t.anchor === "left" || t.anchor === "bottom-left") ? 0 :
-             (t.anchor === "top-right" || t.anchor === "right" || t.anchor === "bottom-right") ? 1 : 0.5,
-    anchorY: (t.anchor === "top-left" || t.anchor === "top" || t.anchor === "top-right") ? 0 :
-             (t.anchor === "bottom-left" || t.anchor === "bottom" || t.anchor === "bottom-right") ? 1 : 0.5,
+    anchorX:
+      t.anchor === "top-left" || t.anchor === "left" || t.anchor === "bottom-left"
+        ? 0
+        : t.anchor === "top-right" || t.anchor === "right" || t.anchor === "bottom-right"
+          ? 1
+          : 0.5,
+    anchorY:
+      t.anchor === "top-left" || t.anchor === "top" || t.anchor === "top-right"
+        ? 0
+        : t.anchor === "bottom-left" || t.anchor === "bottom" || t.anchor === "bottom-right"
+          ? 1
+          : 0.5,
   };
 }
 
@@ -540,39 +746,87 @@ function getClipBounds(clip: VisualClip): Rect {
     return { x: 0, y: 0, width: clip.width ?? 100, height: clip.height ?? 100 };
   }
   if (clip.type === "text") {
-    return { x: 0, y: 0, width: clip.maxWidth ?? 200, height: clip.fontSize * (clip.lineHeight ?? 1.2) };
+    return {
+      x: 0,
+      y: 0,
+      width: clip.maxWidth ?? 200,
+      height: clip.fontSize * (clip.lineHeight ?? 1.2),
+    };
   }
   if (clip.type === "text3d") {
     return { x: 0, y: 0, width: clip.width ?? 600, height: clip.height ?? clip.fontSize * 1.5 };
   }
-  if (clip.type === "image" || clip.type === "video" || clip.type === "svg" || clip.type === "noise" || clip.type === "audioVisualizer" || clip.type === "chromakey" || clip.type === "gradient-mesh") {
+  if (
+    clip.type === "image" ||
+    clip.type === "video" ||
+    clip.type === "svg" ||
+    clip.type === "noise" ||
+    clip.type === "audioVisualizer" ||
+    clip.type === "chromakey" ||
+    clip.type === "gradient-mesh"
+  ) {
     const imageClip = clip as VisualClip & { width?: number; height?: number };
     return { x: 0, y: 0, width: imageClip.width ?? 100, height: imageClip.height ?? 100 };
   }
   return { x: 0, y: 0, width: 100, height: 100 };
 }
 
-function toRgba(color: string | Rgba | Gradient | undefined, opacity: number): Rgba | Gradient | undefined {
+function toRgba(
+  color: string | Rgba | Gradient | undefined,
+  opacity: number,
+): Rgba | Gradient | undefined {
   if (!color) return undefined;
-  if (typeof color === "string") { const p = parseColor(color); return { ...p, a: p.a * opacity }; }
+  if (typeof color === "string") {
+    const p = parseColor(color);
+    return { ...p, a: p.a * opacity };
+  }
   if ("r" in color) return { ...color, a: color.a * opacity };
-  return { ...color, stops: color.stops.map(s => ({ ...s, color: { ...s.color, a: s.color.a * opacity } })) };
+  return {
+    ...color,
+    stops: color.stops.map((s) => ({ ...s, color: { ...s.color, a: s.color.a * opacity } })),
+  };
 }
 
-function toSolidRgba(color: string | Rgba | Gradient | undefined, opacity: number): Rgba | undefined {
+function toSolidRgba(
+  color: string | Rgba | Gradient | undefined,
+  opacity: number,
+): Rgba | undefined {
   if (!color) return undefined;
-  if (typeof color === "string") { const p = parseColor(color); return { ...p, a: p.a * opacity }; }
+  if (typeof color === "string") {
+    const p = parseColor(color);
+    return { ...p, a: p.a * opacity };
+  }
   if ("r" in color) return { ...color, a: color.a * opacity };
   return undefined;
 }
 
-function toStroke(stroke: { color: string | Rgba; width: number; lineCap?: string; lineJoin?: string; dashes?: readonly number[]; dashOffset?: number } | undefined): ShapeDrawParams["stroke"] | undefined {
+function toStroke(
+  stroke:
+    | {
+        color: string | Rgba;
+        width: number;
+        lineCap?: string;
+        lineJoin?: string;
+        dashes?: readonly number[];
+        dashOffset?: number;
+      }
+    | undefined,
+): ShapeDrawParams["stroke"] | undefined {
   if (!stroke) return undefined;
   const color = typeof stroke.color === "string" ? parseColor(stroke.color) : stroke.color;
-  return { color, width: stroke.width, lineCap: (stroke.lineCap as "butt" | "round" | "square") ?? "butt", lineJoin: (stroke.lineJoin as "miter" | "round" | "bevel") ?? "miter", dashArray: stroke.dashes ?? [], dashOffset: stroke.dashOffset ?? 0 };
+  return {
+    color,
+    width: stroke.width,
+    lineCap: (stroke.lineCap as "butt" | "round" | "square") ?? "butt",
+    lineJoin: (stroke.lineJoin as "miter" | "round" | "bevel") ?? "miter",
+    dashArray: stroke.dashes ?? [],
+    dashOffset: stroke.dashOffset ?? 0,
+  };
 }
 
-function toShadow(shadow: { color: string | Rgba; blur: number; offsetX?: number; offsetY?: number } | undefined): ShapeDrawParams["shadow"] | undefined {
+function toShadow(
+  shadow: { color: string | Rgba; blur: number; offsetX?: number; offsetY?: number } | undefined,
+): ShapeDrawParams["shadow"] | undefined {
   if (!shadow) return undefined;
   const color = typeof shadow.color === "string" ? parseColor(shadow.color) : shadow.color;
   return { color, blur: shadow.blur, offsetX: shadow.offsetX ?? 0, offsetY: shadow.offsetY ?? 0 };
@@ -610,22 +864,53 @@ function getClipFill(clip: VisualClip): string | Rgba | Gradient | undefined {
   return undefined;
 }
 
-function getClipStroke(clip: VisualClip): { color: string | Rgba; width: number; lineCap?: string; lineJoin?: string; dashes?: readonly number[]; dashOffset?: number } | undefined {
+function getClipStroke(clip: VisualClip):
+  | {
+      color: string | Rgba;
+      width: number;
+      lineCap?: string;
+      lineJoin?: string;
+      dashes?: readonly number[];
+      dashOffset?: number;
+    }
+  | undefined {
   if (clip.type === "text") {
-    return clip.stroke as { color: string | Rgba; width: number; lineCap?: string; lineJoin?: string; dashes?: readonly number[]; dashOffset?: number } | undefined;
+    return clip.stroke as
+      | {
+          color: string | Rgba;
+          width: number;
+          lineCap?: string;
+          lineJoin?: string;
+          dashes?: readonly number[];
+          dashOffset?: number;
+        }
+      | undefined;
   }
   if (clip.type === "shape") {
-    return clip.stroke as { color: string | Rgba; width: number; lineCap?: string; lineJoin?: string; dashes?: readonly number[]; dashOffset?: number } | undefined;
+    return clip.stroke as
+      | {
+          color: string | Rgba;
+          width: number;
+          lineCap?: string;
+          lineJoin?: string;
+          dashes?: readonly number[];
+          dashOffset?: number;
+        }
+      | undefined;
   }
   return undefined;
 }
 
-function getClipShadow(clip: VisualClip): { color: string | Rgba; blur: number; offsetX?: number; offsetY?: number } | undefined {
+function getClipShadow(
+  clip: VisualClip,
+): { color: string | Rgba; blur: number; offsetX?: number; offsetY?: number } | undefined {
   if (clip.type === "text") {
-    return clip.shadow as { color: string | Rgba; blur: number; offsetX?: number; offsetY?: number } | undefined;
+    return clip.shadow as
+      { color: string | Rgba; blur: number; offsetX?: number; offsetY?: number } | undefined;
   }
   if (clip.type === "shape") {
-    return clip.shadow as { color: string | Rgba; blur: number; offsetX?: number; offsetY?: number } | undefined;
+    return clip.shadow as
+      { color: string | Rgba; blur: number; offsetX?: number; offsetY?: number } | undefined;
   }
   return undefined;
 }
@@ -634,11 +919,17 @@ function isEffectActive(effectRef: EffectRef, context: RenderContext): boolean {
   if (effectRef.enabled === false) return false;
   const conversion = context.conversion;
   if (effectRef.from !== undefined) {
-    const startFrame = typeof effectRef.from === "number" ? effectRef.from : parseFloat(effectRef.from as string) * conversion.fpsFloat;
+    const startFrame =
+      typeof effectRef.from === "number"
+        ? effectRef.from
+        : parseFloat(effectRef.from as string) * conversion.fpsFloat;
     if (context.frame < startFrame) return false;
   }
   if (effectRef.to !== undefined) {
-    const endFrame = typeof effectRef.to === "number" ? effectRef.to : parseFloat(effectRef.to as string) * conversion.fpsFloat;
+    const endFrame =
+      typeof effectRef.to === "number"
+        ? effectRef.to
+        : parseFloat(effectRef.to as string) * conversion.fpsFloat;
     if (context.frame >= endFrame) return false;
   }
   return true;
@@ -650,14 +941,26 @@ function getMask(clip: VisualClip, _width: number, _height: number): Mask | unde
   if (mask.shape.kind === "rectangle") {
     return {
       kind: "shape",
-      shape: { kind: "rectangle", x: mask.shape.x, y: mask.shape.y, width: mask.shape.width, height: mask.shape.height },
+      shape: {
+        kind: "rectangle",
+        x: mask.shape.x,
+        y: mask.shape.y,
+        width: mask.shape.width,
+        height: mask.shape.height,
+      },
       invert: mask.invert ?? false,
     };
   }
   if (mask.shape.kind === "ellipse") {
     return {
       kind: "shape",
-      shape: { kind: "ellipse", cx: mask.shape.cx, cy: mask.shape.cy, radiusX: mask.shape.radiusX, radiusY: mask.shape.radiusY },
+      shape: {
+        kind: "ellipse",
+        cx: mask.shape.cx,
+        cy: mask.shape.cy,
+        radiusX: mask.shape.radiusX,
+        radiusY: mask.shape.radiusY,
+      },
       invert: mask.invert ?? false,
     };
   }
@@ -680,18 +983,34 @@ function getVideoFrameCanvas(width: number, height: number): Canvas {
   const key = `${width}x${height}`;
   let c = videoFrameCanvasPool.get(key);
   if (!c) {
+    evictOldest(videoFrameCanvasPool, MAX_POOL_SIZE);
     c = new Canvas(width, height);
     videoFrameCanvasPool.set(key, c);
   }
   return c;
 }
 
-async function drawImageClip(ctx: SKRSContext2D, clip: VisualClip & { src: string; fit?: string; crop?: { x: number; y: number; width: number; height: number }; flipped?: boolean; roundedCorners?: number }, bounds: Rect, params: ShapeDrawParams, _context: RenderContext): Promise<void> {
+async function drawImageClip(
+  ctx: SKRSContext2D,
+  clip: VisualClip & {
+    src: string;
+    fit?: string;
+    crop?: { x: number; y: number; width: number; height: number };
+    flipped?: boolean;
+    roundedCorners?: number;
+  },
+  bounds: Rect,
+  params: ShapeDrawParams,
+  _context: RenderContext,
+): Promise<void> {
   const imgCanvas = await loadCachedImage(clip.src);
   const imgWidth = imgCanvas.width;
   const imgHeight = imgCanvas.height;
 
-  let sx = 0, sy = 0, sw = imgWidth, sh = imgHeight;
+  let sx = 0,
+    sy = 0,
+    sw = imgWidth,
+    sh = imgHeight;
   if (clip.crop) {
     sx = clip.crop.x;
     sy = clip.crop.y;
@@ -699,7 +1018,10 @@ async function drawImageClip(ctx: SKRSContext2D, clip: VisualClip & { src: strin
     sh = clip.crop.height;
   }
 
-  let dx = 0, dy = 0, dw = bounds.width, dh = bounds.height;
+  let dx = 0,
+    dy = 0,
+    dw = bounds.width,
+    dh = bounds.height;
   const fit = clip.fit ?? "cover";
 
   if (fit === "contain") {
@@ -727,7 +1049,13 @@ async function drawImageClip(ctx: SKRSContext2D, clip: VisualClip & { src: strin
   ctx.save();
   // Media clips are positioned like every other visual clip: the transform
   // places the clip's bounds box in the composition, then the box is filled.
-  if (params.transform) applyTransform(ctx, { ...createDefaultTransform(), ...params.transform }, bounds.width, bounds.height);
+  if (params.transform)
+    applyTransform(
+      ctx,
+      { ...createDefaultTransform(), ...params.transform },
+      bounds.width,
+      bounds.height,
+    );
   if (clip.flipped) {
     ctx.translate(bounds.width, 0);
     ctx.scale(-1, 1);
@@ -761,7 +1089,12 @@ async function drawImageClip(ctx: SKRSContext2D, clip: VisualClip & { src: strin
  */
 async function drawVideoClip(
   ctx: SKRSContext2D,
-  clip: VisualClip & { src: string; fit?: string; crop?: { x: number; y: number; width: number; height: number }; roundedCorners?: number },
+  clip: VisualClip & {
+    src: string;
+    fit?: string;
+    crop?: { x: number; y: number; width: number; height: number };
+    roundedCorners?: number;
+  },
   bounds: Rect,
   params: ShapeDrawParams,
   context: RenderContext,
@@ -769,14 +1102,23 @@ async function drawVideoClip(
   const src = clip.src;
 
   if (!_mediaCache) {
-    throw new Error(`Video clip "${src}" requires a media cache — call setMediaCacheForRenderer() before rendering.`);
+    throw new Error(
+      `Video clip "${src}" requires a media cache — call setMediaCacheForRenderer() before rendering.`,
+    );
   }
 
-  const extracted = await extractVideoFrameCanvas(src, context, clip as VisualClip & import("../core/types/clips.js").MediaProps);
+  const extracted = await extractVideoFrameCanvas(
+    src,
+    context,
+    clip as VisualClip & import("../core/types/clips.js").MediaProps,
+  );
   const frameCanvas = extracted.canvas;
 
   // Apply fit/crop
-  let sx = 0, sy = 0, sw = extracted.width, sh = extracted.height;
+  let sx = 0,
+    sy = 0,
+    sw = extracted.width,
+    sh = extracted.height;
   if (clip.crop) {
     sx = clip.crop.x;
     sy = clip.crop.y;
@@ -784,7 +1126,10 @@ async function drawVideoClip(
     sh = clip.crop.height;
   }
 
-  let dx = 0, dy = 0, dw = bounds.width, dh = bounds.height;
+  let dx = 0,
+    dy = 0,
+    dw = bounds.width,
+    dh = bounds.height;
   const fit = clip.fit ?? "cover";
 
   if (fit === "contain") {
@@ -810,7 +1155,13 @@ async function drawVideoClip(
   }
 
   ctx.save();
-  if (params.transform) applyTransform(ctx, { ...createDefaultTransform(), ...params.transform }, bounds.width, bounds.height);
+  if (params.transform)
+    applyTransform(
+      ctx,
+      { ...createDefaultTransform(), ...params.transform },
+      bounds.width,
+      bounds.height,
+    );
   // Crop to the clip's own box: fit modes (cover/contain/none) compute draw
   // sizes that can exceed the bounds, so the visible region must be the box
   // itself — otherwise an overflowing frame paints over neighbouring clips.
@@ -851,6 +1202,7 @@ async function drawModel3dClip(
   const { Model3dRenderer } = await import("../model-3d/renderer.js");
   let renderer = model3dRendererCache.get(clip.src);
   if (!renderer) {
+    evictOldest(model3dRendererCache, MAX_POOL_SIZE);
     renderer = new Model3dRenderer();
     await renderer.loadModel(clip.src);
     model3dRendererCache.set(clip.src, renderer);
@@ -863,24 +1215,32 @@ async function drawModel3dClip(
     width: clip.width ?? bounds.width,
     height: clip.height ?? bounds.height,
     environment: environment ?? undefined,
-    camera: camera?.orbit === true
-      ? { position: [0, 0, (camera.radius ?? 5) * 2], target: [0, 0, 0] }
-      : undefined,
-    animation: camera?.orbit === true
-      ? {
-          type: "orbit",
-          duration: composition.duration !== undefined ? Number(composition.duration) || 1 : 1,
-          orbitRadius: camera.radius ?? 5,
-          orbitSpeed: camera.speed ?? 0.5,
-        }
-      : undefined,
+    camera:
+      camera?.orbit === true
+        ? { position: [0, 0, (camera.radius ?? 5) * 2], target: [0, 0, 0] }
+        : undefined,
+    animation:
+      camera?.orbit === true
+        ? {
+            type: "orbit",
+            duration: composition.duration !== undefined ? Number(composition.duration) || 1 : 1,
+            orbitRadius: camera.radius ?? 5,
+            orbitSpeed: camera.speed ?? 0.5,
+          }
+        : undefined,
     lighting: clip.lighting,
     skeletal: clip.animation,
     materialOverrides: clip.materialOverrides,
   });
 
   ctx.save();
-  if (params.transform) applyTransform(ctx, { ...createDefaultTransform(), ...params.transform }, bounds.width, bounds.height);
+  if (params.transform)
+    applyTransform(
+      ctx,
+      { ...createDefaultTransform(), ...params.transform },
+      bounds.width,
+      bounds.height,
+    );
   ctx.drawImage(canvas, 0, 0, bounds.width, bounds.height);
   ctx.restore();
 }
@@ -901,7 +1261,13 @@ async function drawMultiCameraClip(
     environment: environment ?? undefined,
   });
   ctx.save();
-  if (params.transform) applyTransform(ctx, { ...createDefaultTransform(), ...params.transform }, bounds.width, bounds.height);
+  if (params.transform)
+    applyTransform(
+      ctx,
+      { ...createDefaultTransform(), ...params.transform },
+      bounds.width,
+      bounds.height,
+    );
   ctx.drawImage(canvas, 0, 0, bounds.width, bounds.height);
   ctx.restore();
 }
@@ -921,7 +1287,13 @@ async function drawSvgClip(
     throw new Error("SVG clip requires either 'content' or 'src' property");
   }
   const element = parseSvgSource(source);
-  drawSvg(ctx, element, bounds, { ...createDefaultTransform(), ...params.transform }, params.opacity ?? 1);
+  drawSvg(
+    ctx,
+    element,
+    bounds,
+    { ...createDefaultTransform(), ...params.transform },
+    params.opacity ?? 1,
+  );
 }
 
 function drawParticleClip(
@@ -935,12 +1307,15 @@ function drawParticleClip(
   const config = resolveEmitterConfig(clip.params, clip.seed);
   const particleContext = getParticleContext(clip, context.frame);
   const elapsed = elapsedSinceClipStart(clip, context);
-  const state = updateParticleContext(particleContext, elapsed, context.frame, config, { width, height });
+  const state = updateParticleContext(particleContext, elapsed, context.frame, config, {
+    width,
+    height,
+  });
 
   const temp = getParticleCanvas(width, height);
   const tempCtx = createContext(temp);
   clearCanvas(tempCtx, width, height);
-  renderParticles(tempCtx, state, config.blending);
+  renderParticles(tempCtx, state, config.blending, clip.params.debug === true ? { debugMode: true, viewport: { width, height } } : {});
 
   ctx.save();
   applyTransform(ctx, { ...createDefaultTransform(), ...params.transform }, width, height);
@@ -973,7 +1348,12 @@ function drawNoiseClip(
 
 const FFT_WINDOW_SIZE = 2048;
 
-function buildVisualizerLayout(clip: AudioVisualizerClip, bands: Float32Array, width: number, height: number): VisualizerLayout {
+function buildVisualizerLayout(
+  clip: AudioVisualizerClip,
+  bands: Float32Array,
+  width: number,
+  height: number,
+): VisualizerLayout {
   const options = { barWidth: clip.barWidth, barGap: clip.barGap, mirror: clip.mirror };
   switch (clip.vizType) {
     case "bars":
@@ -1017,7 +1397,10 @@ async function drawAudioVisualizerClip(
   ctx.restore();
 }
 
-async function computeVisualizerBands(clip: AudioVisualizerClip, context: RenderContext): Promise<Float32Array> {
+async function computeVisualizerBands(
+  clip: AudioVisualizerClip,
+  context: RenderContext,
+): Promise<Float32Array> {
   const bandCount = Math.max(1, clip.barCount ?? 32);
   const empty = new Float32Array(bandCount);
   const track = resolveAudioTrack(clip.trackRef, context.composition.rootTimeline);
@@ -1025,17 +1408,25 @@ async function computeVisualizerBands(clip: AudioVisualizerClip, context: Render
     throw new Error(`Audio visualizer references unknown audio track: ${clip.trackRef}`);
   }
   const span = computeClipSpan(clip, context.conversion);
-  const activeClip = findActiveAudioClip(track, context.frame, span.startFrames, span.endFrames, context.conversion);
+  const activeClip = findActiveAudioClip(
+    track,
+    context.frame,
+    span.startFrames,
+    span.endFrames,
+    context.conversion,
+  );
   if (activeClip === undefined) return empty;
   const buffer = await getAnalysisBuffer(activeClip.src);
   if (buffer === undefined) return empty;
-  const sampleTime = (context.frame - span.startFrames) / context.conversion.fpsFloat
-    + (typeof activeClip.trimStart === "number" ? activeClip.trimStart : 0);
+  const sampleTime =
+    (context.frame - span.startFrames) / context.conversion.fpsFloat +
+    (typeof activeClip.trimStart === "number" ? activeClip.trimStart : 0);
   const window = extractVisualizerSample(buffer, sampleTime * buffer.sampleRate, FFT_WINDOW_SIZE);
   const mags = magnitude(fft(window));
-  const bands = clip.frequencyScale === "logarithmic"
-    ? extractBandsLogarithmic(mags, bandCount, buffer.sampleRate)
-    : extractBands(mags, bandCount, buffer.sampleRate);
+  const bands =
+    clip.frequencyScale === "logarithmic"
+      ? extractBandsLogarithmic(mags, bandCount, buffer.sampleRate)
+      : extractBands(mags, bandCount, buffer.sampleRate);
 
   if ((clip.smoothing ?? 0) > 0) {
     const previous = smoothingState.get(clip);
@@ -1047,18 +1438,33 @@ async function computeVisualizerBands(clip: AudioVisualizerClip, context: Render
   return bands;
 }
 
-function findActiveAudioClip(track: AudioTrack, frame: number, visualizerStart: number, visualizerEnd: number, conversion: FrameConversion): AudioClip | undefined {
+function findActiveAudioClip(
+  track: AudioTrack,
+  frame: number,
+  visualizerStart: number,
+  visualizerEnd: number,
+  conversion: FrameConversion,
+): AudioClip | undefined {
   for (const clip of track.clips) {
     if (clip.type !== "audio") continue;
     const span = computeClipSpan(clip, conversion);
-    if (span.startFrames <= frame && frame < span.endFrames && span.startFrames >= visualizerStart - 1 && span.endFrames <= visualizerEnd + 1) {
+    if (
+      span.startFrames <= frame &&
+      frame < span.endFrames &&
+      span.startFrames >= visualizerStart - 1 &&
+      span.endFrames <= visualizerEnd + 1
+    ) {
       return clip;
     }
   }
   return undefined;
 }
 
-function drawWaveformPath(ctx: SKRSContext2D, points: readonly { x: number; y: number }[], color: string): void {
+function drawWaveformPath(
+  ctx: SKRSContext2D,
+  points: readonly { x: number; y: number }[],
+  color: string,
+): void {
   if (points.length === 0) return;
   ctx.beginPath();
   ctx.strokeStyle = color;
@@ -1070,7 +1476,13 @@ function drawWaveformPath(ctx: SKRSContext2D, points: readonly { x: number; y: n
   ctx.stroke();
 }
 
-function drawRadialLines(ctx: SKRSContext2D, layout: VisualizerLayout, color: string, width: number, height: number): void {
+function drawRadialLines(
+  ctx: SKRSContext2D,
+  layout: VisualizerLayout,
+  color: string,
+  width: number,
+  height: number,
+): void {
   const radial = layout.radial;
   if (radial === undefined || radial.length === 0) return;
   const isCircular = layout.type === "circular";
@@ -1099,35 +1511,61 @@ function drawRadialLines(ctx: SKRSContext2D, layout: VisualizerLayout, color: st
 async function extractVideoFrameCanvas(
   src: string,
   context: RenderContext,
-  mediaProps: { readonly trimStart?: number | string; readonly trimEnd?: number | string; readonly speed?: number; readonly reverse?: boolean },
+  mediaProps: {
+    readonly trimStart?: number | string;
+    readonly trimEnd?: number | string;
+    readonly speed?: number;
+    readonly reverse?: boolean;
+  },
 ): Promise<{ canvas: Canvas; width: number; height: number }> {
   const { composition, frame } = context;
   const metadata = await getVideoMetadata(src, _mediaCache!);
   if (!metadata) {
-    throw new Error(`Could not read video metadata for "${src}" — check the path and that the file is a valid video.`);
+    throw new Error(
+      `Could not read video metadata for "${src}" — check the path and that the file is a valid video.`,
+    );
   }
 
-  const trimStart = typeof mediaProps.trimStart === "number" ? mediaProps.trimStart : parseFloat(mediaProps.trimStart as string);
-  const trimEnd = typeof mediaProps.trimEnd === "number" ? mediaProps.trimEnd : parseFloat(mediaProps.trimEnd as string);
+  const trimStart =
+    typeof mediaProps.trimStart === "number"
+      ? mediaProps.trimStart
+      : parseFloat(mediaProps.trimStart as string);
+  const trimEnd =
+    typeof mediaProps.trimEnd === "number"
+      ? mediaProps.trimEnd
+      : parseFloat(mediaProps.trimEnd as string);
   const conformParams: ConformParams = {
-    trim: !isNaN(trimStart) || !isNaN(trimEnd)
-      ? { trimStart: isNaN(trimStart) ? 0 : trimStart, trimEnd: isNaN(trimEnd) ? 0 : trimEnd }
-      : undefined,
-    speed: mediaProps.speed !== undefined || mediaProps.reverse !== undefined
-      ? { speed: mediaProps.speed ?? 1, reverse: mediaProps.reverse ?? false }
-      : undefined,
+    trim:
+      !isNaN(trimStart) || !isNaN(trimEnd)
+        ? { trimStart: isNaN(trimStart) ? 0 : trimStart, trimEnd: isNaN(trimEnd) ? 0 : trimEnd }
+        : undefined,
+    speed:
+      mediaProps.speed !== undefined || mediaProps.reverse !== undefined
+        ? { speed: mediaProps.speed ?? 1, reverse: mediaProps.reverse ?? false }
+        : undefined,
   };
 
   const sourceFrame = Math.min(
     maxSourceFrameOf(metadata),
-    calculateSourceFrame(frame, metadata, { fps: composition.fps, width: composition.width, height: composition.height }, conformParams),
+    calculateSourceFrame(
+      frame,
+      metadata,
+      { fps: composition.fps, width: composition.width, height: composition.height },
+      conformParams,
+    ),
   );
 
   let extractedFrame = recallVideoFrame(src, sourceFrame);
   if (!extractedFrame) {
     let decoded: ExtractedFrame[] | null;
     try {
-      decoded = await extractFramesInMemory(src, sourceFrame, 1, { width: metadata.width, height: metadata.height }, metadata.fps);
+      decoded = await extractFramesInMemory(
+        src,
+        sourceFrame,
+        1,
+        { width: metadata.width, height: metadata.height },
+        metadata.fps,
+      );
     } catch {
       decoded = null;
     }
@@ -1163,6 +1601,7 @@ function getChromaKeyCanvas(width: number, height: number): Canvas {
   const key = `${width}x${height}`;
   let c = chromaKeyCanvasCache.get(key);
   if (!c) {
+    evictOldest(chromaKeyCanvasCache, MAX_POOL_SIZE);
     c = createCanvas(width, height);
     chromaKeyCanvasCache.set(key, c);
   }
@@ -1182,7 +1621,11 @@ async function drawChromaKeyClip(
   let srcHeight: number;
   const isVideo = _mediaCache !== null && (await getVideoMetadata(src, _mediaCache)) !== null;
   if (isVideo) {
-    const extracted = await extractVideoFrameCanvas(src, context, clip as { trimStart?: number | string });
+    const extracted = await extractVideoFrameCanvas(
+      src,
+      context,
+      clip as { trimStart?: number | string },
+    );
     sourceCanvas = extracted.canvas;
     srcWidth = extracted.width;
     srcHeight = extracted.height;
@@ -1206,7 +1649,10 @@ async function drawChromaKeyClip(
     },
   );
 
-  let sx = 0, sy = 0, sw = srcWidth, sh = srcHeight;
+  let sx = 0,
+    sy = 0,
+    sw = srcWidth,
+    sh = srcHeight;
   if (clip.crop) {
     sx = clip.crop.x;
     sy = clip.crop.y;
@@ -1214,7 +1660,10 @@ async function drawChromaKeyClip(
     sh = clip.crop.height;
   }
 
-  let dx = 0, dy = 0, dw = bounds.width, dh = bounds.height;
+  let dx = 0,
+    dy = 0,
+    dw = bounds.width,
+    dh = bounds.height;
   const fit = clip.fit ?? "cover";
   if (fit === "contain") {
     const scale = Math.min(bounds.width / sw, bounds.height / sh);
@@ -1239,7 +1688,13 @@ async function drawChromaKeyClip(
   }
 
   ctx.save();
-  if (params.transform) applyTransform(ctx, { ...createDefaultTransform(), ...params.transform }, bounds.width, bounds.height);
+  if (params.transform)
+    applyTransform(
+      ctx,
+      { ...createDefaultTransform(), ...params.transform },
+      bounds.width,
+      bounds.height,
+    );
   ctx.beginPath();
   ctx.rect(0, 0, bounds.width, bounds.height);
   ctx.clip();
@@ -1247,7 +1702,12 @@ async function drawChromaKeyClip(
   ctx.restore();
 }
 
-function drawGroupClip(ctx: SKRSContext2D, clip: VisualClip & { children: readonly VisualClip[] }, context: RenderContext, seed: number): Canvas {
+function drawGroupClip(
+  ctx: SKRSContext2D,
+  clip: VisualClip & { children: readonly VisualClip[] },
+  context: RenderContext,
+  seed: number,
+): Canvas {
   const bounds = getClipBounds(clip);
   const groupCanvas = getGroupCanvas(bounds.width, bounds.height);
   const groupCtx = createContext(groupCanvas);
@@ -1270,10 +1730,15 @@ function drawGroupClip(ctx: SKRSContext2D, clip: VisualClip & { children: readon
   return groupCanvas;
 }
 
-async function drawClip(ctx: SKRSContext2D, clip: VisualClip, context: RenderContext, seed: number): Promise<void> {
+async function drawClip(
+  ctx: SKRSContext2D,
+  clip: VisualClip,
+  context: RenderContext,
+  seed: number,
+): Promise<void> {
   const bounds = getClipBounds(clip);
   const transform = getClipTransform(clip, bounds.width, bounds.height);
-  const opacity = (clip.opacity ?? 1);
+  const opacity = clip.opacity ?? 1;
   const blendMode = resolveBlendMode(clip.blend);
   const fill = toRgba(getClipFill(clip), opacity);
   const stroke = toStroke(getClipStroke(clip));
@@ -1297,7 +1762,15 @@ async function drawClip(ctx: SKRSContext2D, clip: VisualClip, context: RenderCon
     if (mask.shape.kind === "rectangle") {
       ctx.rect(mask.shape.x, mask.shape.y, mask.shape.width, mask.shape.height);
     } else if (mask.shape.kind === "ellipse") {
-      ctx.ellipse(mask.shape.cx, mask.shape.cy, mask.shape.radiusX, mask.shape.radiusY, 0, 0, Math.PI * 2);
+      ctx.ellipse(
+        mask.shape.cx,
+        mask.shape.cy,
+        mask.shape.radiusX,
+        mask.shape.radiusY,
+        0,
+        0,
+        Math.PI * 2,
+      );
     }
     if (mask.invert) {
       ctx.rect(0, 0, bounds.width, bounds.height);
@@ -1308,16 +1781,38 @@ async function drawClip(ctx: SKRSContext2D, clip: VisualClip, context: RenderCon
   }
 
   const hasImageFill = (clip: VisualClip): boolean => {
-    if (clip.type === "shape" && clip.fill && typeof clip.fill === "object" && clip.fill.type === "image") return true;
-    if (clip.type === "solid" && clip.color && typeof clip.color === "object" && clip.color.type === "image") return true;
+    if (
+      clip.type === "shape" &&
+      clip.fill &&
+      typeof clip.fill === "object" &&
+      clip.fill.type === "image"
+    )
+      return true;
+    if (
+      clip.type === "solid" &&
+      clip.color &&
+      typeof clip.color === "object" &&
+      clip.color.type === "image"
+    )
+      return true;
     return false;
   };
 
   const drawImageFill = async (clip: VisualClip): Promise<void> => {
     let src = "";
-    if (clip.type === "shape" && clip.fill && typeof clip.fill === "object" && clip.fill.type === "image") {
+    if (
+      clip.type === "shape" &&
+      clip.fill &&
+      typeof clip.fill === "object" &&
+      clip.fill.type === "image"
+    ) {
       src = clip.fill.src;
-    } else if (clip.type === "solid" && clip.color && typeof clip.color === "object" && clip.color.type === "image") {
+    } else if (
+      clip.type === "solid" &&
+      clip.color &&
+      typeof clip.color === "object" &&
+      clip.color.type === "image"
+    ) {
       src = clip.color.src;
     }
     if (!src) return;
@@ -1330,8 +1825,18 @@ async function drawClip(ctx: SKRSContext2D, clip: VisualClip, context: RenderCon
       if (hasImageFill(clip)) {
         await drawImageFill(clip);
       } else {
-        drawRectangle({ canvas: ctx.canvas, ctx, transform: createDefaultTransform(), opacity: 1, blendMode: "source-over", clipPath: null },
-          bounds, { fill, transform, opacity, blendMode, stroke, shadow });
+        drawRectangle(
+          {
+            canvas: ctx.canvas,
+            ctx,
+            transform: createDefaultTransform(),
+            opacity: 1,
+            blendMode: "source-over",
+            clipPath: null,
+          },
+          bounds,
+          { fill, transform, opacity, blendMode, stroke, shadow },
+        );
       }
       break;
     }
@@ -1339,17 +1844,87 @@ async function drawClip(ctx: SKRSContext2D, clip: VisualClip, context: RenderCon
       if (hasImageFill(clip)) {
         await drawImageFill(clip);
       } else if (clip.shapeType === "rectangle") {
-        drawRectangle({ canvas: ctx.canvas, ctx, transform: createDefaultTransform(), opacity: 1, blendMode: "source-over", clipPath: null }, bounds, params);
+        drawRectangle(
+          {
+            canvas: ctx.canvas,
+            ctx,
+            transform: createDefaultTransform(),
+            opacity: 1,
+            blendMode: "source-over",
+            clipPath: null,
+          },
+          bounds,
+          params,
+        );
       } else if (clip.shapeType === "rounded-rectangle") {
-        drawRoundedRectangle({ canvas: ctx.canvas, ctx, transform: createDefaultTransform(), opacity: 1, blendMode: "source-over", clipPath: null }, bounds, clip.radius ?? 10, params);
+        drawRoundedRectangle(
+          {
+            canvas: ctx.canvas,
+            ctx,
+            transform: createDefaultTransform(),
+            opacity: 1,
+            blendMode: "source-over",
+            clipPath: null,
+          },
+          bounds,
+          clip.radius ?? 10,
+          params,
+        );
       } else if (clip.shapeType === "ellipse") {
-        drawEllipse({ canvas: ctx.canvas, ctx, transform: createDefaultTransform(), opacity: 1, blendMode: "source-over", clipPath: null }, { x: bounds.width / 2, y: bounds.height / 2 }, bounds.width / 2, bounds.height / 2, params);
+        drawEllipse(
+          {
+            canvas: ctx.canvas,
+            ctx,
+            transform: createDefaultTransform(),
+            opacity: 1,
+            blendMode: "source-over",
+            clipPath: null,
+          },
+          { x: bounds.width / 2, y: bounds.height / 2 },
+          bounds.width / 2,
+          bounds.height / 2,
+          params,
+        );
       } else if (clip.shapeType === "line") {
-        drawLine({ canvas: ctx.canvas, ctx, transform: createDefaultTransform(), opacity: 1, blendMode: "source-over", clipPath: null }, { x: 0, y: bounds.height / 2 }, { x: bounds.width, y: bounds.height / 2 }, params);
+        drawLine(
+          {
+            canvas: ctx.canvas,
+            ctx,
+            transform: createDefaultTransform(),
+            opacity: 1,
+            blendMode: "source-over",
+            clipPath: null,
+          },
+          { x: 0, y: bounds.height / 2 },
+          { x: bounds.width, y: bounds.height / 2 },
+          params,
+        );
       } else if (clip.shapeType === "polygon" && clip.points) {
-        drawPolygon({ canvas: ctx.canvas, ctx, transform: createDefaultTransform(), opacity: 1, blendMode: "source-over", clipPath: null }, clip.points, params);
+        drawPolygon(
+          {
+            canvas: ctx.canvas,
+            ctx,
+            transform: createDefaultTransform(),
+            opacity: 1,
+            blendMode: "source-over",
+            clipPath: null,
+          },
+          clip.points,
+          params,
+        );
       } else if (clip.shapeType === "path" && clip.path) {
-        drawPath({ canvas: ctx.canvas, ctx, transform: createDefaultTransform(), opacity: 1, blendMode: "source-over", clipPath: null }, clip.path, params);
+        drawPath(
+          {
+            canvas: ctx.canvas,
+            ctx,
+            transform: createDefaultTransform(),
+            opacity: 1,
+            blendMode: "source-over",
+            clipPath: null,
+          },
+          clip.path,
+          params,
+        );
       }
       break;
     }
@@ -1370,10 +1945,25 @@ async function drawClip(ctx: SKRSContext2D, clip: VisualClip, context: RenderCon
         maxWidth,
         autoFit: clip.autoFit,
         fill: clip.fill ? corePaintToTextRenderer(clip.fill) : undefined,
-        stroke: clip.stroke ? { color: toSolidRgba(clip.stroke.color, 1)!, width: clip.stroke.width } : undefined,
-        shadow: clip.shadow ? { color: toSolidRgba(clip.shadow.color, 1)!, blur: clip.shadow.blur, offsetX: clip.shadow.offsetX ?? 0, offsetY: clip.shadow.offsetY ?? 0 } : undefined,
+        stroke: clip.stroke
+          ? { color: toSolidRgba(clip.stroke.color, 1)!, width: clip.stroke.width }
+          : undefined,
+        shadow: clip.shadow
+          ? {
+              color: toSolidRgba(clip.shadow.color, 1)!,
+              blur: clip.shadow.blur,
+              offsetX: clip.shadow.offsetX ?? 0,
+              offsetY: clip.shadow.offsetY ?? 0,
+            }
+          : undefined,
       };
-      const prepared = prepareText({ style, text: clip.content, characterAccess: clip.characterAccess, wordAccess: clip.wordAccess, lineAccess: clip.lineAccess });
+      const prepared = prepareText({
+        style,
+        text: clip.content,
+        characterAccess: clip.characterAccess,
+        wordAccess: clip.wordAccess,
+        lineAccess: clip.lineAccess,
+      });
       const missing = checkMissingGlyphs(clip.content, style);
       if (missing.length > 0) {
         console.warn(`CC3006: Missing glyphs in text clip: ${missing.join(", ")}`);
@@ -1383,13 +1973,41 @@ async function drawClip(ctx: SKRSContext2D, clip: VisualClip, context: RenderCon
       break;
     }
     case "image":
-      await drawImageClip(ctx, clip as VisualClip & { src: string; fit?: string; crop?: { x: number; y: number; width: number; height: number }; flipped?: boolean; roundedCorners?: number }, bounds, params, context);
+      await drawImageClip(
+        ctx,
+        clip as VisualClip & {
+          src: string;
+          fit?: string;
+          crop?: { x: number; y: number; width: number; height: number };
+          flipped?: boolean;
+          roundedCorners?: number;
+        },
+        bounds,
+        params,
+        context,
+      );
       break;
     case "video":
-      await drawVideoClip(ctx, clip as VisualClip & { src: string; fit?: string; crop?: { x: number; y: number; width: number; height: number }; roundedCorners?: number }, bounds, params, context);
+      await drawVideoClip(
+        ctx,
+        clip as VisualClip & {
+          src: string;
+          fit?: string;
+          crop?: { x: number; y: number; width: number; height: number };
+          roundedCorners?: number;
+        },
+        bounds,
+        params,
+        context,
+      );
       break;
     case "group": {
-      const groupCanvas = await drawGroupClip(ctx, clip as VisualClip & { children: readonly VisualClip[] }, context, seed);
+      const groupCanvas = await drawGroupClip(
+        ctx,
+        clip as VisualClip & { children: readonly VisualClip[] },
+        context,
+        seed,
+      );
       ctx.drawImage(groupCanvas, 0, 0);
       break;
     }
@@ -1466,24 +2084,40 @@ function applyEffects(canvas: Canvas, clip: VisualClip, context: RenderContext):
   return current;
 }
 
-function applyTransition(fromCanvas: Canvas, toCanvas: Canvas, transitionRef: VisualClip["transitionIn"], context: RenderContext, width: number, height: number, clip: VisualClip): Canvas {
+function applyTransition(
+  fromCanvas: Canvas,
+  toCanvas: Canvas,
+  transitionRef: VisualClip["transitionIn"],
+  context: RenderContext,
+  width: number,
+  height: number,
+  clip: VisualClip,
+): Canvas {
   if (!transitionRef) return toCanvas;
   const transition = resolveTransition(transitionRef.name);
   if (!transition) throw new UnknownTransitionError(transitionRef.name, listTransitions());
 
   const conversion = context.conversion;
   const configuredDuration = transitionRef.duration ?? transition.defaultDuration;
-  const duration = configuredDuration !== undefined
-    ? typeof configuredDuration === "number"
-      ? configuredDuration * conversion.fpsFloat
-      : parseFloat(configuredDuration) * conversion.fpsFloat
-    : 30;
+  const duration =
+    configuredDuration !== undefined
+      ? typeof configuredDuration === "number"
+        ? configuredDuration * conversion.fpsFloat
+        : parseFloat(configuredDuration) * conversion.fpsFloat
+      : 30;
   const clipStart = computeClipSpan({ ...clip, start: 0, duration: 0 } as VisualClip, conversion);
   const progress = Math.min(1, Math.max(0, (context.frame - clipStart.startFrames) / duration));
 
   const resultCanvas = getTransitionCanvas(width, height);
   const resultCtx = createContext(resultCanvas);
-  const transitionContext = { progress, from: fromCanvas, to: toCanvas, width, height, seed: context.seed };
+  const transitionContext = {
+    progress,
+    from: fromCanvas,
+    to: toCanvas,
+    width,
+    height,
+    seed: context.seed,
+  };
   transition.apply(resultCtx, transitionContext, transitionRef.params ?? {});
   return resultCanvas;
 }
@@ -1498,12 +2132,17 @@ export async function renderFrame(
   seed: number,
   options: RenderFrameOptions = {},
 ): Promise<RenderResult> {
-  const scale = options.resolutionScale === undefined ? 1 : clampResolutionScale(options.resolutionScale);
+  const scale =
+    options.resolutionScale === undefined ? 1 : clampResolutionScale(options.resolutionScale);
   const target = scale === 1 ? composition : scaleComposition(composition, scale);
   return renderCompositionFrame(target, frame, seed);
 }
 
-async function renderCompositionFrame(composition: Composition, frame: number, seed: number): Promise<RenderResult> {
+async function renderCompositionFrame(
+  composition: Composition,
+  frame: number,
+  seed: number,
+): Promise<RenderResult> {
   // Clear effect cache each frame so parametric effects (DoF, bloom) stay fresh
   clearEffectCache();
   const conversion = compositionConversion(composition);
@@ -1533,15 +2172,25 @@ async function renderCompositionFrame(composition: Composition, frame: number, s
   return renderStandardFrame(composition, context, seed);
 }
 
-export async function renderSplitScreen(composition: Composition, context: RenderContext, seed: number): Promise<RenderResult> {
+export async function renderSplitScreen(
+  composition: Composition,
+  context: RenderContext,
+  seed: number,
+): Promise<RenderResult> {
   const config = composition.splitScreen;
   if (!config) {
     return renderStandardFrame(composition, context, seed);
   }
-  const regionsConfig: readonly SplitRegion[] = config.regions !== undefined && config.regions.length > 0
-    ? config.regions
-    : resolveLayout(config.layout, config.padding ?? 0);
-  const regions = resolveRegions(composition.width, composition.height, regionsConfig, config.padding ?? 0);
+  const regionsConfig: readonly SplitRegion[] =
+    config.regions !== undefined && config.regions.length > 0
+      ? config.regions
+      : resolveLayout(config.layout, config.padding ?? 0);
+  const regions = resolveRegions(
+    composition.width,
+    composition.height,
+    regionsConfig,
+    config.padding ?? 0,
+  );
   const frame = context.frame;
   const index = getCompositionIndex(composition);
   const targetCanvas = getRenderTarget(composition.width, composition.height);
@@ -1572,7 +2221,11 @@ export async function renderSplitScreen(composition: Composition, context: Rende
   return { canvas: targetCanvas, frame, time: context.time };
 }
 
-async function renderStandardFrame(composition: Composition, context: RenderContext, seed: number): Promise<RenderResult> {
+async function renderStandardFrame(
+  composition: Composition,
+  context: RenderContext,
+  seed: number,
+): Promise<RenderResult> {
   const frame = context.frame;
   const timeline = composition.rootTimeline;
   // Validate once per composition (not per frame) — validation walks every
@@ -1606,13 +2259,34 @@ async function renderStandardFrame(composition: Composition, context: RenderCont
     composition.skybox === undefined &&
     (composition.postProcessing?.effects?.length ?? 0) === 0 &&
     !hasSubtitleTracks(composition) &&
-    activeClips.every((clip) => clip.transitionIn === undefined && clip.transitionOut === undefined);
-  const dirtyRect = incrementalAllowed && previousSurface
-    ? computeDirtyRect(previousSurface.rects, currentRects, composition.width, composition.height, 2)
-    : null;
-  const useIncremental = dirtyRect !== null &&
+    activeClips.every(
+      (clip) => clip.transitionIn === undefined && clip.transitionOut === undefined,
+    );
+  const dirtyRect =
+    incrementalAllowed && previousSurface
+      ? computeDirtyRect(
+          previousSurface.rects,
+          currentRects,
+          composition.width,
+          composition.height,
+          2,
+        )
+      : null;
+  const useIncremental =
+    dirtyRect !== null &&
     !isFullFrameRect(dirtyRect, composition.width, composition.height) &&
     rectArea(dirtyRect) <= composition.width * composition.height * DIRTY_RECT_AREA_LIMIT;
+
+  if (useIncremental) {
+    consecutiveFullRedraws = 0;
+  } else {
+    consecutiveFullRedraws += 1;
+    if (consecutiveFullRedraws === ADAPTIVE_FULL_REDRAW_LIMIT && previousSurface) {
+      console.log(
+        "[cinecode] adaptive redraw: full-frame clear after consecutive dirty-rect misses",
+      );
+    }
+  }
 
   if (useIncremental && dirtyRect) {
     fillBackgroundRegion(targetCtx, dirtyRect, context.background);
@@ -1645,7 +2319,15 @@ async function renderStandardFrame(composition: Composition, context: RenderCont
 
     let finalCanvas = withEffects;
     if (clip.transitionIn && previousLayerCanvas) {
-      finalCanvas = applyTransition(previousLayerCanvas, withEffects, clip.transitionIn, context, composition.width, composition.height, clip);
+      finalCanvas = applyTransition(
+        previousLayerCanvas,
+        withEffects,
+        clip.transitionIn,
+        context,
+        composition.width,
+        composition.height,
+        clip,
+      );
     }
 
     const mask = getMask(clip, composition.width, composition.height);
@@ -1658,7 +2340,16 @@ async function renderStandardFrame(composition: Composition, context: RenderCont
     // order, the result is pixel-identical.
     compositeLayers(
       targetCtx,
-      [{ canvas: finalCanvas, opacity, blendMode, transform: createDefaultTransform(), mask, matte }],
+      [
+        {
+          canvas: finalCanvas,
+          opacity,
+          blendMode,
+          transform: createDefaultTransform(),
+          mask,
+          matte,
+        },
+      ],
       composition.width,
       composition.height,
       compositeClip ?? undefined,
@@ -1671,7 +2362,12 @@ async function renderStandardFrame(composition: Composition, context: RenderCont
 
   await renderSubtitleTracks(targetCtx, composition, context, seed);
   applyPostProcessing(targetCtx, composition, context, seed);
-  lastFrameSurface = { composition: composition as unknown as object, frame, rects: currentRects, canvas: targetCanvas };
+  lastFrameSurface = {
+    composition: composition as unknown as object,
+    frame,
+    rects: currentRects,
+    canvas: targetCanvas,
+  };
   return { canvas: targetCanvas, frame, time: context.time };
 }
 
@@ -1699,10 +2395,19 @@ function applyPostProcessing(
     });
   }
   if (entries.length === 0) return;
-  createEffectGraphOptimizer().execute(createEffectInput(ctx.canvas, ctx, context.time, seed), entries);
+  const input = createEffectInput(ctx.canvas, ctx, context.time, seed);
+  try {
+    createEffectGraphOptimizer().execute(input, entries);
+  } catch {
+    for (const entry of entries) entry.apply(input);
+  }
 }
 
-export async function renderStill(composition: Composition, frame: number, seed: number = 0): Promise<Canvas> {
+export async function renderStill(
+  composition: Composition,
+  frame: number,
+  seed: number = 0,
+): Promise<Canvas> {
   return (await renderFrame(composition, frame, seed)).canvas;
 }
 
@@ -1715,7 +2420,13 @@ async function renderSubtitleTracks(
   if (composition.burnSubtitles === false) return;
   for (const track of composition.rootTimeline.tracks) {
     if (track.kind !== "subtitle") continue;
-    await renderSubtitles(ctx, track.clips as readonly SubtitleClip[], context.time, composition.width, composition.height);
+    await renderSubtitles(
+      ctx,
+      track.clips as readonly SubtitleClip[],
+      context.time,
+      composition.width,
+      composition.height,
+    );
   }
 }
 
@@ -1734,12 +2445,22 @@ function drawDataVizClip(
 ): void {
   const span = computeClipSpan(clip as unknown as Clip, context.conversion);
   const animDuration = clip.animDuration ?? 1;
-  const progress = animDuration <= 0 ? 1 : Math.min(1, (context.time - span.startFrames / context.conversion.fpsFloat) / animDuration);
-  const layout = layoutChart(clip.data, clip.chartType, bounds.width, bounds.height, { showValues: clip.showValues });
+  const progress =
+    animDuration <= 0
+      ? 1
+      : Math.min(1, (context.time - span.startFrames / context.conversion.fpsFloat) / animDuration);
+  const layout = layoutChart(clip.data, clip.chartType, bounds.width, bounds.height, {
+    showValues: clip.showValues,
+  });
   const animated = interpolateChartData(layout, progress);
 
   ctx.save();
-  applyTransform(ctx, { ...createDefaultTransform(), ...params.transform }, bounds.width, bounds.height);
+  applyTransform(
+    ctx,
+    { ...createDefaultTransform(), ...params.transform },
+    bounds.width,
+    bounds.height,
+  );
   if (clip.data.length === 0) {
     drawNoData(ctx, bounds.width, bounds.height);
     ctx.restore();
@@ -1757,7 +2478,12 @@ function drawStickerClip(
 ): void {
   const size = Math.min(clip.size, bounds.width, bounds.height);
   ctx.save();
-  applyTransform(ctx, { ...createDefaultTransform(), ...params.transform }, bounds.width, bounds.height);
+  applyTransform(
+    ctx,
+    { ...createDefaultTransform(), ...params.transform },
+    bounds.width,
+    bounds.height,
+  );
   drawSticker(ctx, clip.emoji, bounds.x, bounds.y, size, clip.font, params.opacity);
   ctx.restore();
 }
@@ -1787,7 +2513,12 @@ function drawText3dClip(
   const scale = Math.min(1, bounds.width / Math.max(1, mesh.width));
 
   ctx.save();
-  applyTransform(ctx, { ...createDefaultTransform(), ...params.transform }, bounds.width, bounds.height);
+  applyTransform(
+    ctx,
+    { ...createDefaultTransform(), ...params.transform },
+    bounds.width,
+    bounds.height,
+  );
   ctx.globalAlpha = params.opacity ?? 1;
   renderTextMesh(ctx, mesh, material, {
     x: bounds.width / 2,
@@ -1805,11 +2536,22 @@ function drawGradientMeshClip(
   bounds: Rect,
   params: ShapeDrawParams,
 ): void {
-  const anchors = clip.anchors.length > 0
-    ? clip.anchors
-    : generateRegularAnchors(Math.max(1, clip.gridCols), Math.max(1, clip.gridRows), ["#2196f3", "#4caf50", "#ff9800", "#e91e63"]);
+  const anchors =
+    clip.anchors.length > 0
+      ? clip.anchors
+      : generateRegularAnchors(Math.max(1, clip.gridCols), Math.max(1, clip.gridRows), [
+          "#2196f3",
+          "#4caf50",
+          "#ff9800",
+          "#e91e63",
+        ]);
   ctx.save();
-  applyTransform(ctx, { ...createDefaultTransform(), ...params.transform }, bounds.width, bounds.height);
+  applyTransform(
+    ctx,
+    { ...createDefaultTransform(), ...params.transform },
+    bounds.width,
+    bounds.height,
+  );
   ctx.beginPath();
   ctx.rect(0, 0, bounds.width, bounds.height);
   ctx.clip();
@@ -1829,7 +2571,11 @@ async function drawMeshWarpClip(
   let sourceCanvas: Canvas;
   const metadata = _mediaCache !== null ? await getVideoMetadata(src, _mediaCache) : null;
   if (metadata !== null) {
-    const extracted = await extractVideoFrameCanvas(src, context, clip as { trimStart?: number | string });
+    const extracted = await extractVideoFrameCanvas(
+      src,
+      context,
+      clip as { trimStart?: number | string },
+    );
     sourceCanvas = extracted.canvas;
   } else {
     sourceCanvas = await loadCachedImage(src);
@@ -1837,12 +2583,21 @@ async function drawMeshWarpClip(
 
   const cols = Math.max(1, Math.round(clip.cols));
   const rows = Math.max(1, Math.round(clip.rows));
-  const grid = clip.animated === true
-    ? computeAnimatedWarp(context.time, cols, rows, sourceCanvas.width, sourceCanvas.height)
-    : applyWarpDisplacements(createWarpGrid(cols, rows, sourceCanvas.width, sourceCanvas.height), clip.warpPoints ?? []);
+  const grid =
+    clip.animated === true
+      ? computeAnimatedWarp(context.time, cols, rows, sourceCanvas.width, sourceCanvas.height)
+      : applyWarpDisplacements(
+          createWarpGrid(cols, rows, sourceCanvas.width, sourceCanvas.height),
+          clip.warpPoints ?? [],
+        );
 
   ctx.save();
-  applyTransform(ctx, { ...createDefaultTransform(), ...params.transform }, bounds.width, bounds.height);
+  applyTransform(
+    ctx,
+    { ...createDefaultTransform(), ...params.transform },
+    bounds.width,
+    bounds.height,
+  );
   ctx.beginPath();
   ctx.rect(0, 0, bounds.width, bounds.height);
   ctx.clip();
@@ -1850,7 +2605,12 @@ async function drawMeshWarpClip(
   if (isIdentityWarp(grid)) {
     ctx.drawImage(sourceCanvas, 0, 0, bounds.width, bounds.height);
   } else {
-    const warped = applyWarp(sourceCanvas, grid, Math.round(bounds.width), Math.round(bounds.height));
+    const warped = applyWarp(
+      sourceCanvas,
+      grid,
+      Math.round(bounds.width),
+      Math.round(bounds.height),
+    );
     ctx.drawImage(warped, 0, 0, bounds.width, bounds.height);
   }
   ctx.restore();

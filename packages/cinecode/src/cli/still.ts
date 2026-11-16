@@ -10,7 +10,7 @@ export interface StillOptions {
   frame?: number;
   time?: string;
   out: string;
-  format: "png" | "jpg";
+  format: "png" | "jpg" | "webp";
   props?: string;
   seed: number;
 }

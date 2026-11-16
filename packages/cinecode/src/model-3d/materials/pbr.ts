@@ -42,11 +42,7 @@ function geometrySchlickGgx(nDotV: number, roughness: number): number {
 
 function fresnelSchlick(hDotV: number, f0: Vec3): Vec3 {
   const factor = Math.pow(1 - hDotV, 5);
-  return [
-    f0[0] + (1 - f0[0]) * factor,
-    f0[1] + (1 - f0[1]) * factor,
-    f0[2] + (1 - f0[2]) * factor,
-  ];
+  return [f0[0] + (1 - f0[0]) * factor, f0[1] + (1 - f0[1]) * factor, f0[2] + (1 - f0[2]) * factor];
 }
 
 export function pbrShade(
@@ -63,7 +59,10 @@ export function pbrShade(
 
   const base = material.baseColorFactor ?? DEFAULT_MATERIAL.baseColorFactor!;
   const metallic = clamp01(material.metallicFactor ?? DEFAULT_MATERIAL.metallicFactor!);
-  const roughness = Math.max(0.04, clamp01(material.roughnessFactor ?? DEFAULT_MATERIAL.roughnessFactor!));
+  const roughness = Math.max(
+    0.04,
+    clamp01(material.roughnessFactor ?? DEFAULT_MATERIAL.roughnessFactor!),
+  );
   const emissiveMultiplier = material.emissiveIntensity ?? 1;
   const rawEmissive = material.emissiveFactor ?? [0, 0, 0];
   const emissive: Vec3 = [
@@ -78,16 +77,11 @@ export function pbrShade(
   const hDotV = Math.max(0.001, dot(h, v));
 
   if (nDotL <= 0) {
-    return [
-      Math.min(255, Math.max(0, emissive[0] * 255)),
-      Math.min(255, Math.max(0, emissive[1] * 255)),
-      Math.min(255, Math.max(0, emissive[2] * 255)),
-    ];
+    return toneMapAces([emissive[0], emissive[1], emissive[2]]);
   }
 
-  const dielectricF0 = material.ior !== undefined
-    ? Math.pow((material.ior - 1) / (material.ior + 1), 2)
-    : 0.04;
+  const dielectricF0 =
+    material.ior !== undefined ? Math.pow((material.ior - 1) / (material.ior + 1), 2) : 0.04;
   const f0: Vec3 = [
     mix(dielectricF0, base[0], metallic),
     mix(dielectricF0, base[1], metallic),
@@ -107,11 +101,7 @@ export function pbrShade(
 
   const transmission = clamp01(material.transmission ?? 0);
   const diffuseWeight = (1 - metallic) * (1 - transmission) * (nDotL / Math.PI);
-  const diffuse: Vec3 = [
-    (base[0] * diffuseWeight),
-    (base[1] * diffuseWeight),
-    (base[2] * diffuseWeight),
-  ];
+  const diffuse: Vec3 = [base[0] * diffuseWeight, base[1] * diffuseWeight, base[2] * diffuseWeight];
 
   const specularScale = (ndf * geometry) / specularDenominator;
   const specular: Vec3 = [
@@ -128,19 +118,35 @@ export function pbrShade(
       ]
     : [0, 0, 0];
 
-  const result: RgbColor = [
-    clamp01((diffuse[0] + specular[0]) * lightRgb[0] + reflection[0] + emissive[0]) * 255,
-    clamp01((diffuse[1] + specular[1]) * lightRgb[1] + reflection[1] + emissive[1]) * 255,
-    clamp01((diffuse[2] + specular[2]) * lightRgb[2] + reflection[2] + emissive[2]) * 255,
+  const linear: RgbColor = [
+    (diffuse[0] + specular[0]) * lightRgb[0] + reflection[0] + emissive[0],
+    (diffuse[1] + specular[1]) * lightRgb[1] + reflection[1] + emissive[1],
+    (diffuse[2] + specular[2]) * lightRgb[2] + reflection[2] + emissive[2],
   ];
-  return result;
+  return toneMapAces(linear);
+}
+
+/** ACES filmic approximation, output in 0-255 sRGB. */
+export function toneMapAces(linear: RgbColor): RgbColor {
+  const a = 2.51,
+    b = 0.03,
+    c = 2.43,
+    d = 0.59,
+    e = 0.14;
+  const mapped = linear.map((channel) => {
+    const x = clamp01(channel);
+    const value = clamp01((x * (a * x + b)) / (x * (c * x + d) + e));
+    return value * 255;
+  });
+  return [mapped[0]!, mapped[1]!, mapped[2]!];
 }
 
 export function pbrShadeContext(normal: Vec3, context: PbrContext): RgbColor {
   const environment = context.environment;
-  const reflection = environment.ambientIntensity > 0 && environment.specularBoost > 0
-    ? environment.ambientColor
-    : undefined;
+  const reflection =
+    environment.ambientIntensity > 0 && environment.specularBoost > 0
+      ? environment.ambientColor
+      : undefined;
   return pbrShade(normal, context.viewDirection, context.light, context.material, reflection);
 }
 
@@ -164,6 +170,10 @@ export function computeVertexColors(
   return colors;
 }
 
-export function resolveLight(direction: readonly [number, number, number], color: RgbColor, intensity: number): PbrLight {
+export function resolveLight(
+  direction: readonly [number, number, number],
+  color: RgbColor,
+  intensity: number,
+): PbrLight {
   return { direction: normalize(direction), color, intensity };
 }

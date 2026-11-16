@@ -1,13 +1,12 @@
-export type ValidateProps<T> = {
-  readonly [K in keyof T]: T[K];
-};
-
 export interface PropIssue {
   readonly prop: string;
   readonly message: string;
 }
 
-export function validateSerializableProps(props: Record<string, unknown>, owner: string): PropIssue[] {
+export function validateSerializableProps(
+  props: Record<string, unknown>,
+  owner: string,
+): PropIssue[] {
   const issues: PropIssue[] = [];
   for (const [key, value] of Object.entries(props)) {
     if (!isJsonValue(value)) {
@@ -40,7 +39,12 @@ export function requireProp(props: Record<string, unknown>, key: string, owner: 
   return props[key];
 }
 
-export function checkPropType(props: Record<string, unknown>, key: string, expected: "number" | "string" | "boolean", owner: string): void {
+export function checkPropType(
+  props: Record<string, unknown>,
+  key: string,
+  expected: "number" | "string" | "boolean",
+  owner: string,
+): void {
   const value = props[key];
   if (value !== undefined && typeof value !== expected) {
     throw new TypeError(`Prop "${key}" on ${owner} must be ${expected}, got ${typeof value}`);

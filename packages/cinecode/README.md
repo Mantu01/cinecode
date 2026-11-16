@@ -11,35 +11,56 @@ pnpm add cinecode
 ```
 
 ```typescript
-// hello.cinecode.ts
-import { composition, timeline, track, text, solid } from "cinecode";
+// main.ts
+import { defineMain } from "cinecode";
 
-export default composition({
-  name: "hello",
-  width: 1920,
-  height: 1080,
-  fps: 30,
-  duration: 5,
-  rootTimeline: timeline(
-    track("background", [solid("#0b0b0f", { duration: 5 })]),
+export default defineMain({
+  scenes: [
+    {
+      id: "intro",
+      name: "Hello Scene",
+      file: "./src/scenes/intro.ts",
+      duration: 3,
+    },
+  ],
+  timelines: [
+    {
+      id: "main",
+      name: "Hello, Cinecode",
+      duration: 3,
+      sceneRefs: ["intro"],
+    },
+  ],
+});
+```
+
+```typescript
+// src/scenes/intro.ts
+import { defineScene, timeline, track, text, solid } from "cinecode";
+
+const DURATION = 3;
+
+export default defineScene("intro", DURATION, () => {
+  return timeline([
+    track("background", [solid("#0b0b0f", { start: 0, duration: DURATION })]),
     track("title", [
       text("Hello, Cinecode", 96, {
         start: 0.5,
-        duration: 4,
-        x: 960,
-        y: 540,
+        duration: 2,
         align: "center",
         fill: "#ffffff",
-        transitionIn: { name: "fade", duration: 0.6 },
+        transitionIn: { name: "crossfade", duration: 0.6 },
       }),
     ]),
-  ),
+  ]);
 });
 ```
 
 ```bash
-npx cinecode render --props hello.cinecode.ts --out hello.mp4
+npx cinecode render --all --props ./cinecode.config.ts --overwrite
 ```
+
+See [`example/basic-api`](../../example/basic-api/) for a complete runnable project.
 
 ## Feature highlights
 

@@ -26,22 +26,18 @@ export function parseColor(input: string): Rgba {
   const rgbMatch = rgbPattern.exec(trimmed);
   if (rgbMatch !== null) {
     const parts = rgbMatch[1]!.split(/[\s,/]+/).filter(Boolean);
-    const scale = /%/.test(parts[3] ?? "") ? 0.01 : 1 / 255;
-    const [r, g, b, a] = parts;
+    const scale = parts.slice(0, 3).some((p) => p.includes("%")) ? 2.55 : 1;
+    const a = parts[3];
     const num = parts.slice(0, 3).map((p) => Number.parseFloat(p));
-    const alphaRaw = a !== undefined ? (/%/.test(a) ? Number.parseFloat(a) / 100 : Number.parseFloat(a)) : 1;
+    const alphaRaw =
+      a !== undefined ? (/%/.test(a) ? Number.parseFloat(a) / 100 : Number.parseFloat(a)) : 1;
     if (num.length < 3 || num.some((value) => Number.isNaN(value))) {
       throw new SyntaxError(`unsupported color: ${input}`);
     }
-    void scale;
-    void b;
-    void g;
-    void r;
-    void alphaRaw;
     return {
-      r: Math.round(num[0]!),
-      g: Math.round(num[1]!),
-      b: Math.round(num[2]!),
+      r: Math.round(num[0]! * scale),
+      g: Math.round(num[1]! * scale),
+      b: Math.round(num[2]! * scale),
       a: alphaRaw,
     };
   }
@@ -70,7 +66,11 @@ export function rgbToOklab(rgba: Rgba): Lab {
   const l3 = Math.cbrt(l);
   const m3 = Math.cbrt(m);
   const s3 = Math.cbrt(s);
-  return [0.2104542553 * l3 + 0.793617785 * m3 - 0.0040720468 * s3, 1.9779984951 * l3 - 2.428592205 * m3 + 0.4505937099 * s3, 0.0259040371 * l3 + 0.7827717662 * m3 - 0.808675766 * s3];
+  return [
+    0.2104542553 * l3 + 0.793617785 * m3 - 0.0040720468 * s3,
+    1.9779984951 * l3 - 2.428592205 * m3 + 0.4505937099 * s3,
+    0.0259040371 * l3 + 0.7827717662 * m3 - 0.808675766 * s3,
+  ];
 }
 
 export function oklabToRgb(lab: Lab, alpha: number): Rgba {
@@ -88,6 +88,7 @@ export function oklabToRgb(lab: Lab, alpha: number): Rgba {
 }
 
 export function mixColors(from: string, to: string, t: number): string {
+  t = Math.min(1, Math.max(0, t));
   const fa = parseColor(from);
   const ta = parseColor(to);
   const labA = rgbToOklab(fa);

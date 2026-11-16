@@ -6,7 +6,8 @@ export type PluginCapability =
   | "audio:process"
   | "frame:process"
   | "store:read"
-  | "store:write";
+  | "store:write"
+  | "module:load";
 
 export const ALL_CAPABILITIES: readonly PluginCapability[] = [
   "fs:read",
@@ -17,6 +18,7 @@ export const ALL_CAPABILITIES: readonly PluginCapability[] = [
   "frame:process",
   "store:read",
   "store:write",
+  "module:load",
 ];
 
 export class SecurityViolationError extends Error {
@@ -37,6 +39,7 @@ export interface CapabilityPolicy {
   allowedDomains?: Set<string>;
   allowedReadPaths?: Set<string>;
   allowedWritePaths?: Set<string>;
+  pluginPermissions?: { readonly childProcess?: boolean };
 }
 
 export function createCapabilityPolicy(
@@ -45,6 +48,7 @@ export function createCapabilityPolicy(
     allowedDomains?: string[];
     allowedReadPaths?: string[];
     allowedWritePaths?: string[];
+    pluginPermissions?: { childProcess?: boolean };
   } = {},
 ): CapabilityPolicy {
   return {
@@ -52,6 +56,9 @@ export function createCapabilityPolicy(
     allowedDomains: options.allowedDomains ? new Set(options.allowedDomains) : undefined,
     allowedReadPaths: options.allowedReadPaths ? new Set(options.allowedReadPaths) : undefined,
     allowedWritePaths: options.allowedWritePaths ? new Set(options.allowedWritePaths) : undefined,
+    pluginPermissions: options.pluginPermissions
+      ? { childProcess: options.pluginPermissions.childProcess === true }
+      : undefined,
   };
 }
 

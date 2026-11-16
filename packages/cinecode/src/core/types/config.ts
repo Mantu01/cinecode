@@ -127,6 +127,8 @@ export interface DevConfig {
   readonly hmr: boolean;
   /** Maximum undo/redo snapshots kept by the canvas interaction layer. Default: 50. */
   readonly historyDepth?: number;
+  /** Prometheus metrics port (0 disables the metrics server). */
+  readonly metricsPort?: number;
 }
 
 export interface AudioConfig {

@@ -9,6 +9,9 @@ export {
 
 export {
   PluginSandbox,
+  SandboxedContext,
   createPluginSandbox,
+  logSandboxViolation,
   type SandboxOptions,
+  type SandboxedContextOptions,
 } from "./context.js";

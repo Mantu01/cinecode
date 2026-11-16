@@ -9,8 +9,6 @@ const GRADIENTS_3D: readonly number[][] = [
   [0, 1, 1], [0, -1, 1], [0, 1, -1], [0, -1, -1],
 ];
 
-const GRADIENTS_1D = [1, -1];
-
 interface PerlinState {
   readonly perm: Uint8Array;
 }
@@ -154,5 +152,3 @@ export function createPerlin3(seed: number): (x: number, y: number, z: number) =
   };
   return noise3;
 }
-
-export const VALUE_NOISE_GRADIENTS_1D = GRADIENTS_1D;

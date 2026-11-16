@@ -1,5 +1,13 @@
 import { Command } from "commander";
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, constants, accessSync } from "node:fs";
+import {
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  readdirSync,
+  existsSync,
+  constants,
+  accessSync,
+} from "node:fs";
 import { resolve, relative, dirname, basename } from "node:path";
 import { __dirname } from "./meta.js";
 import { detectPackageManager, getInstallCommand, getRunCommand } from "./detect-pm.js";
@@ -7,7 +15,9 @@ import type { PackageManager } from "./detect-pm.js";
 import { selectLanguage } from "./prompt.js";
 import type { Language } from "./prompt.js";
 
-export const CREATE_CINECODE_VERSION = "0.0.0";
+export const CREATE_CINECODE_VERSION = JSON.parse(
+  readFileSync(resolve(__dirname, "../../package.json"), "utf8"),
+).version;
 
 export interface ScaffoldOptions {
   readonly targetDir: string;
@@ -20,6 +30,7 @@ export interface ScaffoldOptions {
   readonly verbose: boolean;
   readonly pm: PackageManager;
   readonly monorepoRoot?: string;
+  readonly skipInstall?: boolean;
 }
 
 export interface FilePlan {
@@ -46,7 +57,9 @@ function listTemplateFiles(language: Language): string[] {
   const files: string[] = [];
 
   function walk(dir: string, prefix: string): void {
-    const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+    const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
+      a.name.localeCompare(b.name),
+    );
     for (const entry of entries) {
       const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
@@ -108,7 +121,7 @@ function generateScaffoldPlan(options: ScaffoldOptions): ScaffoldPlan {
     "media",
     "output",
     ".cinecode/cache",
-  ].map(dir => resolve(targetDir, dir));
+  ].map((dir) => resolve(targetDir, dir));
 
   const gitignoreEntries = ["media", "output", ".cinecode/cache"];
 
@@ -137,7 +150,9 @@ async function checkTargetDir(targetDir: string, force: boolean): Promise<string
   }
 
   if (blocking.length > 0 && !force) {
-    throw new Error(`Target directory is not empty. Blocking files: ${blocking.join(", ")}. Use --force to proceed.`);
+    throw new Error(
+      `Target directory is not empty. Blocking files: ${blocking.join(", ")}. Use --force to proceed.`,
+    );
   }
 
   return blocking;
@@ -174,9 +189,9 @@ async function executePlan(plan: ScaffoldPlan, options: ScaffoldOptions): Promis
       void 0;
     }
 
-    const lines = existingContent.split(/\r?\n/).filter(l => l.trim() !== "");
-    const existingEntries = new Set(lines.map(l => l.trim()));
-    const newEntries = plan.gitignoreEntries.filter(e => !existingEntries.has(e));
+    const lines = existingContent.split(/\r?\n/).filter((l) => l.trim() !== "");
+    const existingEntries = new Set(lines.map((l) => l.trim()));
+    const newEntries = plan.gitignoreEntries.filter((e) => !existingEntries.has(e));
 
     if (newEntries.length > 0) {
       let newContent = existingContent;
@@ -193,13 +208,21 @@ async function executePlan(plan: ScaffoldPlan, options: ScaffoldOptions): Promis
   }
 }
 
-async function installDependencies(targetDir: string, pm: PackageManager, verbose: boolean): Promise<void> {
+async function installDependencies(
+  targetDir: string,
+  pm: PackageManager,
+  verbose: boolean,
+): Promise<void> {
   const installCmd = getInstallCommand(pm);
   if (verbose) console.log(`run ${installCmd.join(" ")}`);
   const { spawnSync } = await import("node:child_process");
   const cmd = installCmd[0] ?? "npm";
   const args = installCmd.slice(1);
-  const result = spawnSync(cmd, args, { cwd: targetDir, stdio: verbose ? "inherit" : "pipe", shell: true });
+  const result = spawnSync(cmd, args, {
+    cwd: targetDir,
+    stdio: verbose ? "inherit" : "pipe",
+    shell: true,
+  });
   if (result.status !== 0) {
     throw new Error(`Dependency installation failed with code ${result.status}`);
   }
@@ -261,6 +284,11 @@ export async function scaffoldCommand(options: ScaffoldOptions): Promise<void> {
 
   await executePlan(plan, options);
 
+  if (options.skipInstall === true) {
+    printNextSteps(targetDir, pm);
+    return;
+  }
+
   await installDependencies(targetDir, pm, verbose);
   await runDoctor(verbose);
   printNextSteps(targetDir, pm);
@@ -276,55 +304,67 @@ export function createScaffoldCommand(): Command {
     .option("--fps <number>", "Frames per second", "30")
     .option("--resolution <preset|WxH>", "Resolution preset or WxH", "1920x1080")
     .option("--no-git", "Skip git initialization")
+    .option("--skip-install", "Skip dependency installation", false)
     .option("-f, --force", "Proceed even if directory is not empty", false)
     .option("--dry-run", "Print plan without writing files", false)
     .option("-v, --verbose", "Verbose output", false)
-    .action(async (directory: string, opts: { ts?: boolean; js?: boolean; fps?: string; resolution?: string; git?: boolean; force?: boolean; dryRun?: boolean; verbose?: boolean }) => {
-      const targetDir = resolve(directory);
+    .action(
+      async (
+        directory: string,
+        opts: {
+          ts?: boolean;
+          js?: boolean;
+          fps?: string;
+          resolution?: string;
+          git?: boolean;
+          force?: boolean;
+          dryRun?: boolean;
+          verbose?: boolean;
+          skipInstall?: boolean;
+        },
+      ) => {
+        const targetDir = resolve(directory);
 
-      let language: Language | undefined;
-      if (opts.ts) language = "typescript";
-      if (opts.js) language = "javascript";
+        let language: Language | undefined;
+        if (opts.ts) language = "typescript";
+        if (opts.js) language = "javascript";
 
-      if (!language) {
-        language = await selectLanguage();
-      }
+        if (!language) {
+          language = await selectLanguage();
+        }
 
-      const fpsInput = opts.fps ?? "30";
-      const fps = parseInt(fpsInput, 10);
-      if (isNaN(fps) || fps < 1 || fps > 120) {
-        console.error("FPS must be a number between 1 and 120");
-        process.exit(1);
-      }
+        const fpsInput = opts.fps ?? "30";
+        const fps = parseInt(fpsInput, 10);
+        if (isNaN(fps) || fps < 1 || fps > 120) {
+          console.error("FPS must be a number between 1 and 120");
+          process.exit(1);
+        }
 
-      const resolution = opts.resolution ?? "1920x1080";
-      const resMatch = resolution.match(/^(\d+)x(\d+)$/);
-      if (!resMatch) {
-        console.error('Resolution must be in format "WIDTHxHEIGHT" (e.g., 1920x1080)');
-        process.exit(1);
-      }
+        const resolution = opts.resolution ?? "1920x1080";
+        const resMatch = resolution.match(/^(\d+)x(\d+)$/);
+        if (!resMatch) {
+          console.error('Resolution must be in format "WIDTHxHEIGHT" (e.g., 1920x1080)');
+          process.exit(1);
+        }
 
-      const pm = detectPackageManager();
+        const pm = detectPackageManager();
 
-      await scaffoldCommand({
-        targetDir,
-        language,
-        fps,
-        resolution,
-        noGit: opts.git === false,
-        force: opts.force ?? false,
-        dryRun: opts.dryRun ?? false,
-        verbose: opts.verbose ?? false,
-        pm,
-        monorepoRoot: process.cwd(),
-      });
-    });
+        await scaffoldCommand({
+          targetDir,
+          language,
+          fps,
+          resolution,
+          noGit: opts.git === false,
+          force: opts.force ?? false,
+          dryRun: opts.dryRun ?? false,
+          verbose: opts.verbose ?? false,
+          skipInstall: opts.skipInstall ?? false,
+          pm,
+          monorepoRoot: process.cwd(),
+        });
+      },
+    );
 
   return cmd;
 }
 
-const scaffoldCmd = createScaffoldCommand();
-scaffoldCmd.parseAsync(process.argv).catch((err) => {
-  console.error(err.message);
-  process.exit(1);
-});

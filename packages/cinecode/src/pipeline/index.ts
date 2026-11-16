@@ -5,14 +5,28 @@ import type { VideoEncoding } from "../core/quality.js";
 import { encodingCacheKey, normalizeQuality, resolveVideoEncoding } from "../core/quality.js";
 import type { AudioTrackState } from "../audio/types.js";
 import { prepareAudioTracks } from "../audio/prepare.js";
-import { createConversion, createVfrConversion, frameToSeconds, secondsToFrame } from "../core/time/index.js";
+import {
+  createConversion,
+  createVfrConversion,
+  frameToSeconds,
+  secondsToFrame,
+} from "../core/time/index.js";
 import { computeClipSpan } from "../core/validation/index.js";
 import { findTimelineOvershoots } from "../core/time/timeline.js";
 import { createColorTransform, resolveColorManagementConfig } from "../renderer/color/profiles.js";
 import { createRenderCache, type RenderCache } from "./cache.js";
 import { createResumeManager, type ResumeManager } from "./resume.js";
 import { createCheckpointManager } from "./recovery.js";
-import { createWorkerManager, createChunks, resolveChunkSize, resolveConcurrency, type FrameChunk, type WorkerResult, type WorkerManager } from "./workers.js";
+import {
+  createWorkerManager,
+  createChunks,
+  resolveChunkSize,
+  resolveConcurrency,
+  type FrameChunk,
+  type WorkerResult,
+  type WorkerManager,
+} from "./workers.js";
+import { getMediaCacheForRenderer } from "../renderer/engine.js";
 import { tuneConcurrency, analyzeWorkload } from "./concurrency-tuner.js";
 import { createMediaPrefetcher } from "../media/prefetch.js";
 import { createProgressReporter, type ProgressReporter, type ProgressHandler } from "./progress.js";
@@ -23,13 +37,26 @@ import { RawFrameSink, encodeTwoPass, type FrameSink } from "../encoder/two-pass
 import { embedChaptersIntoVideo } from "../encoder/chapters/index.js";
 import { createMediaCache } from "../media/cache.js";
 import { mixAudioTracks, type MixerOptions } from "../audio/mixer.js";
+import type { MidiPlayback } from "../midi/index.js";
 import { ffmpegLayoutForChannelCount } from "../audio/channels.js";
 import { muxAudioVideo, type MuxerOptions } from "../audio/muxer.js";
 import { computeCompositionHash } from "./cache.js";
 import { preprocessVideo, type VideoEditOptions } from "../media/preprocess.js";
 import { getPluginRegistry } from "../plugin/registry.js";
-import { renderFrameWithRecovery, createFallbackFrameBuffer, withRecovery, type RecoveryPolicy, resolveStrategy, DEFAULT_RECOVERY } from "./recovery.js";
-import { createMemoryBudget, estimateChunkBytes, formatBytes, type MemoryBudget } from "./memory.js";
+import {
+  renderFrameWithRecovery,
+  createFallbackFrameBuffer,
+  withRecovery,
+  type RecoveryPolicy,
+  resolveStrategy,
+  DEFAULT_RECOVERY,
+} from "./recovery.js";
+import {
+  createMemoryBudget,
+  estimateChunkBytes,
+  formatBytes,
+  type MemoryBudget,
+} from "./memory.js";
 
 export interface RenderOptions {
   readonly composition: Composition;
@@ -71,10 +98,18 @@ export interface RenderOptions {
   /** Emit fragmented MP4 so a partial render stays playable after interruption. */
   readonly streaming?: boolean;
   /** Working/output color space conversion applied to every encoded frame. */
-  readonly colorManagement?: { readonly workingColorSpace?: "srgb" | "linear-srgb" | "rec709" | "acescg"; readonly outputColorSpace?: "srgb" | "rec709" | "display-p3" | "rec2020"; readonly enabled?: boolean };
+  readonly colorManagement?: {
+    readonly workingColorSpace?: "srgb" | "linear-srgb" | "rec709" | "acescg";
+    readonly outputColorSpace?: "srgb" | "rec709" | "display-p3" | "rec2020";
+    readonly enabled?: boolean;
+  };
+  /** Optional MIDI playback player synced once per rendered frame. */
+  readonly midiPlayer?: MidiPlayback;
   readonly bitrateKbps?: number;
   /** Write a poster image selected from the rendered composition. */
-  readonly generateThumbnail?: boolean | { readonly outputPath?: string; readonly formats?: readonly ("png" | "jpg" | "webp")[] };
+  readonly generateThumbnail?:
+    | boolean
+    | { readonly outputPath?: string; readonly formats?: readonly ("png" | "jpg" | "webp")[] };
 }
 
 export interface RenderResult {
@@ -117,9 +152,10 @@ function computeTotalFrames(composition: Composition): number {
     }
   }
   if (composition.duration !== undefined) {
-    const dur = typeof composition.duration === "number"
-      ? composition.duration
-      : parseFloat(composition.duration as string);
+    const dur =
+      typeof composition.duration === "number"
+        ? composition.duration
+        : parseFloat(composition.duration as string);
     const durFrames = Math.ceil(secondsToFrame(dur, conversion));
     return composition.boundaryBehavior === "extend" ? Math.max(durFrames, clipMax) : durFrames;
   }
@@ -143,7 +179,9 @@ class FrameQueue {
   private pendingWrites = 0;
   private drained = false;
   private resolveDrain!: () => void;
-  private drainPromise = new Promise<void>((r) => { this.resolveDrain = r; });
+  private drainPromise = new Promise<void>((r) => {
+    this.resolveDrain = r;
+  });
   private readonly writeErrors: Error[] = [];
 
   constructor(encoder: FrameSink, highWaterMark = 64) {
@@ -152,8 +190,12 @@ class FrameQueue {
     this.slots = highWaterMark;
   }
 
-  get empty(): boolean { return this.pendingWrites === 0; }
-  get size(): number { return this.pendingWrites; }
+  get empty(): boolean {
+    return this.pendingWrites === 0;
+  }
+  get size(): number {
+    return this.pendingWrites;
+  }
 
   /** Push a frame. Returns a promise that resolves when the frame is accepted. */
   enqueue(frame: { index: number; buffer: Buffer }): Promise<void> {
@@ -182,18 +224,21 @@ class FrameQueue {
   ): void {
     this.slots--;
     this.pendingWrites++;
-    this.encoder.addFrame(frame.buffer).then(() => {
-      this.pendingWrites--;
-      this.slots++;
-      if (this.pendingWrites === 0 && this.drained) this.resolveDrain();
-      resolve();
-    }).catch((err) => {
-      this.writeErrors.push(err);
-      this.pendingWrites--;
-      this.slots++;
-      if (this.pendingWrites === 0 && this.drained) this.resolveDrain();
-      reject(err);
-    });
+    this.encoder
+      .addFrame(frame.buffer)
+      .then(() => {
+        this.pendingWrites--;
+        this.slots++;
+        if (this.pendingWrites === 0 && this.drained) this.resolveDrain();
+        resolve();
+      })
+      .catch((err) => {
+        this.writeErrors.push(err);
+        this.pendingWrites--;
+        this.slots++;
+        if (this.pendingWrites === 0 && this.drained) this.resolveDrain();
+        reject(err);
+      });
   }
 
   /**
@@ -240,13 +285,16 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
   } = options;
 
   const encoding: VideoEncoding =
-    encodingOption ?? resolveVideoEncoding({ quality: quality ? normalizeQuality(quality) : undefined });
-  const alpha = alphaOption === true || requestedFormat === "webm-alpha" || requestedFormat === "prores-alpha";
-  const format: RenderFormat | undefined = requestedFormat === "webm-alpha"
-    ? "webm"
-    : requestedFormat === "prores-alpha"
-      ? "prores"
-      : requestedFormat;
+    encodingOption ??
+    resolveVideoEncoding({ quality: quality ? normalizeQuality(quality) : undefined });
+  const alpha =
+    alphaOption === true || requestedFormat === "webm-alpha" || requestedFormat === "prores-alpha";
+  const format: RenderFormat | undefined =
+    requestedFormat === "webm-alpha"
+      ? "webm"
+      : requestedFormat === "prores-alpha"
+        ? "prores"
+        : requestedFormat;
 
   const renderCache = createRenderCache(cacheDir);
   const resumeManager = createResumeManager(cacheDir);
@@ -255,12 +303,14 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
   const warningHook = (message: string, stage: string): void => {
     void registry.runHook("onWarning", { message, stage });
   };
-  let reporter = createProgressReporter({ totalFrames: 0, onProgress, silent, onWarning: warningHook });
+  let reporter = createProgressReporter({
+    totalFrames: 0,
+    onProgress,
+    silent,
+    onWarning: warningHook,
+  });
 
-  await Promise.all([
-    renderCache.initialize(),
-    mediaCache.initialize(),
-  ]);
+  await Promise.all([renderCache.initialize(), mediaCache.initialize()]);
 
   // Video clips read frames through the renderer's module-level media cache;
   // set it before any frame is drawn (workers get their own instance).
@@ -270,17 +320,26 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
   // The frame transport format is part of the hash so caches written by a
   // previous format (e.g. the color-corrupting JPEG transport) can never be
   // replayed after an upgrade.
-  const tempoKey = composition.tempo ? composition.tempo.map((region) => `${region.start}-${region.end}-${region.fps}`).join(",") : "constant";
+  const tempoKey = composition.tempo
+    ? composition.tempo.map((region) => `${region.start}-${region.end}-${region.fps}`).join(",")
+    : "constant";
   const colorManagement = resolveColorManagementConfig(options.colorManagement);
   const colorTransform = colorManagement.enabled
     ? createColorTransform(colorManagement.workingSpaceName, colorManagement.outputColorSpace)
     : null;
-  const compositionHash = computeCompositionHash(composition, `${seed}-${encodingCacheKey(encoding)}-rawbgra-${fromFrame}-${toFrame ?? ""}-tempo:${tempoKey}-2pass:${options.twoPass === true}-br:${options.bitrateKbps ?? "auto"}-burn:${options.burnSubtitles !== false}-color:${colorManagement.workingColorSpace}>${colorManagement.outputColorSpace}`);
+  const compositionHash = computeCompositionHash(
+    composition,
+    `${seed}-${encodingCacheKey(encoding)}-rawbgra-${fromFrame}-${toFrame ?? ""}-tempo:${tempoKey}-2pass:${options.twoPass === true}-br:${options.bitrateKbps ?? "auto"}-burn:${options.burnSubtitles !== false}-color:${colorManagement.workingColorSpace}>${colorManagement.outputColorSpace}`,
+  );
   const renderConversion = compositionConversion(composition);
   const graphTotalFrames = computeTotalFrames(composition);
 
   if (composition.boundaryBehavior === "strict") {
-    const overshoots = findTimelineOvershoots(composition.rootTimeline, renderConversion, graphTotalFrames);
+    const overshoots = findTimelineOvershoots(
+      composition.rootTimeline,
+      renderConversion,
+      graphTotalFrames,
+    );
     if (overshoots.length > 0) {
       const first = overshoots[0]!;
       throw new Error(
@@ -289,9 +348,15 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
     }
   }
 
-  const totalFrames = Math.max(0, toFrame !== undefined ? Math.min(toFrame - fromFrame, graphTotalFrames - fromFrame) : graphTotalFrames - fromFrame);
+  const totalFrames = Math.max(
+    0,
+    toFrame !== undefined
+      ? Math.min(toFrame - fromFrame, graphTotalFrames - fromFrame)
+      : graphTotalFrames - fromFrame,
+  );
   const effectiveFromFrame = Math.max(0, fromFrame);
-  const effectiveToFrame = toFrame !== undefined ? Math.min(toFrame, graphTotalFrames) : graphTotalFrames;
+  const effectiveToFrame =
+    toFrame !== undefined ? Math.min(toFrame, graphTotalFrames) : graphTotalFrames;
 
   const checkpointManager = createCheckpointManager({
     cacheDir,
@@ -305,9 +370,12 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
   if (options.resume === true && !fresh) {
     const checkpoint = await checkpointManager.findLatestCheckpoint();
     if (checkpoint) {
-      for (const frameIndex of checkpointManager.getCompletedFrames()) resumedFrames.add(frameIndex);
+      for (const frameIndex of checkpointManager.getCompletedFrames())
+        resumedFrames.add(frameIndex);
       if (!silent) {
-        reporter.reportWarning(`[CC4002] resuming session ${checkpoint.renderSessionId}: ${resumedFrames.size}/${totalFrames} frame(s) already rendered`);
+        reporter.reportWarning(
+          `[CC4002] resuming session ${checkpoint.renderSessionId}: ${resumedFrames.size}/${totalFrames} frame(s) already rendered`,
+        );
       }
     }
   }
@@ -332,11 +400,11 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
       ...composition,
       rootTimeline: {
         ...composition.rootTimeline,
-        tracks: composition.rootTimeline.tracks.map(track => {
+        tracks: composition.rootTimeline.tracks.map((track) => {
           if (track.kind !== "visual") return track;
           return {
             ...track,
-            clips: track.clips.map(clip => {
+            clips: track.clips.map((clip) => {
               if (clip.type !== "video" || !(clip as any).preprocess) return clip;
               const processedSrc = preprocessedVideos.get((clip as any).src);
               if (!processedSrc) return clip;
@@ -355,9 +423,15 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
   const { preloadSubtitlesForRender } = await import("../encoder/subtitle-burn.js");
   await preloadSubtitlesForRender(processedComposition);
 
-  const canResume = !fresh && !noCache && await resumeManager.load().then(state =>
-    state !== null && resumeManager.canResume(compositionHash, totalFrames, chunkSize)
-  );
+  const canResume =
+    !fresh &&
+    !noCache &&
+    (await resumeManager
+      .load()
+      .then(
+        (state) =>
+          state !== null && resumeManager.canResume(compositionHash, totalFrames, chunkSize),
+      ));
 
   if (canResume) {
     const state = resumeManager.getState()!;
@@ -371,13 +445,16 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
   const memoryBudget = memoryBudgetOption ?? createMemoryBudget();
   const framesPerBudget = Math.max(
     1,
-    Math.floor(memoryBudget.maxBytesPerChunk / estimateChunkBytes(1, composition.width, composition.height)),
+    Math.floor(
+      (memoryBudget.maxBytesPerChunk * memoryBudget.hardLimitRatio) /
+        estimateChunkBytes(1, composition.width, composition.height),
+    ),
   );
   const resolvedChunkSize = Math.min(resolveChunkSize(composition, chunkSize), framesPerBudget);
   const baseChunks = createChunks(totalFrames, resolvedChunkSize);
   const chunks: FrameChunk[] = baseChunks.map((chunk) => ({
     ...chunk,
-    frames: chunk.frames.map(f => f + effectiveFromFrame),
+    frames: chunk.frames.map((f) => f + effectiveFromFrame),
   }));
 
   let completedFrames = 0;
@@ -385,7 +462,8 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
   let videoEncoder: VideoEncoder | null = null;
   let cancelled = false;
 
-  const tempExtension = format === "webm" ? ".tmp.webm" : format === "prores" ? ".tmp.mov" : ".tmp.mp4";
+  const tempExtension =
+    format === "webm" ? ".tmp.webm" : format === "prores" ? ".tmp.mov" : ".tmp.mp4";
   const tempVideoPath = `${outputPath}${tempExtension}`;
   const twoPass = options.twoPass === true;
   const rawFramePath = `${outputPath}.tmp.bgra`;
@@ -413,7 +491,9 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
   // path. They render frames directly and hand them to the image-output
   // encoders so a .gif or .pdf request can never silently emit H.264.
   if (alpha && format === "gif") {
-    reporter.reportWarning("[CC6001] GIF does not support alpha transparency — the background will be composited opaque");
+    reporter.reportWarning(
+      "[CC6001] GIF does not support alpha transparency — the background will be composited opaque",
+    );
   }
 
   if (format === "gif" || format === "png" || format === "pdf") {
@@ -447,15 +527,21 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
       });
       if (!outcome.buffer) throw outcome.error ?? new Error(`Render failed at frame ${frame}`);
       if (outcome.error) {
-        reporter.reportWarning(`[CC4001] frame ${frame} failed: ${outcome.error.message} — ${outcome.usedFallback ? "placeholder substituted" : "recovered"}`);
+        reporter.reportWarning(
+          `[CC4001] frame ${frame} failed: ${outcome.error.message} — ${outcome.usedFallback ? "placeholder substituted" : "recovered"}`,
+        );
       }
       buffers.push(outcome.buffer);
       completedFrames += 1;
+      options.midiPlayer?.syncFrame(frameToSeconds(frame, renderConversion));
       reporter.reportFrame(completedFrames);
       await fireProgressHook(completedFrames);
     }
     if (format === "gif") {
-      const gifResult = await encodeAnimatedGif(buffers, outputPath, { fps: composition.fps, overwrite });
+      const gifResult = await encodeAnimatedGif(buffers, outputPath, {
+        fps: composition.fps,
+        overwrite,
+      });
       if (!gifResult.success) throw new Error(gifResult.error ?? "GIF output failed");
       const outputStat = await stat(outputPath).catch(() => null);
       const fileSize = outputStat?.size ?? 0;
@@ -463,7 +549,12 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
       const timeTaken = Date.now() - startTime;
       reporter.reportDone(outputPath, duration, fileSize, 0);
       if (!fresh && !noCache) await resumeManager.clear();
-      await registry.runHook("afterRender", { composition: processedComposition, outputPath, totalFrames, durationMs: timeTaken });
+      await registry.runHook("afterRender", {
+        composition: processedComposition,
+        outputPath,
+        totalFrames,
+        durationMs: timeTaken,
+      });
       return { outputPath, duration, fileSize, timeTaken, cacheReuse: 0 };
     }
     if (format === "png") {
@@ -475,13 +566,44 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
       const timeTaken = Date.now() - startTime;
       reporter.reportDone(outputPath, duration, fileSize, 0);
       if (!fresh && !noCache) await resumeManager.clear();
-      await registry.runHook("afterRender", { composition: processedComposition, outputPath, totalFrames, durationMs: timeTaken });
+      await registry.runHook("afterRender", {
+        composition: processedComposition,
+        outputPath,
+        totalFrames,
+        durationMs: timeTaken,
+      });
       return { outputPath, duration, fileSize, timeTaken, cacheReuse: 0 };
     }
     // PDF output: each frame becomes one page; PNG buffers written via embedPng.
+    // Vector-only compositions render pages as native PDF shapes instead of rasters.
     {
-      const pages = buffers.map((buf) => [{ type: "canvas" as const, data: buf, width: composition.width, height: composition.height }]);
-      const pdfBuffer = await generatePdf(pages, { width: composition.width, height: composition.height, dpi: 150 });
+      const { PDFDocument } = await import("pdf-lib");
+      const { isVectorOnly, appendVectorPage } = await import("../pdf/vector.js");
+      let pdfBuffer: Buffer;
+      if (isVectorOnly(processedComposition)) {
+        const pdfDoc = await PDFDocument.create();
+        for (let frame = effectiveFromFrame; frame < effectiveToFrame; frame += 1) {
+          await appendVectorPage(pdfDoc, processedComposition, frame, {
+            width: composition.width,
+            height: composition.height,
+          });
+        }
+        pdfBuffer = Buffer.from(await pdfDoc.save());
+      } else {
+        const pages = buffers.map((buf) => [
+          {
+            type: "canvas" as const,
+            data: buf,
+            width: composition.width,
+            height: composition.height,
+          },
+        ]);
+        pdfBuffer = await generatePdf(pages, {
+          width: composition.width,
+          height: composition.height,
+          dpi: 150,
+        });
+      }
       await withAtomicOutput(outputPath, async (stagedOutput) => {
         await writeFile(stagedOutput, pdfBuffer);
       });
@@ -489,8 +611,19 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
       const timeTaken = Date.now() - startTime;
       reporter.reportDone(outputPath, duration, pdfBuffer.length, 0);
       if (!fresh && !noCache) await resumeManager.clear();
-      await registry.runHook("afterRender", { composition: processedComposition, outputPath, totalFrames, durationMs: timeTaken });
-      return { outputPath, duration: pdfBuffer.length, fileSize: pdfBuffer.length, timeTaken, cacheReuse: 0 };
+      await registry.runHook("afterRender", {
+        composition: processedComposition,
+        outputPath,
+        totalFrames,
+        durationMs: timeTaken,
+      });
+      return {
+        outputPath,
+        duration: pdfBuffer.length,
+        fileSize: pdfBuffer.length,
+        timeTaken,
+        cacheReuse: 0,
+      };
     }
   }
 
@@ -498,10 +631,7 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
     if (videoEncoder) {
       await videoEncoder.cancel();
     }
-    await Promise.all([
-      rm(tempVideoPath, { force: true }),
-      rm(rawFramePath, { force: true }),
-    ]);
+    await Promise.all([rm(tempVideoPath, { force: true }), rm(rawFramePath, { force: true })]);
   };
 
   const cancel = async () => {
@@ -520,7 +650,9 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
       await checkpointManager.flush().catch(() => undefined);
       await cleanupActiveTempFiles();
       if (!silent) {
-        console.warn(`[CC4005] received ${signal}: checkpoint persisted and temporary files removed`);
+        console.warn(
+          `[CC4005] received ${signal}: checkpoint persisted and temporary files removed`,
+        );
       }
     },
   });
@@ -561,10 +693,13 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
 
     const baseConcurrency = resolveConcurrency(concurrency);
     const workload = analyzeWorkload(processedComposition);
-    const tuning = concurrency === "auto" ? tuneConcurrency(workload, { cpuCount: baseConcurrency }) : null;
+    const tuning =
+      concurrency === "auto" ? tuneConcurrency(workload, { cpuCount: baseConcurrency }) : null;
     const resolvedConcurrency = tuning?.concurrency ?? baseConcurrency;
     if (tuning && !silent) {
-      reporter.reportWarning(`[CC7002] ${tuning.reason} (${workload.classification}, ${resolvedConcurrency} worker(s))`);
+      reporter.reportWarning(
+        `[CC7002] ${tuning.reason} (${workload.classification}, ${resolvedConcurrency} worker(s))`,
+      );
     }
     const prefetcher = createMediaPrefetcher({
       onWarning: (message) => reporter.reportWarning(`[CC7003] ${message}`),
@@ -576,8 +711,34 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
       cacheDir,
       memoryBudget,
       errorPolicy: options.frameErrorPolicy ?? "placeholder",
+      cacheProvider: async (request) => {
+        if (!request.key.startsWith("video:")) return undefined;
+        const at = request.key.lastIndexOf("@");
+        const src = request.key.slice("video:".length, at);
+        const sourceFrame = Number(request.key.slice(at + 1));
+        if (!Number.isFinite(sourceFrame)) return undefined;
+        const cache = getMediaCacheForRenderer();
+        if (!cache) return undefined;
+        try {
+          const { extractFrameByIndex } = await import("../media/frames.js");
+          const frame = await extractFrameByIndex(src, sourceFrame, { cache }, undefined);
+          return Buffer.from(
+            JSON.stringify({
+              buffer: frame.buffer.toString("base64"),
+              width: frame.width,
+              height: frame.height,
+              format: frame.format,
+            }),
+            "utf8",
+          );
+        } catch {
+          return undefined;
+        }
+      },
       onMemoryWarning: (usage, budget) => {
-        reporter.reportWarning(`[CC7001] render chunk memory usage at ${formatBytes(usage)} of ${formatBytes(budget)} — reducing chunk size is recommended`);
+        reporter.reportWarning(
+          `[CC7001] render chunk memory usage at ${formatBytes(usage)} of ${formatBytes(budget)} — reducing chunk size is recommended`,
+        );
       },
     });
 
@@ -594,20 +755,24 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
     const encodeFrames = async (
       frames: readonly { readonly index: number; readonly buffer: Buffer }[],
       chunkIndex: number,
-      reusable: boolean
+      reusable: boolean,
     ): Promise<void> => {
       const framesToCache: { index: number; buffer: Buffer }[] = [];
 
       for (const { index, buffer } of frames) {
         if (cancelled) break;
         if (colorTransform) {
-          colorTransform.transformBuffer(new Uint8ClampedArray(buffer.buffer, buffer.byteOffset, buffer.byteLength), {
-            layout: "bgra",
-          });
+          colorTransform.transformBuffer(
+            new Uint8ClampedArray(buffer.buffer, buffer.byteOffset, buffer.byteLength),
+            {
+              layout: "bgra",
+            },
+          );
         }
         await frameQueue.enqueue({ index, buffer });
         framesToCache.push({ index, buffer });
         completedFrames++;
+        options.midiPlayer?.syncFrame(frameToSeconds(index, renderConversion));
         reporter.reportFrame(completedFrames - 1);
         await fireProgressHook(completedFrames);
       }
@@ -640,7 +805,8 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
         const chunk = chunks[chunkIndex];
         if (!chunk) continue;
         const chunkCompleted = resumeState?.chunks[chunkIndex]?.completed ?? false;
-        const resumedChunkComplete = resumedFrames.size > 0 && chunk.frames.every((frame) => resumedFrames.has(frame));
+        const resumedChunkComplete =
+          resumedFrames.size > 0 && chunk.frames.every((frame) => resumedFrames.has(frame));
 
         if (!noCache && (chunkCompleted || resumedChunkComplete)) {
           const cachedFrames = await renderCache.getChunk(compositionHash, chunkIndex);
@@ -657,22 +823,23 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
         .flatMap((chunk) => chunk.frames);
       prefetcher.prefetchAhead(processedComposition, prefetchFrames);
 
-      const renderedResults = chunksToRender.length > 0
-        ? await (async () => {
-            for (const { chunk } of chunksToRender) {
-              for (const frame of chunk.frames) {
-                await registry.runHook("beforeFrame", {
-        composition: processedComposition,
-        frame,
-        frameNumber: frame,
-        totalFrames,
-        timestamp: frameToSeconds(frame, renderConversion),
-      });
+      const renderedResults =
+        chunksToRender.length > 0
+          ? await (async () => {
+              for (const { chunk } of chunksToRender) {
+                for (const frame of chunk.frames) {
+                  await registry.runHook("beforeFrame", {
+                    composition: processedComposition,
+                    frame,
+                    frameNumber: frame,
+                    totalFrames,
+                    timestamp: frameToSeconds(frame, renderConversion),
+                  });
+                }
               }
-            }
-            return workerManager.processChunks(chunksToRender.map((c) => c.chunk));
-          })()
-        : [];
+              return workerManager.processChunks(chunksToRender.map((c) => c.chunk));
+            })()
+          : [];
 
       const resultByStartFrame = new Map<number, WorkerResult>();
       for (const result of renderedResults) resultByStartFrame.set(result.chunkIndex, result);
@@ -692,11 +859,15 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
         if (!result || !entry) continue;
 
         if (result.failures && result.failures.length > 0) {
-          reporter.reportWarning(`[CC4004] chunk ${chunkIndex}: ${result.failures.length} frame(s) failed; policy "${options.frameErrorPolicy ?? "placeholder"}" applied`);
+          reporter.reportWarning(
+            `[CC4004] chunk ${chunkIndex}: ${result.failures.length} frame(s) failed; policy "${options.frameErrorPolicy ?? "placeholder"}" applied`,
+          );
         }
 
         if (result.aborted) {
-          throw new Error(`[CC4003] ${result.error ?? "frame rendering aborted"}${result.diagnostics ? `\n${result.diagnostics}` : ""}`);
+          throw new Error(
+            `[CC4003] ${result.error ?? "frame rendering aborted"}${result.diagnostics ? `\n${result.diagnostics}` : ""}`,
+          );
         }
 
         let framesToEncode = result.frames;
@@ -706,7 +877,8 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
           const chunkError = new Error(result.error);
           if (strategy === "abort") throw chunkError;
 
-          let recoveredFrames: readonly { readonly index: number; readonly buffer: Buffer }[] | null = null;
+          let recoveredFrames:
+            readonly { readonly index: number; readonly buffer: Buffer }[] | null = null;
           if (strategy === "retry") {
             const retries = Math.max(0, recovery?.maxRetries ?? DEFAULT_RECOVERY.maxRetries);
             for (let attempt = 1; attempt <= retries; attempt += 1) {
@@ -714,7 +886,9 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
               const retryResult = retryResults[0];
               if (retryResult && !retryResult.error) {
                 recoveredFrames = retryResult.frames;
-                reporter.reportWarning(`[CC4001] chunk ${chunkIndex} recovered on retry ${attempt}: ${result.error}`);
+                reporter.reportWarning(
+                  `[CC4001] chunk ${chunkIndex} recovered on retry ${attempt}: ${result.error}`,
+                );
                 break;
               }
             }
@@ -751,7 +925,9 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
     await workerManager.terminate();
 
     if (lastEmittedChunk !== chunks.length - 1 && !cancelled) {
-      throw new Error(`Render incomplete: last encoded chunk ${lastEmittedChunk} of ${chunks.length - 1}`);
+      throw new Error(
+        `Render incomplete: last encoded chunk ${lastEmittedChunk} of ${chunks.length - 1}`,
+      );
     }
 
     if (cancelled) {
@@ -767,7 +943,9 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
       composition: processedComposition,
       outputPath,
       durationMs: Date.now() - encodeStarted,
-      fileSize: await stat(tempVideoPath).then((info) => info.size).catch(() => 0),
+      fileSize: await stat(tempVideoPath)
+        .then((info) => info.size)
+        .catch(() => 0),
     });
 
     if (twoPass) {
@@ -829,7 +1007,9 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
       limiterPeak: 0,
     });
 
-    const mixTrackCount = composition.rootTimeline.tracks.filter((track) => track.kind === "audio").length;
+    const mixTrackCount = composition.rootTimeline.tracks.filter(
+      (track) => track.kind === "audio",
+    ).length;
     await registry.runHook("beforeMix", {
       composition: processedComposition,
       trackCount: mixTrackCount,
@@ -838,25 +1018,31 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
     });
     const mixStarted = Date.now();
 
-    const audioOutcome = await withRecovery(async () => {
-      const tracks: AudioTrackState[] = [];
-      for (const track of composition.rootTimeline.tracks) {
-        if (track.kind !== "audio") continue;
-        const prepared = await prepareAudioTracks(track.clips, {
-          ...audioPrepare,
-          trackMuted: track.muted ?? false,
-        });
-        tracks.push(...prepared);
-      }
-      return tracks.length > 0 ? mixAudioTracks(tracks, mixerOptions) : silentMix();
-    }, resolveStrategy(recovery, "audio"), recovery?.maxRetries ?? 0);
+    const audioOutcome = await withRecovery(
+      async () => {
+        const tracks: AudioTrackState[] = [];
+        for (const track of composition.rootTimeline.tracks) {
+          if (track.kind !== "audio") continue;
+          const prepared = await prepareAudioTracks(track.clips, {
+            ...audioPrepare,
+            trackMuted: track.muted ?? false,
+          });
+          tracks.push(...prepared);
+        }
+        return tracks.length > 0 ? mixAudioTracks(tracks, mixerOptions) : silentMix();
+      },
+      resolveStrategy(recovery, "audio"),
+      recovery?.maxRetries ?? 0,
+    );
 
     let mixResult: ReturnType<typeof mixAudioTracks>;
     if (audioOutcome.status === "ok" || audioOutcome.status === "recovered") {
       mixResult = audioOutcome.value!;
     } else {
       const err = audioOutcome.error?.message ?? "unknown";
-      reporter.reportWarning(`[CC5001] audio preparation/mixing failed: ${err} — muxing video without audio`);
+      reporter.reportWarning(
+        `[CC5001] audio preparation/mixing failed: ${err} — muxing video without audio`,
+      );
       mixResult = silentMix();
     }
 
@@ -886,7 +1072,11 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
 
     reporter.reportMuxing();
     await withAtomicOutput(outputPath, async (stagedOutput) => {
-      const muxResult = await muxAudioVideo({ ...muxOptions, outputPath: stagedOutput, overwrite: true });
+      const muxResult = await muxAudioVideo({
+        ...muxOptions,
+        outputPath: stagedOutput,
+        overwrite: true,
+      });
       if (!muxResult.success) {
         throw new Error(muxResult.error ?? "Muxing failed");
       }
@@ -908,7 +1098,9 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
         });
       } else {
         await rm(chapterPath, { force: true });
-        reporter.reportWarning("[CC8002] chapter metadata could not be embedded — the video is still valid");
+        reporter.reportWarning(
+          "[CC8002] chapter metadata could not be embedded — the video is still valid",
+        );
       }
     }
 
@@ -935,13 +1127,22 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
       const config = options.generateThumbnail === true ? {} : options.generateThumbnail;
       const { generateThumbnail } = await import("../encoder/thumbnail/index.js");
       const thumbPath = config.outputPath ?? outputPath.replace(/\.[a-z0-9]+$/i, ".thumb.png");
-      await generateThumbnail(processedComposition, thumbPath, { formats: config.formats ?? ["png"], seed })
-        .catch((error: unknown) => {
-          reporter.reportWarning(`[CC8003] thumbnail generation failed: ${error instanceof Error ? error.message : String(error)}`);
-        });
+      await generateThumbnail(processedComposition, thumbPath, {
+        formats: config.formats ?? ["png"],
+        seed,
+      }).catch((error: unknown) => {
+        reporter.reportWarning(
+          `[CC8003] thumbnail generation failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
     }
 
-    await registry.runHook("afterRender", { composition: processedComposition, outputPath, totalFrames, durationMs: Date.now() - startTime });
+    await registry.runHook("afterRender", {
+      composition: processedComposition,
+      outputPath,
+      totalFrames,
+      durationMs: Date.now() - startTime,
+    });
     cancellation.dispose();
 
     return {
@@ -956,7 +1157,10 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
     await checkpointManager.flush().catch(() => undefined);
     await cleanup();
     reporter.reportError(error instanceof Error ? error : new Error(String(error)));
-    await registry.runHook("onError", { error: error instanceof Error ? error : new Error(String(error)), context: "renderVideo" });
+    await registry.runHook("onError", {
+      error: error instanceof Error ? error : new Error(String(error)),
+      context: "renderVideo",
+    });
     throw error;
   }
 }
@@ -1096,14 +1300,5 @@ export {
   type FailurePhase,
   type FrameRenderOutcome,
 } from "./recovery.js";
-export {
-  GracefulDrainManager,
-  type DrainOptions,
-} from "./drain.js";
-export {
-  TenantContext,
-  DEFAULT_TENANT_QUOTA,
-  type TenantQuota,
-} from "./tenant.js";
-
-
+export { GracefulDrainManager, type DrainOptions } from "./drain.js";
+export { TenantContext, DEFAULT_TENANT_QUOTA, type TenantQuota } from "./tenant.js";

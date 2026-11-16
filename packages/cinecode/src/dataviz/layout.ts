@@ -23,12 +23,18 @@ export interface BarChartLayout {
   readonly minValue: number;
   readonly zeroY: number;
   readonly ticks: readonly ChartTick[];
+  readonly xTicks: readonly ChartTickX[];
   readonly plotArea: { x: number; y: number; width: number; height: number };
 }
 
 export interface ChartTick {
   readonly value: number;
   readonly y: number;
+}
+
+export interface ChartTickX {
+  readonly value: number;
+  readonly position: number;
 }
 
 export interface LineChartLayout {
@@ -38,20 +44,41 @@ export interface LineChartLayout {
   readonly minValue: number;
   readonly zeroY: number;
   readonly ticks: readonly ChartTick[];
+  readonly xTicks: readonly ChartTickX[];
   readonly plotArea: { x: number; y: number; width: number; height: number };
 }
 
 export interface ScatterPlotLayout {
   readonly type: "scatter";
-  readonly points: readonly { x: number; y: number; label: string; value: number; radius: number }[];
+  readonly points: readonly {
+    x: number;
+    y: number;
+    label: string;
+    value: number;
+    radius: number;
+  }[];
   readonly maxValue: number;
   readonly minValue: number;
   readonly zeroY: number;
   readonly ticks: readonly ChartTick[];
+  readonly xTicks: readonly ChartTickX[];
   readonly plotArea: { x: number; y: number; width: number; height: number };
 }
 
 export type ChartLayout = BarChartLayout | LineChartLayout | ScatterPlotLayout;
+
+function xTicksForCount(count: number): readonly ChartTickX[] {
+  const positions: ChartTickX[] = [];
+  const last = Math.max(0, count - 1);
+  const step = Math.max(1, Math.floor(count / 5));
+  for (let i = 0; i < count; i += step) {
+    positions.push({ value: i, position: last === 0 ? 0 : i / last });
+  }
+  if (positions[positions.length - 1]?.value !== last) {
+    positions.push({ value: last, position: 1 });
+  }
+  return positions;
+}
 
 export function normalizeChartData(
   data: readonly number[] | ReadonlyArray<{ label: string; value: number }>,
@@ -69,7 +96,11 @@ export function normalizeChartData(
   }));
 }
 
-function plotArea(width: number, height: number, options: ChartLayoutOptions): { x: number; y: number; width: number; height: number } {
+function plotArea(
+  width: number,
+  height: number,
+  options: ChartLayoutOptions,
+): { x: number; y: number; width: number; height: number } {
   const padding = options.padding ?? Math.max(16, Math.min(width, height) * 0.08);
   return {
     x: padding,
@@ -86,10 +117,15 @@ function dataRange(points: readonly ChartDataPoint[]): { min: number; max: numbe
     min = Math.min(min, point.value);
     max = Math.max(max, point.value);
   }
-  if (!Number.isFinite(min)) { min = 0; max = 0; }
+  if (!Number.isFinite(min)) {
+    min = 0;
+    max = 0;
+  }
   if (min >= 0) min = 0;
   if (max <= 0) max = 0;
-  if (min === max) { max = min + 1; }
+  if (min === max) {
+    max = min + 1;
+  }
   return { min, max };
 }
 
@@ -111,12 +147,17 @@ export function niceTicks(min: number, max: number, targetCount = 5): readonly n
   return ticks;
 }
 
-function scaleToArea(min: number, max: number, area: { x: number; y: number; width: number; height: number }): {
+function scaleToArea(
+  min: number,
+  max: number,
+  area: { x: number; y: number; width: number; height: number },
+): {
   zeroY: number;
   ticks: readonly ChartTick[];
   toY: (value: number) => number;
 } {
-  const toY = (value: number): number => area.y + area.height - ((value - min) / (max - min)) * area.height;
+  const toY = (value: number): number =>
+    area.y + area.height - ((value - min) / (max - min)) * area.height;
   const tickValues = niceTicks(min, max);
   const zeroY = toY(Math.min(Math.max(0, min), max));
   return { zeroY, ticks: tickValues.map((value) => ({ value, y: toY(value) })), toY };
@@ -145,9 +186,17 @@ export function layoutBarChart(
       value: point.value,
     };
   });
-  return { type: "bar", bars, maxValue: max, minValue: min, zeroY, ticks, plotArea: area };
+  return {
+    type: "bar",
+    bars,
+    maxValue: max,
+    minValue: min,
+    zeroY,
+    ticks,
+    plotArea: area,
+    xTicks: xTicksForCount(data.length),
+  };
 }
-
 export function layoutLineChart(
   data: readonly ChartDataPoint[],
   width: number,
@@ -164,9 +213,17 @@ export function layoutLineChart(
     label: point.label,
     value: point.value,
   }));
-  return { type: "line", points, maxValue: max, minValue: min, zeroY, ticks, plotArea: area };
+  return {
+    type: "line",
+    points,
+    maxValue: max,
+    minValue: min,
+    zeroY,
+    ticks,
+    plotArea: area,
+    xTicks: xTicksForCount(data.length),
+  };
 }
-
 export function layoutScatterPlot(
   data: readonly ChartDataPoint[],
   width: number,
@@ -185,7 +242,16 @@ export function layoutScatterPlot(
     value: point.value,
     radius: Math.max(2, baseRadius * Math.sqrt(Math.abs(point.value) / Math.max(1, Math.abs(max)))),
   }));
-  return { type: "scatter", points, maxValue: max, minValue: min, zeroY, ticks, plotArea: area };
+  return {
+    type: "scatter",
+    points,
+    maxValue: max,
+    minValue: min,
+    zeroY,
+    ticks,
+    plotArea: area,
+    xTicks: xTicksForCount(data.length),
+  };
 }
 
 export function layoutChart(

@@ -34,25 +34,42 @@ function probeWebGl2(): boolean {
   }
 }
 
-export async function detectBackend(options: BackendFactoryOptions = {}): Promise<BackendSelection> {
+export async function detectBackend(
+  options: BackendFactoryOptions = {},
+): Promise<BackendSelection> {
   const preferred = forcedType ?? options.preferred;
-  if (preferred === "cpu") return { type: "cpu", capabilities: CPU_CAPABILITIES };
+  if (preferred === "cpu") return logSelection({ type: "cpu", capabilities: CPU_CAPABILITIES });
   if (preferred === "webgl2" && !probeWebGl2()) {
-    return { type: "cpu", capabilities: CPU_CAPABILITIES };
+    return logSelection({ type: "cpu", capabilities: CPU_CAPABILITIES }, "webgl2 unavailable");
   }
   if (preferred === "webgpu") {
-    if (options.allowGpu === false) return { type: "cpu", capabilities: CPU_CAPABILITIES };
+    if (options.allowGpu === false) {
+      return logSelection({ type: "cpu", capabilities: CPU_CAPABILITIES }, "allowGpu disabled");
+    }
     return (await probeWebGpu())
-      ? { type: "webgpu", capabilities: WEBGPU_CAPABILITIES }
-      : { type: "cpu", capabilities: CPU_CAPABILITIES };
+      ? logSelection({ type: "webgpu", capabilities: WEBGPU_CAPABILITIES })
+      : logSelection({ type: "cpu", capabilities: CPU_CAPABILITIES }, "webgpu unavailable");
   }
   if (cachedSelection) return cachedSelection;
-  const selection: BackendSelection = options.allowGpu === false
-    ? { type: "cpu", capabilities: CPU_CAPABILITIES }
-    : (await probeWebGpu())
-      ? { type: "webgpu", capabilities: WEBGPU_CAPABILITIES }
-      : { type: "cpu", capabilities: CPU_CAPABILITIES };
+  const selection: BackendSelection =
+    options.allowGpu === false
+      ? { type: "cpu", capabilities: CPU_CAPABILITIES }
+      : (await probeWebGpu())
+        ? { type: "webgpu", capabilities: WEBGPU_CAPABILITIES }
+        : { type: "cpu", capabilities: CPU_CAPABILITIES };
   cachedSelection = selection;
+  const reason =
+    selection.type === "cpu" && options.allowGpu !== false
+      ? "webgpu unavailable"
+      : "allowGpu disabled";
+  return logSelection(selection, selection.type === "webgpu" ? undefined : reason);
+}
+
+function logSelection(selection: BackendSelection, fallbackReason?: string): BackendSelection {
+  console.log(
+    `[cinecode] Using ${selection.type} renderer (${JSON.stringify(selection.capabilities)})`,
+  );
+  if (fallbackReason) console.log(`[cinecode] GPU backend not chosen: ${fallbackReason}`);
   return selection;
 }
 
@@ -60,13 +77,18 @@ function instantiate(selection: BackendSelection): RenderSurface {
   return selection.type === "webgpu" ? new WebGpuSurface() : new CpuSurface();
 }
 
-export async function getBestAvailableBackend(options: BackendFactoryOptions = {}): Promise<RenderSurface> {
+export async function getBestAvailableBackend(
+  options: BackendFactoryOptions = {},
+): Promise<RenderSurface> {
   return instantiate(await detectBackend(options));
 }
 
 export async function forceBackend(type: "webgpu" | "cpu"): Promise<RenderSurface> {
   forcedType = type;
-  const surface = instantiate({ type, capabilities: type === "webgpu" ? WEBGPU_CAPABILITIES : CPU_CAPABILITIES });
+  const surface = instantiate({
+    type,
+    capabilities: type === "webgpu" ? WEBGPU_CAPABILITIES : CPU_CAPABILITIES,
+  });
   return surface;
 }
 
@@ -87,8 +109,18 @@ export async function describeBackends(): Promise<readonly BackendSelection[]> {
     {
       type: "webgl2",
       capabilities: webgl2Available
-        ? { gpuAvailable: true, adapterType: "webgl2", maxTextureDimension2D: 16384, computeShaderSupport: false }
-        : { gpuAvailable: false, adapterType: "webgl2", maxTextureDimension2D: 0, computeShaderSupport: false },
+        ? {
+            gpuAvailable: true,
+            adapterType: "webgl2",
+            maxTextureDimension2D: 16384,
+            computeShaderSupport: false,
+          }
+        : {
+            gpuAvailable: false,
+            adapterType: "webgl2",
+            maxTextureDimension2D: 0,
+            computeShaderSupport: false,
+          },
     },
     { type: "cpu", capabilities: CPU_CAPABILITIES },
   ];

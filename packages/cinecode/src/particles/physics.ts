@@ -6,7 +6,7 @@ import type {
   ParticlePhysicsConfig,
   ParticleVector,
 } from "./types.js";
-import { resolveCollisions } from "./collision.js";
+import { resolveBoundaryCollision, resolveCollisions } from "./collision.js";
 
 const DEFAULT_TIME_STEP = 1 / 60;
 const DEFAULT_MAX_SPEED = 4000;
@@ -116,6 +116,10 @@ export function stepParticle(
   particle.y += particle.vy * deltaTime;
   particle.ax = accelerationX;
   particle.ay = accelerationY;
+
+  if (physics.bounds) {
+    resolveBoundaryCollision(particle, physics.bounds, physics.restitution);
+  }
 
   if (colliders.length > 0) {
     resolveCollisions(particle, colliders, physics.restitution ?? 0.6, physics.friction ?? 0.1);

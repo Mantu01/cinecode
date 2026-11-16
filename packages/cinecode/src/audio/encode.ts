@@ -4,18 +4,9 @@ import { encodeWavBuffer } from "./muxer.js";
 import type { AudioBuffer } from "./types.js";
 
 export type AudioEncodeFormat =
-  | "wav"
-  | "mp3"
-  | "flac"
-  | "ogg"
-  | "aac"
-  | "he-aac"
-  | "opus"
-  | "ac3"
-  | "eac3"
-  | "pcm";
+  "wav" | "mp3" | "flac" | "ogg" | "aac" | "he-aac" | "opus" | "ac3" | "eac3" | "pcm";
 
-export type AudioContainer = "wav" | "mp4" | "mkv" | "webm" | "mov" | "flac" | "ogg";
+export type AudioContainer = "wav" | "mp3" | "mp4" | "mkv" | "webm" | "mov" | "flac" | "ogg";
 
 export type PcmBitDepth = 16 | 24 | 32;
 
@@ -37,6 +28,21 @@ export interface AudioEncodeResult {
   readonly error?: string;
 }
 
+/**
+ * Format support matrix (ffmpeg-backed):
+ * | format  | codec        | containers            | lossless | notes                     |
+ * |---------|--------------|-----------------------|----------|---------------------------|
+ * | wav     | pcm_s{N}le   | wav, mkv, mov         | yes      | bit depth 16/24/32        |
+ * | mp3     | libmp3lame   | mp4, mkv              | no       |                           |
+ * | flac    | flac         | flac, mkv, mov        | yes      | 16-bit or 24-bit only     |
+ * | ogg     | libvorbis    | ogg, webm             | no       |                           |
+ * | aac     | aac          | mp4, mkv, mov         | no       |                           |
+ * | he-aac  | aac + aac_he | mp4, mkv              | no       | needs >= 32 kHz source    |
+ * | opus    | libopus      | webm, mkv, ogg        | no       | internal 48 kHz resample  |
+ * | ac3     | ac3          | mp4, mkv, mov         | no       | max 5.1 (6 channels)      |
+ * | eac3    | eac3         | mp4, mkv              | no       | max 5.1 (6 channels)      |
+ * | pcm     | pcm_{s,f}le  | wav, mov, mkv         | yes      | f32le at bitDepth 32      |
+ */
 export interface AudioEncodingSupport {
   readonly supported: boolean;
   readonly codec: string;
@@ -74,7 +80,7 @@ export function audioCodecFor(format: AudioEncodeFormat, bitDepth: PcmBitDepth =
 
 const FORMAT_CONTAINERS: Readonly<Record<AudioEncodeFormat, readonly AudioContainer[]>> = {
   wav: ["wav", "mkv", "mov"],
-  mp3: ["mp4", "mkv"],
+  mp3: ["mp3", "mp4", "mkv"],
   flac: ["flac", "mkv", "mov"],
   ogg: ["ogg", "webm"],
   aac: ["mp4", "mkv", "mov"],
@@ -88,13 +94,19 @@ const FORMAT_CONTAINERS: Readonly<Record<AudioEncodeFormat, readonly AudioContai
 export function validateAudioEncoding(
   format: AudioEncodeFormat,
   container: AudioContainer,
-  options: { readonly channels?: number; readonly sampleRate?: number; readonly bitDepth?: PcmBitDepth } = {},
+  options: {
+    readonly channels?: number;
+    readonly sampleRate?: number;
+    readonly bitDepth?: PcmBitDepth;
+  } = {},
 ): AudioEncodingSupport {
   const errors: string[] = [];
   const warnings: string[] = [];
   const containers = FORMAT_CONTAINERS[format];
   if (!containers.includes(container)) {
-    errors.push(`Codec '${format}' is not supported in container '${container}'. Supported: ${containers.join(", ")}`);
+    errors.push(
+      `Codec '${format}' is not supported in container '${container}'. Supported: ${containers.join(", ")}`,
+    );
   }
   const channels = options.channels ?? 2;
   const sampleRate = options.sampleRate ?? 48000;
@@ -107,7 +119,12 @@ export function validateAudioEncoding(
   if (format === "he-aac" && sampleRate < 32000) {
     warnings.push("HE-AAC typically requires a 32 kHz or 44.1 kHz source sample rate");
   }
-  if (format === "flac" && options.bitDepth !== undefined && options.bitDepth !== 16 && options.bitDepth !== 24) {
+  if (
+    format === "flac" &&
+    options.bitDepth !== undefined &&
+    options.bitDepth !== 16 &&
+    options.bitDepth !== 24
+  ) {
     errors.push("FLAC supports 16-bit or 24-bit samples");
   }
   return {
@@ -119,6 +136,22 @@ export function validateAudioEncoding(
   };
 }
 
+function inferContainerFromPath(outputPath: string): AudioContainer | undefined {
+  const ext = outputPath.slice(outputPath.lastIndexOf(".") + 1).toLowerCase();
+  const map: Record<string, AudioContainer> = {
+    wav: "wav",
+    mp3: "mp3",
+    flac: "flac",
+    ogg: "ogg",
+    m4a: "mp4",
+    mp4: "mp4",
+    mkv: "mkv",
+    webm: "webm",
+    mov: "mov",
+  };
+  return map[ext];
+}
+
 export async function encodeAudioFile(
   audioBuffer: AudioBuffer,
   outputPath: string,
@@ -126,27 +159,36 @@ export async function encodeAudioFile(
 ): Promise<AudioEncodeResult> {
   const { format, bitrate = "192k", overwrite = false } = options;
   const codec = audioCodecFor(format, options.bitDepth);
-  const validation = validateAudioEncoding(format, options.container ?? "wav", {
+  const container = options.container ?? inferContainerFromPath(outputPath) ?? "wav";
+  const validation = validateAudioEncoding(format, container, {
     channels: options.channels ?? audioBuffer.channels,
     sampleRate: options.sampleRate ?? audioBuffer.sampleRate,
     bitDepth: options.bitDepth,
   });
   if (!validation.supported) {
-    return { success: false, outputPath, duration: 0, error: `CC5601: ${validation.errors.join("; ")}` };
+    return {
+      success: false,
+      outputPath,
+      duration: 0,
+      error: `CC5601: ${validation.errors.join("; ")}`,
+    };
   }
 
   const wavData = encodeWavBuffer(audioBuffer);
   const args = [
-    "-v", "error",
+    "-v",
+    "error",
     ...(overwrite ? ["-y"] : ["-n"]),
-    "-i", "-",
-    "-c:a", codec,
+    "-i",
+    "-",
+    "-c:a",
+    codec,
     ...(LOSSLESS_FORMATS.has(format) ? [] : ["-b:a", bitrate]),
     ...(format === "he-aac" ? ["-profile:a", "aac_he"] : []),
     ...(options.sampleRate !== undefined ? ["-ar", String(options.sampleRate)] : []),
     ...(options.channels !== undefined ? ["-ac", String(options.channels)] : []),
     ...(options.channelLayout !== undefined ? ["-channel_layout", options.channelLayout] : []),
-    ...(options.container !== undefined ? ["-f", options.container] : []),
+    ...(container !== undefined ? ["-f", container] : []),
     outputPath,
   ];
 
@@ -162,13 +204,23 @@ export async function encodeAudioFile(
     });
     child.on("close", (code) => {
       if (code !== 0) {
-        resolve({ success: false, outputPath, duration: 0, error: `ffmpeg audio encode failed: ${stderr}` });
+        resolve({
+          success: false,
+          outputPath,
+          duration: 0,
+          error: `ffmpeg audio encode failed: ${stderr}`,
+        });
         return;
       }
       resolve({ success: true, outputPath, duration: audioBuffer.length / audioBuffer.sampleRate });
     });
     child.on("error", (err) => {
-      resolve({ success: false, outputPath, duration: 0, error: `Failed to spawn ffmpeg: ${err.message}` });
+      resolve({
+        success: false,
+        outputPath,
+        duration: 0,
+        error: `Failed to spawn ffmpeg: ${err.message}`,
+      });
     });
   });
 }

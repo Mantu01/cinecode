@@ -21,7 +21,11 @@ function easeIn(family: EaseFamily, t: number): number {
     case "back":
       return t * t * (2.70158 * t - 1.70158);
     case "elastic":
-      return t === 0 ? 0 : t === 1 ? 1 : -(2 ** (10 * t - 10)) * Math.sin(((t * 10 - 10.75) * 2 * Math.PI) / 4);
+      return t === 0
+        ? 0
+        : t === 1
+          ? 1
+          : -(2 ** (10 * t - 10)) * Math.sin(((t * 10 - 10.75) * 2 * Math.PI) / 4);
     case "bounce":
       return bounceOut(t);
   }
@@ -42,7 +46,11 @@ function easeOut(family: EaseFamily, t: number): number {
     case "back":
       return 1 + 2.70158 * (t - 1) ** 3 + 1.70158 * (t - 1) ** 2;
     case "elastic":
-      return t === 0 ? 0 : t === 1 ? 1 : 2 ** (-10 * t) * Math.sin(((t * 10 - 0.75) * 2 * Math.PI) / 4) + 1;
+      return t === 0
+        ? 0
+        : t === 1
+          ? 1
+          : 2 ** (-10 * t) * Math.sin(((t * 10 - 0.75) * 2 * Math.PI) / 4) + 1;
     case "bounce":
       return 1 - bounceOut(1 - t);
   }
@@ -70,7 +78,7 @@ export function easeProgress(family: EaseFamily, mode: EaseMode): Progress {
 
 export function cubicBezier(x1: number, y1: number, x2: number, y2: number): Progress {
   const bez = (v: number, a: number, b: number) =>
-    ((1 - 3 * b + 3 * a) * v ** 3 + (3 * b - 6 * a) * v ** 2 + 3 * a * v);
+    (1 - 3 * b + 3 * a) * v ** 3 + (3 * b - 6 * a) * v ** 2 + 3 * a * v;
   const bezDeriv = (v: number, a: number, b: number) =>
     3 * (1 - 3 * b + 3 * a) * v ** 2 + 2 * (3 * b - 6 * a) * v + 3 * a;
   const solveX = (t: number) => {
@@ -129,7 +137,13 @@ export function springSamples(
   return out;
 }
 
-export function springProgress(stiffness = DEFAULT_SPRING_STIFFNESS, damping = DEFAULT_SPRING_DAMPING, mass = DEFAULT_SPRING_MASS, velocity = DEFAULT_VELOCITY, fps: number): Progress {
+export function springProgress(
+  stiffness = DEFAULT_SPRING_STIFFNESS,
+  damping = DEFAULT_SPRING_DAMPING,
+  mass = DEFAULT_SPRING_MASS,
+  velocity = DEFAULT_VELOCITY,
+  fps: number,
+): Progress {
   const values = springSamples(stiffness, damping, mass, velocity, fps);
   return (t) => {
     if (t <= 0) return 0;
@@ -166,16 +180,27 @@ export function curveProgress(descriptor: EasingDescriptor, fps: number): Progre
     case "linear":
       return linearProgress;
     case "hold":
-      return () => 0;
+      return (_t: number) => 0;
     case "ease":
       return easeProgress(descriptor.family, descriptor.mode);
     case "cubic-bezier":
       return cubicBezier(descriptor.x1, descriptor.y1, descriptor.x2, descriptor.y2);
     case "spring":
-      return springProgress(descriptor.stiffness, descriptor.damping, descriptor.mass, descriptor.velocity ?? 0, fps);
+      return springProgress(
+        descriptor.stiffness,
+        descriptor.damping,
+        descriptor.mass,
+        descriptor.velocity ?? 0,
+        fps,
+      );
     case "steps":
       return stepsProgress(descriptor.count, descriptor.position);
     case "bezier-curve":
-      return cubicBezier(descriptor.points[1]!, descriptor.points[2]!, descriptor.points[5]!, descriptor.points[6]!);
+      return cubicBezier(
+        descriptor.points[1]!,
+        descriptor.points[2]!,
+        descriptor.points[5]!,
+        descriptor.points[6]!,
+      );
   }
 }

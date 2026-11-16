@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { CINECODE_VERSION } from "../version.js";
 import { createStillCommand } from "./still.js";
 import { createMediaListCommand } from "./media-list.js";
 import { createRenderCommand } from "./render.js";
@@ -34,15 +35,18 @@ import { createAliasCommand } from "./alias.js";
 import { createInitCommand } from "./wizard.js";
 import { createMigrateCommand } from "./migrate.js";
 import { createCheckIgnoreCommand } from "./check-ignore.js";
+import { createPublishCommand } from "./publish.js";
 import { createProbeCommand } from "./uptime-probe.js";
 import { expandCliArgs } from "./profiles.js";
+import { setJsonMode } from "../observability/logger.js";
 
 const program = new Command()
   .name("cinecode")
   .description("Code-first 2D animation engine and video generation framework")
-  .version("0.0.0")
+  .version(CINECODE_VERSION)
   .option("--verbose", "Verbose output", false)
   .option("--no-color", "Disable colored output", false)
+  .option("--json", "Emit NDJSON structured logs", false)
   .addCommand(createStillCommand())
   .addCommand(createMediaListCommand())
   .addCommand(createRenderCommand())
@@ -78,25 +82,28 @@ const program = new Command()
   .addCommand(createInitCommand())
   .addCommand(createMigrateCommand())
   .addCommand(createCheckIgnoreCommand())
+  .addCommand(createPublishCommand())
   .addCommand(createProbeCommand());
 
 program
   .command("version")
   .description("Show the Cinecode version")
   .action(() => {
-    console.log("0.0.0");
+    console.log(CINECODE_VERSION);
   });
 
 program
   .command("license")
   .description("Show license information")
   .action(() => {
-    console.log("Cinecode is MIT licensed.\n\nCopyright (c) Cinecode contributors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the \"Software\"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.");
+    console.log(
+      'Cinecode is MIT licensed.\n\nCopyright (c) Cinecode contributors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.',
+    );
   });
 
 program.on("command:*", () => {
   const unknown = program.args[0] ?? "";
-  const commands = program.commands.map(c => c.name());
+  const commands = program.commands.map((c) => c.name());
   let suggestion = "";
   let bestDist = Infinity;
   for (const cmd of commands) {
@@ -115,7 +122,9 @@ program.on("command:*", () => {
 });
 
 function levenshtein(a: string, b: string): number {
-  const matrix: number[][] = Array.from({ length: b.length + 1 }, (_, i) => Array.from({ length: a.length + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0)));
+  const matrix: number[][] = Array.from({ length: b.length + 1 }, (_, i) =>
+    Array.from({ length: a.length + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0)),
+  );
   for (let i = 1; i <= b.length; i++) {
     for (let j = 1; j <= a.length; j++) {
       const prevDiag = matrix[i - 1]?.[j - 1] ?? 0;
@@ -132,17 +141,23 @@ const userArgs = process.argv.slice(2);
 const expandedArgs = expandCliArgs(userArgs);
 const effectiveArgv = [process.argv[0] ?? "node", process.argv[1] ?? "cinecode", ...expandedArgs];
 
+if (expandedArgs.includes("--json")) {
+  setJsonMode(true);
+}
+
 program.parseAsync(effectiveArgv).catch(async (err) => {
-  const { formatError, isCinecodeError } = await import("../errors/index.js");
+  const { isCinecodeError } = await import("../errors/index.js");
   const { formatDiagnostic } = await import("./diagnostics.js");
   if (isCinecodeError(err)) {
-    console.error(formatDiagnostic({
-      code: err.code || "CC9999",
-      message: err.message,
-      fixHint: err.fixHint,
-      severity: err.severity,
-      noColor: program.opts().color === false,
-    }));
+    console.error(
+      formatDiagnostic({
+        code: err.code || "CC9999",
+        message: err.message,
+        fixHint: err.fixHint,
+        severity: err.severity,
+        noColor: program.opts().color === false,
+      }),
+    );
   } else {
     console.error(err instanceof Error ? err.message : String(err));
   }

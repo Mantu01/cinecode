@@ -2,8 +2,16 @@ import { parentPort, workerData } from "node:worker_threads";
 import { Canvas } from "@napi-rs/canvas";
 import { join } from "node:path";
 import type { Composition } from "../core/types/index.js";
-import { renderFrame, primeVideoFramesForRange, setMediaCacheForRenderer } from "../renderer/engine.js";
+import {
+  renderFrame,
+  primeVideoFramesForRange,
+  setMediaCacheForRenderer,
+  videoFrameRefsFor,
+  hasVideoFrameCached,
+  storeRemoteVideoFrame,
+} from "../renderer/engine.js";
 import { createMediaCache } from "../media/cache.js";
+import { createCacheClient } from "./cache-channel.js";
 
 export type FrameErrorPolicy = "placeholder" | "repeat-previous" | "abort";
 
@@ -77,7 +85,11 @@ function extractClipReference(message: string): string | undefined {
   return match?.[1];
 }
 
-function isCircuitBroken(failures: number, consecutiveFailures: number, totalFrames: number): boolean {
+function isCircuitBroken(
+  failures: number,
+  consecutiveFailures: number,
+  totalFrames: number,
+): boolean {
   if (consecutiveFailures > MAX_CONSECUTIVE_FAILURES) return true;
   if (totalFrames === 0) return false;
   return failures / totalFrames > MAX_FAILURE_RATIO;
@@ -95,6 +107,36 @@ function ensureMediaCache(cacheDir: string): Promise<void> {
   return ready;
 }
 
+async function fetchRemoteFrames(
+  composition: Composition,
+  frames: readonly number[],
+): Promise<void> {
+  const cacheClient = parentPort ? createCacheClient(parentPort) : null;
+  if (!cacheClient) return;
+  const refs = await videoFrameRefsFor(composition, frames);
+  const misses = refs.filter((ref) => !hasVideoFrameCached(ref.src, ref.sourceFrame));
+  for (const ref of misses) {
+    const response = await cacheClient.request(`video:${ref.src}@${ref.sourceFrame}`);
+    if (!response.hit || !response.data) continue;
+    const payload = JSON.parse(response.data.toString("utf8")) as {
+      buffer: string;
+      width: number;
+      height: number;
+      format: "rgba" | "rgb24";
+    };
+    storeRemoteVideoFrame(
+      ref.src,
+      {
+        buffer: Buffer.from(payload.buffer, "base64"),
+        width: payload.width,
+        height: payload.height,
+        format: payload.format,
+      },
+      ref.sourceFrame,
+    );
+  }
+}
+
 async function processFrames(
   composition: Composition,
   seed: number,
@@ -109,6 +151,7 @@ async function processFrames(
   let previousBuffer: Buffer | null = null;
 
   await primeVideoFramesForRange(composition, frames);
+  await fetchRemoteFrames(composition, frames);
 
   for (const frame of frames) {
     try {
@@ -127,14 +170,16 @@ async function processFrames(
       };
       failures.push(failure);
       consecutiveFailures += 1;
-      console.error(JSON.stringify({
-        level: "error",
-        stage: "frame-render",
-        frame,
-        timecodeSeconds: failure.timecode,
-        clip: failure.clip,
-        message: failure.message,
-      }));
+      console.error(
+        JSON.stringify({
+          level: "error",
+          stage: "frame-render",
+          frame,
+          timecodeSeconds: failure.timecode,
+          clip: failure.clip,
+          message: failure.message,
+        }),
+      );
 
       if (policy === "abort") {
         return {
@@ -161,7 +206,10 @@ async function processFrames(
         continue;
       }
 
-      results.push({ index: frame, buffer: placeholderBuffer(frameWidth, frameHeight, failure.message) });
+      results.push({
+        index: frame,
+        buffer: placeholderBuffer(frameWidth, frameHeight, failure.message),
+      });
     }
   }
 
@@ -173,7 +221,11 @@ async function processFrames(
 }
 
 function formatDiagnostics(failures: readonly FrameFailure[], total: number): string {
-  const head = failures.slice(0, 8).map((failure) => `frame ${failure.frame} (${failure.timecode.toFixed(3)}s): ${failure.message}`);
+  const head = failures
+    .slice(0, 8)
+    .map(
+      (failure) => `frame ${failure.frame} (${failure.timecode.toFixed(3)}s): ${failure.message}`,
+    );
   return [
     `failed frames: ${failures.length}/${total}`,
     ...head,
@@ -196,6 +248,7 @@ const frameWidth = startup.frameWidth ?? composition.width;
 const frameHeight = startup.frameHeight ?? composition.height;
 
 parentPort!.on("message", (msg: ChunkInput) => {
+  if ((msg as { type?: string }).type === "cache-response") return;
   ensureMediaCache(cacheDir)
     .then(() => processFrames(composition, seed, msg.frames, policy, frameWidth, frameHeight))
     .then((output) => {

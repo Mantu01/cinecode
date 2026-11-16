@@ -12,14 +12,22 @@ export interface ChartRenderOptions {
   readonly labelColor?: string;
 }
 
-export function drawChart(ctx: SKRSContext2D, layout: ChartLayout, options: ChartRenderOptions = {}): void {
+export function drawChart(
+  ctx: SKRSContext2D,
+  layout: ChartLayout,
+  options: ChartRenderOptions = {},
+): void {
   drawAxesAndGrid(ctx, layout, options);
   if (layout.type === "bar") drawBarChart(ctx, layout, options);
   else if (layout.type === "line") drawLineChart(ctx, layout, options);
   else drawScatterPlot(ctx, layout, options);
 }
 
-function drawAxesAndGrid(ctx: SKRSContext2D, layout: ChartLayout, options: ChartRenderOptions): void {
+function drawAxesAndGrid(
+  ctx: SKRSContext2D,
+  layout: ChartLayout,
+  options: ChartRenderOptions,
+): void {
   const { plotArea, zeroY } = layout;
   const gridColor = "rgba(128, 128, 128, 0.25)";
   const axisColor = "rgba(128, 128, 128, 0.6)";
@@ -55,6 +63,18 @@ function drawAxesAndGrid(ctx: SKRSContext2D, layout: ChartLayout, options: Chart
   }
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
+
+  const xTicks = layout.xTicks;
+  if (xTicks && options.showAxes !== false) {
+    ctx.fillStyle = options.labelColor ?? "rgba(160, 160, 160, 0.9)";
+    ctx.font = "10px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    for (const tick of xTicks) {
+      const x = plotArea.x + tick.position * plotArea.width;
+      ctx.fillText(formatTickLabel(tick.value), x, plotArea.y + plotArea.height + 4);
+    }
+  }
 }
 
 function formatTickLabel(value: number): string {
@@ -62,7 +82,11 @@ function formatTickLabel(value: number): string {
   return String(Math.round(value * 100) / 100);
 }
 
-export function drawBarChart(ctx: SKRSContext2D, layout: BarChartLayout, options: ChartRenderOptions = {}): void {
+export function drawBarChart(
+  ctx: SKRSContext2D,
+  layout: BarChartLayout,
+  options: ChartRenderOptions = {},
+): void {
   for (let i = 0; i < layout.bars.length; i += 1) {
     const bar = layout.bars[i]!;
     if (bar.height <= 0) continue;
@@ -73,7 +97,11 @@ export function drawBarChart(ctx: SKRSContext2D, layout: BarChartLayout, options
       ctx.textAlign = "center";
       ctx.textBaseline = bar.y < layout.zeroY ? "bottom" : "top";
       ctx.font = "11px sans-serif";
-      ctx.fillText(formatTickLabel(bar.value), bar.x + bar.width / 2, bar.y < layout.zeroY ? bar.y - 2 : bar.y + bar.height + 2);
+      ctx.fillText(
+        formatTickLabel(bar.value),
+        bar.x + bar.width / 2,
+        bar.y < layout.zeroY ? bar.y - 2 : bar.y + bar.height + 2,
+      );
     }
     ctx.fillStyle = options.labelColor ?? "rgba(160, 160, 160, 0.9)";
     ctx.textBaseline = "top";
@@ -82,7 +110,11 @@ export function drawBarChart(ctx: SKRSContext2D, layout: BarChartLayout, options
   }
 }
 
-export function drawLineChart(ctx: SKRSContext2D, layout: LineChartLayout, options: ChartRenderOptions = {}): void {
+export function drawLineChart(
+  ctx: SKRSContext2D,
+  layout: LineChartLayout,
+  options: ChartRenderOptions = {},
+): void {
   const points = layout.points;
   if (points.length === 0) return;
   if (points.length > 1) {
@@ -104,11 +136,21 @@ export function drawLineChart(ctx: SKRSContext2D, layout: LineChartLayout, optio
   }
 }
 
-export function drawScatterPlot(ctx: SKRSContext2D, layout: ScatterPlotLayout, options: ChartRenderOptions = {}): void {
+export function drawScatterPlot(
+  ctx: SKRSContext2D,
+  layout: ScatterPlotLayout,
+  options: ChartRenderOptions = {},
+): void {
   for (let i = 0; i < layout.points.length; i += 1) {
     const point = layout.points[i]!;
     ctx.beginPath();
-    ctx.arc(point.x, point.y, Math.max(1, options.pointRadius !== undefined ? options.pointRadius : point.radius), 0, Math.PI * 2);
+    ctx.arc(
+      point.x,
+      point.y,
+      Math.max(1, options.pointRadius !== undefined ? options.pointRadius : point.radius),
+      0,
+      Math.PI * 2,
+    );
     ctx.fillStyle = getColor(i, options.colors);
     ctx.fill();
   }

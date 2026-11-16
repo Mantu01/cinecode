@@ -44,3 +44,9 @@ spikes
 .cinecode
 example
 yt-videos
+.freebuff
+
+# Media and log artifacts
+*.log
+*.mp4
+*.webm

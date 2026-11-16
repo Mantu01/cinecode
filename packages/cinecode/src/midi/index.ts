@@ -15,4 +15,5 @@ export {
 export {
   parseMidiFile, loadMidiFile, midiEventsToKeyframes, MidiPlayback,
   type ParsedMidiEvent, type ParsedMidiFile, type MidiKeyframeOptions,
+  type MidiTransportSync,
 } from "./playback.js";

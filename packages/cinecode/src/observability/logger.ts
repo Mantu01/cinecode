@@ -102,3 +102,22 @@ export class StructuredLogger {
 }
 
 export const logger = new StructuredLogger();
+
+export interface StructuredLog {
+  ts: string;
+  level: LogLevel;
+  code?: string;
+  message: string;
+  durationMs?: number;
+}
+
+export function setJsonMode(enabled: boolean): void {
+  logger.setFormat(enabled ? "json" : "text");
+}
+
+export function log(level: LogLevel, message: string, meta?: Record<string, unknown>): void {
+  if (level === "error") logger.error("cli", message, meta);
+  else if (level === "warn") logger.warn("cli", message, meta);
+  else if (level === "debug") logger.debug("cli", message, meta);
+  else logger.info("cli", message, meta);
+}

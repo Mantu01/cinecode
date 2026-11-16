@@ -57,7 +57,8 @@ export const ErrorMessages: Record<ErrorCode, string> = {
   [ErrorCode.CC8001]: "Plugin load failed: {plugin}. {reason}",
   [ErrorCode.CC8002]: "Plugin validation failed: {plugin}. {reason}",
   [ErrorCode.CC8003]: "Plugin hook '{hook}' threw in {plugin}: {reason}. Other plugins continued.",
-  [ErrorCode.CC8004]: "Plugin dependency not satisfied: {plugin} requires {dependency} ({requirement}). {found}",
+  [ErrorCode.CC8004]:
+    "Plugin dependency not satisfied: {plugin} requires {dependency} ({requirement}). {found}",
 };
 
 export interface ErrorLocation {
@@ -77,47 +78,75 @@ export interface CinecodeError extends Error {
 
 /** Fix hints for every error code. Concrete, copy-pasteable remediation steps. */
 const FIX_HINTS: Partial<Record<ErrorCode, string>> = {
-  [ErrorCode.CC1001]: "Add the missing required field to your config. Run `cinecode doctor` to see all validation errors at once.",
+  [ErrorCode.CC1001]:
+    "Add the missing required field to your config. Run `cinecode doctor` to see all validation errors at once.",
   [ErrorCode.CC1002]: "Check your config keys against the schema: `cinecode validate --schema`.",
-  [ErrorCode.CC1003]: "Resolution must be even numbers and match a known preset. Use `1920x1080`, `1280x720`, `3840x2160`, or specify exact `width` and `height` values.",
-  [ErrorCode.CC1004]: "Upgrade your config: add `schemaVersion: 2` and move fields into `project/`, `video/`, `render/` blocks. See migration guide.",
-  [ErrorCode.CC2001]: "Verify the file exists at the resolved path. Run `cinecode media:list` to check media registration. Supported extensions: .mp4, .mov, .webm, .png, .jpg, .gif, .wav, .mp3, .ogg",
-  [ErrorCode.CC2002]: "Use a supported media format. Convert your file with ffmpeg: `ffmpeg -i input.{ext} output.mp4`",
-  [ErrorCode.CC2003]: "Verify the file is not corrupted: run `ffmpeg -i <file>` manually to inspect. Try re-exporting from your source application.",
-  [ErrorCode.CC3001]: "Clips on the same track cannot overlap. Adjust their start times or move one to a different track layer.",
-  [ErrorCode.CC3002]: "Clip duration must be positive. Set an explicit `duration` or use a non-empty media source.",
-  [ErrorCode.CC3003]: "Trim the clip to fit within the composition duration, or extend the composition with a longer timeline.",
-  [ErrorCode.CC3004]: "Sort keyframes by `atFrames` ascending. Use `sortKeyframes(keyframes)` from `cinecode/core/keyframes` or run `cinecode check --sort-keyframes`.",
-  [ErrorCode.CC3005]: "Replace `Math.random()` with seeded random: `import { random } from \"cinecode/core/random\"; const rng = random(seed);`",
-  [ErrorCode.CC3006]: "Install the font system-wide, embed it via `fontLoading: { strategy: \"embed\" }`, or use a fallback font with `fontFamilyFallback`.",
-  [ErrorCode.CC4001]: "Verify the source video is not corrupted. Run `cinecode inspect <file>` to check metadata. Update ffmpeg or re-export from source.",
-  [ErrorCode.CC4002]: "Try switching codec with `--codec h264`, reducing CRF, or checking that the output path is writable.",
-  [ErrorCode.CC4003]: "Render was cancelled by user or timeout. Check process signals and try again.",
-  [ErrorCode.CC5001]: "Check that the audio file format is supported and the sample rate matches the composition ({fps}fps → 48000Hz). Add `--audio-codec aac` if needed.",
-  [ErrorCode.CC5002]: "Verify the sound definition is valid — oscillators, envelope, and filter params must be within acceptable ranges.",
+  [ErrorCode.CC1003]:
+    "Resolution must be even numbers and match a known preset. Use `1920x1080`, `1280x720`, `3840x2160`, or specify exact `width` and `height` values.",
+  [ErrorCode.CC1004]:
+    "Upgrade your config: add `schemaVersion: 2` and move fields into `project/`, `video/`, `render/` blocks. See migration guide.",
+  [ErrorCode.CC2001]:
+    "Verify the file exists at the resolved path. Run `cinecode media:list` to check media registration. Supported extensions: .mp4, .mov, .webm, .png, .jpg, .gif, .wav, .mp3, .ogg",
+  [ErrorCode.CC2002]:
+    "Use a supported media format. Convert your file with ffmpeg: `ffmpeg -i input.{ext} output.mp4`",
+  [ErrorCode.CC2003]:
+    "Verify the file is not corrupted: run `ffmpeg -i <file>` manually to inspect. Try re-exporting from your source application.",
+  [ErrorCode.CC3001]:
+    "Clips on the same track cannot overlap. Adjust their start times or move one to a different track layer.",
+  [ErrorCode.CC3002]:
+    "Clip duration must be positive. Set an explicit `duration` or use a non-empty media source.",
+  [ErrorCode.CC3003]:
+    "Trim the clip to fit within the composition duration, or extend the composition with a longer timeline.",
+  [ErrorCode.CC3004]:
+    "Sort keyframes by `atFrames` ascending. Use `sortKeyframes(keyframes)` from `cinecode/core/keyframes` or run `cinecode check --sort-keyframes`.",
+  [ErrorCode.CC3005]:
+    'Replace `Math.random()` with seeded random: `import { random } from "cinecode/core/random"; const rng = random(seed);`',
+  [ErrorCode.CC3006]:
+    'Install the font system-wide, embed it via `fontLoading: { strategy: "embed" }`, or use a fallback font with `fontFamilyFallback`.',
+  [ErrorCode.CC4001]:
+    "Verify the source video is not corrupted. Run `cinecode inspect <file>` to check metadata. Update ffmpeg or re-export from source.",
+  [ErrorCode.CC4002]:
+    "Try switching codec with `--codec h264`, reducing CRF, or checking that the output path is writable.",
+  [ErrorCode.CC4003]:
+    "Render was cancelled by user or timeout. Check process signals and try again.",
+  [ErrorCode.CC5001]:
+    "Check that the audio file format is supported and the sample rate matches the composition ({fps}fps → 48000Hz). Add `--audio-codec aac` if needed.",
+  [ErrorCode.CC5002]:
+    "Verify the sound definition is valid — oscillators, envelope, and filter params must be within acceptable ranges.",
   [ErrorCode.CC6001]: "Only http:// and https:// schemes are supported for cloud media downloads.",
-  [ErrorCode.CC6002]: "Check network connectivity and retry. If persistent, download the file manually and reference locally.",
-  [ErrorCode.CC6003]: "Redownload the file. The cached copy may have been corrupted during transfer.",
+  [ErrorCode.CC6002]:
+    "Check network connectivity and retry. If persistent, download the file manually and reference locally.",
+  [ErrorCode.CC6003]:
+    "Redownload the file. The cached copy may have been corrupted during transfer.",
   [ErrorCode.CC7001]: "Upgrade Node.js to version 20 or later: `nvm install 20` then `nvm use 20`.",
   [ErrorCode.CC7002]: "Ensure ffmpeg is installed and in PATH. Run `cinecode doctor` to diagnose.",
-  [ErrorCode.CC7003]: "Create the output directory manually or run with elevated permissions: `mkdir -p <path>`",
-  [ErrorCode.CC8001]: "Check that the plugin exports a valid `register()` function and is compatible with this cinecode version.",
-  [ErrorCode.CC8002]: "Fix the plugin's manifest or configuration. Run `cinecode doctor` for details.",
-  [ErrorCode.CC8003]: "Inspect the plugin code for the thrown error. Other plugins will continue loading.",
+  [ErrorCode.CC7003]:
+    "Create the output directory manually or run with elevated permissions: `mkdir -p <path>`",
+  [ErrorCode.CC8001]:
+    "Check that the plugin exports a valid `register()` function and is compatible with this cinecode version.",
+  [ErrorCode.CC8002]:
+    "Fix the plugin's manifest or configuration. Run `cinecode doctor` for details.",
+  [ErrorCode.CC8003]:
+    "Inspect the plugin code for the thrown error. Other plugins will continue loading.",
   [ErrorCode.CC8004]: "Install the missing dependency matching the required version range.",
 };
 
 export function createError(
   code: ErrorCode,
   params: Record<string, string | number> = {},
-  options: { location?: ErrorLocation; fixHint?: string; severity?: "error" | "warning" } = {}
+  options: { location?: ErrorLocation; fixHint?: string; severity?: "error" | "warning" } = {},
 ): CinecodeError {
   let message = ErrorMessages[code] ?? "Unknown error";
   for (const [key, value] of Object.entries(params)) {
-    message = message.replace(new RegExp(`\\{${key}\\}`, "g"), String(value));
+    message = message.split(`{${key}}`).join(String(value).replace(/[{}]/g, "\\$&"));
   }
 
-  const error = new Error(message) as CinecodeError & { code: ErrorCode; location?: ErrorLocation; fixHint?: string; severity: "error" | "warning" };
+  const error = new Error(message) as CinecodeError & {
+    code: ErrorCode;
+    location?: ErrorLocation;
+    fixHint?: string;
+    severity: "error" | "warning";
+  };
   error.code = code;
   error.location = options.location;
   error.fixHint = options.fixHint ?? FIX_HINTS[code];
@@ -134,7 +163,8 @@ export function formatError(error: CinecodeError, verbose = false, color = true)
   const reset = color ? "\x1b[0m" : "";
   const bold = color ? "\x1b[1m" : "";
 
-  const severityBadge = error.severity === "error" ? `${red}✗ Error${reset}` : `${yellow}⚠ Warning${reset}`;
+  const severityBadge =
+    error.severity === "error" ? `${red}✗ Error${reset}` : `${yellow}⚠ Warning${reset}`;
   parts.push(`${severityBadge}: ${bold}[${error.code}]${reset} ${error.message}`);
 
   if (error.location) {
@@ -164,14 +194,14 @@ export function formatError(error: CinecodeError, verbose = false, color = true)
 export function categorizeError(code: string): string {
   const prefix = code.slice(0, 3);
   const map: Record<string, string> = {
-    "CC1": "config",
-    "CC2": "media",
-    "CC3": "authoring",
-    "CC4": "render",
-    "CC5": "audio",
-    "CC6": "plugin",
-    "CC7": "dev",
-    "CC8": "plugin",
+    CC1: "config",
+    CC2: "media",
+    CC3: "authoring",
+    CC4: "render",
+    CC5: "audio",
+    CC6: "plugin",
+    CC7: "dev",
+    CC8: "plugin",
   };
   return map[prefix] ?? "general";
 }
@@ -206,5 +236,7 @@ export function formatErrorReport(errors: CinecodeError[]): string {
 }
 
 export function isCinecodeError(error: unknown): error is CinecodeError {
-  return error instanceof Error && "code" in error && typeof (error as CinecodeError).code === "string";
+  return (
+    error instanceof Error && "code" in error && typeof (error as CinecodeError).code === "string"
+  );
 }

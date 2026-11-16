@@ -37,7 +37,10 @@ export interface SubtitleRenderStyle {
   readonly align: "left" | "center" | "right";
   readonly position: "bottom" | "top" | "custom";
   readonly customY?: number;
+  readonly crossfadeDuration: number;
 }
+
+const DEFAULT_CROSSFADE = 0.1;
 
 export function subtitleRenderStyle(
   clip: SubtitleClip,
@@ -54,6 +57,7 @@ export function subtitleRenderStyle(
     align: cueStyle?.align ?? "center",
     position: clip.position ?? "bottom",
     customY: clip.customY,
+    crossfadeDuration: Math.max(0, style.crossfadeDuration ?? DEFAULT_CROSSFADE),
   };
 }
 
@@ -65,10 +69,11 @@ export function renderSubtitle(
   currentTime: number,
   charReveal = false,
   yOffset = 0,
+  opacityOverride?: number,
 ): void {
   const display = computeSubtitleDisplay(entry, currentTime, charReveal);
   if (!display.visible) return;
-  const opacity = fadeOpacity(entry, currentTime);
+  const opacity = opacityOverride ?? fadeOpacity(entry, currentTime);
   if (opacity <= 0) return;
 
   const textStyle = buildTextStyle(entry, style, bounds.width);
@@ -149,14 +154,59 @@ export async function renderSubtitles(
       throw new Error(`Subtitle file "${clip.src}" could not be loaded: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     }
     const style = subtitleRenderStyle(clip, cueStyle);
-    const active: SubtitleEntry[] = [];
-    for (const entry of entries) {
-      if (computeSubtitleDisplay(entry, currentTime).visible) active.push(entry);
+    const pair = findCrossfadePair(entries, currentTime, style.crossfadeDuration);
+    if (pair) {
+      const { current, next, blend } = pair;
+      let stackOffset = 0;
+      if (currentTime < next.startTime) {
+        renderSubtitle(ctx, current, { width, height }, style, current.endTime - 1e-6, clip.charReveal === true, stackOffset, 1);
+      } else {
+        if (blend < 1) {
+          renderSubtitle(ctx, current, { width, height }, style, current.endTime - 1e-6, clip.charReveal === true, stackOffset, 1 - blend);
+          stackOffset += style.fontSize * 1.4;
+        }
+        renderSubtitle(ctx, next, { width, height }, style, currentTime, clip.charReveal === true, stackOffset, blend);
+      }
+      continue;
     }
     let stackOffset = 0;
-    for (const entry of active) {
+    for (const entry of entries) {
+      if (!computeSubtitleDisplay(entry, currentTime).visible) continue;
       renderSubtitle(ctx, entry, { width, height }, style, currentTime, clip.charReveal === true, stackOffset);
       stackOffset += style.fontSize * 1.4;
     }
   }
+}
+
+interface CrossfadePair {
+  readonly current: SubtitleEntry;
+  readonly next: SubtitleEntry;
+  readonly blend: number;
+}
+
+function findCrossfadePair(
+  entries: readonly SubtitleEntry[],
+  currentTime: number,
+  crossfade: number,
+): CrossfadePair | null {
+  if (crossfade <= 0) return null;
+  const current = entries.reduce<SubtitleEntry | null>(
+    (best, entry) => (entry.startTime <= currentTime && (best === null || entry.startTime > best.startTime) ? entry : best),
+    null,
+  );
+  if (!current) return null;
+  const next = entries.reduce<SubtitleEntry | null>(
+    (best, entry) =>
+      entry !== current && entry.startTime >= current.endTime && (best === null || entry.startTime < best.startTime)
+        ? entry
+        : best,
+    null,
+  );
+  if (!next) return null;
+  const gap = next.startTime - current.endTime;
+  if (gap <= 0 || gap >= crossfade) return null;
+  if (currentTime < next.startTime) return { current, next, blend: 0 };
+  const blend = Math.max(0, Math.min(1, (currentTime - next.startTime) / crossfade));
+  if (blend >= 1) return null;
+  return { current, next, blend };
 }

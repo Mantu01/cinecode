@@ -101,12 +101,15 @@ export function timelineDurationSeconds(timeline: Timeline, fps: number): number
   return maxFrames > 0 ? maxFrames / fps : 0;
 }
 
-export function toSeconds(value: number | string | undefined): number | undefined {
+export function toSeconds(
+  value: number | string | undefined,
+  fps: number = 30,
+): number | undefined {
   if (value === undefined) return undefined;
   if (typeof value === "number") return value;
   if (value.includes(":")) {
     const [h = 0, m = 0, s = 0, f = 0] = value.split(":").map(Number);
-    return h * 3600 + m * 60 + s + f / 30;
+    return h * 3600 + m * 60 + s + f / fps;
   }
   const parsed = Number.parseFloat(value);
   return Number.isFinite(parsed) ? parsed : undefined;
@@ -152,11 +155,18 @@ async function resolveTimelineValue(raw: unknown, file: string): Promise<Timelin
     if (isTimeline(result)) return result;
     if (isComposition(result)) return result.rootTimeline;
     if (Array.isArray(result)) {
-      const clips = result.filter((item): item is object => !!item && typeof item === "object") as readonly object[];
-      return makeTimeline(clips.map((clip, i) => makeTrack(`default-${i}`, clip as never)), { name: `scene-${file}`, duration: 1 });
+      const clips = result.filter(
+        (item): item is object => !!item && typeof item === "object",
+      ) as readonly object[];
+      return makeTimeline(
+        clips.map((clip, i) => makeTrack(`default-${i}`, clip as never)),
+        { name: `scene-${file}`, duration: 1 },
+      );
     }
   }
-  throw new Error(`Module "${file}" does not export a timeline (expected defineTimeline/defineScene)`);
+  throw new Error(
+    `Module "${file}" does not export a timeline (expected defineTimeline/defineScene)`,
+  );
 }
 
 export interface ResolvedScene {
@@ -177,7 +187,8 @@ export async function resolveScene(
   }
   const raw = await loadModuleFile<unknown>(scene.file, rootDir, { fresh: true });
   const timeline = await resolveTimelineValue(raw, scene.file);
-  const explicit = toSeconds(scene.duration) ?? (isSceneDef(raw) ? toSeconds(raw.duration) : undefined);
+  const explicit =
+    toSeconds(scene.duration, fps) ?? (isSceneDef(raw) ? toSeconds(raw.duration, fps) : undefined);
   const duration = explicit ?? timelineDurationSeconds(timeline, fps);
   return { id: scene.id, name: scene.name ?? scene.id, timeline, duration };
 }
@@ -220,15 +231,12 @@ export async function assembleTimelineComposition(
     timeline = await assembleTimelineFromRefs(project, entry);
   }
 
-  const explicitDuration = toSeconds(entry.duration) ?? toSeconds(timeline.duration);
+  const explicitDuration = toSeconds(entry.duration, fps) ?? toSeconds(timeline.duration, fps);
   const resolvedDuration = explicitDuration ?? timelineDurationSeconds(timeline, fps);
 
   const audioTracks = await assembleAudioTracks(project, entry.audioRef, resolvedDuration || 1);
 
-  const allTracks: AnyTrack[] = [
-    ...timeline.tracks,
-    ...audioTracks,
-  ];
+  const allTracks: AnyTrack[] = [...timeline.tracks, ...audioTracks];
 
   return makeComposition({
     name: entry.id,
@@ -276,7 +284,9 @@ export async function resolveAudioBuffer(
   const sampleRate = entry.sampleRate ?? project.config.audio?.sampleRate ?? 48000;
   const channels = (entry.channels ?? project.config.audio?.channels ?? 2) as 1 | 2;
   const gain = entry.gain ?? 1;
-  const duration = toSeconds(entry.duration) ?? toSeconds(project.config.video?.defaultDuration) ?? 5;
+  const fps = project.config.video?.fps ?? 30;
+  const duration =
+    toSeconds(entry.duration, fps) ?? toSeconds(project.config.video?.defaultDuration, fps) ?? 5;
 
   if (entry.file) {
     const raw = await loadModuleFile<unknown>(entry.file, project.rootDir, { fresh: true });
@@ -294,7 +304,9 @@ export async function resolveAudioBuffer(
   if (entry.src) {
     const { decodeAudioFile } = await import("../audio/decode.js");
     const { createMediaCache } = await import("../media/cache.js");
-    const cache = createMediaCache(resolve(project.rootDir, project.config.cacheDir ?? ".cinecode/cache", "media"));
+    const cache = createMediaCache(
+      resolve(project.rootDir, project.config.cacheDir ?? ".cinecode/cache", "media"),
+    );
     await cache.initialize();
     const decoded = await decodeAudioFile(resolve(project.rootDir, entry.src), {
       cache,
@@ -309,7 +321,14 @@ export async function resolveAudioBuffer(
 
 async function evaluateAudio(
   raw: unknown,
-  context: { sampleRate: number; channels: 1 | 2; duration: number; gain: number; seed: number; id: string },
+  context: {
+    sampleRate: number;
+    channels: 1 | 2;
+    duration: number;
+    gain: number;
+    seed: number;
+    id: string;
+  },
 ): Promise<AudioBuffer | null> {
   if (!raw) return null;
   if (isAudioBuffer(raw)) return raw;
@@ -326,7 +345,12 @@ async function evaluateAudio(
 }
 
 function isAudioBuffer(value: unknown): value is AudioBuffer {
-  return !!value && typeof value === "object" && "data" in (value as object) && "sampleRate" in (value as object);
+  return (
+    !!value &&
+    typeof value === "object" &&
+    "data" in (value as object) &&
+    "sampleRate" in (value as object)
+  );
 }
 
 function renderSoundDef(def: { generate: (ctx: unknown, params: unknown) => void }): AudioBuffer {
@@ -372,7 +396,7 @@ async function assembleAudioTracks(
       continue;
     }
     const buffer = await resolveAudioBuffer(project, audioId);
-    clips.push({ type: "audio", src: "", buffer, start: 0, duration, volume } as unknown as AudioClip);
+    clips.push({ type: "audio", src: "", buffer, start: 0, duration, volume });
   }
 
   return clips.length > 0 ? [makeAudioTrack("timeline-audio", clips)] : [];
@@ -422,7 +446,8 @@ export async function resolveImageClip(
   imageId: string,
 ): Promise<ResolvedImage> {
   const entry = findEntry(project.manifest.images, imageId, "image");
-  const scaleFactor = (entry as { scaleFactor?: number }).scaleFactor ?? project.config.images?.scaleFactor ?? 1;
+  const scaleFactor =
+    (entry as { scaleFactor?: number }).scaleFactor ?? project.config.images?.scaleFactor ?? 1;
   const width = entry.width ?? project.config.video?.width ?? 1920;
   const height = entry.height ?? project.config.video?.height ?? 1080;
 
@@ -456,7 +481,10 @@ export async function resolveImageClip(
     width: scaledWidth,
     height: scaledHeight,
     clips: Array.isArray(build) ? build : [build as Clip],
-    background: (entry as { background?: string }).background ?? project.config.video?.background ?? "#000000",
+    background:
+      (entry as { background?: string }).background ??
+      project.config.video?.background ??
+      "#000000",
   };
 }
 

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { Composition } from "../core/types/index.js";
 import type { MemoryBudget } from "./memory.js";
 import { estimateChunkBytes, MemoryBudgetError, MemoryTracker } from "./memory.js";
+import { attachCacheChannel, type CacheProvider } from "./cache-channel.js";
 import type { FrameErrorPolicy, FrameFailure } from "./frame-worker.js";
 
 const WORKER_FILENAME = "frame-worker.js";
@@ -46,6 +47,8 @@ export interface WorkerManagerOptions {
   readonly memoryBudget?: MemoryBudget;
   readonly onMemoryWarning?: (usageBytes: number, budgetBytes: number) => void;
   readonly errorPolicy?: FrameErrorPolicy;
+  /** Main-thread cache provider for worker cache-miss requests. */
+  readonly cacheProvider?: CacheProvider;
 }
 
 /**
@@ -107,6 +110,7 @@ export class WorkerManager {
   private readonly frameWidth: number;
   private readonly frameHeight: number;
   private readonly errorPolicy: FrameErrorPolicy;
+  private readonly cacheProvider: CacheProvider;
 
   constructor(options: WorkerManagerOptions) {
     this.concurrency = options.concurrency;
@@ -118,20 +122,31 @@ export class WorkerManager {
     this.frameWidth = options.composition.width;
     this.frameHeight = options.composition.height;
     this.errorPolicy = options.errorPolicy ?? "placeholder";
+    this.cacheProvider = options.cacheProvider ?? (async () => undefined);
   }
 
   private checkMemory(chunk: FrameChunk): void {
     if (!this.memoryBudget) return;
     const bytes = estimateChunkBytes(chunk.frames.length, this.frameWidth, this.frameHeight);
     this.memoryTracker.trackAllocation(bytes);
-    const status = this.memoryTracker.checkBudget(this.memoryBudget);
+    const status = this.memoryTracker.checkBudget(this.effectiveBudget());
     if (status === "over-budget") {
+      const usage = this.memoryTracker.getUsage();
       this.memoryTracker.releaseAllocation(bytes);
-      throw new MemoryBudgetError(this.memoryTracker.getUsage(), this.memoryBudget.maxBytesPerChunk);
+      throw new MemoryBudgetError(usage, this.effectiveBudget().maxBytesPerChunk);
     }
     if (status === "warning" && !this.memoryTracker.hasWarned()) {
-      this.onMemoryWarning?.(this.memoryTracker.getUsage(), this.memoryBudget.maxBytesPerChunk);
+      this.onMemoryWarning?.(this.memoryTracker.getUsage(), this.effectiveBudget().maxBytesPerChunk);
     }
+  }
+
+  /**
+   * The tracker accumulates in-flight chunk estimates across all workers, so the
+   * per-chunk budget scales by concurrency to bound the pool's live allocations.
+   */
+  private effectiveBudget(): MemoryBudget {
+    const budget = this.memoryBudget as MemoryBudget;
+    return { ...budget, maxBytesPerChunk: budget.maxBytesPerChunk * this.concurrency };
   }
 
   private createWorker(): Worker {
@@ -143,7 +158,14 @@ export class WorkerManager {
         errorPolicy: this.errorPolicy,
         frameWidth: this.frameWidth,
         frameHeight: this.frameHeight,
-      } as { compositionJson: string; seed: number; cacheDir: string; errorPolicy: FrameErrorPolicy; frameWidth: number; frameHeight: number },
+      } as {
+        compositionJson: string;
+        seed: number;
+        cacheDir: string;
+        errorPolicy: FrameErrorPolicy;
+        frameWidth: number;
+        frameHeight: number;
+      },
     });
   }
 
@@ -152,12 +174,14 @@ export class WorkerManager {
     this.initialized = true;
     for (let i = 0; i < this.concurrency; i++) {
       const worker = this.createWorker();
+      attachCacheChannel(worker, this.cacheProvider);
       worker.on("message", (output: WorkerResult) => {
-        const active = this.activeWorkers.find(a => a.worker === worker);
+        if ((output as { type?: string }).type === "cache-request") return;
+        const active = this.activeWorkers.find((a) => a.worker === worker);
         if (active) active.resolve({ ...output, chunkIndex: active.chunkIndex });
       });
       worker.on("error", (error) => {
-        const activeIndex = this.activeWorkers.findIndex(a => a.worker === worker);
+        const activeIndex = this.activeWorkers.findIndex((a) => a.worker === worker);
         if (activeIndex >= 0) {
           const active = this.activeWorkers[activeIndex]!;
           this.activeWorkers.splice(activeIndex, 1);
@@ -165,7 +189,7 @@ export class WorkerManager {
         }
       });
       worker.on("exit", (code) => {
-        const activeIndex = this.activeWorkers.findIndex(a => a.worker === worker);
+        const activeIndex = this.activeWorkers.findIndex((a) => a.worker === worker);
         if (activeIndex >= 0) {
           const active = this.activeWorkers[activeIndex]!;
           this.activeWorkers.splice(activeIndex, 1);
@@ -182,7 +206,14 @@ export class WorkerManager {
       ? estimateChunkBytes(frames.length, this.frameWidth, this.frameHeight)
       : 0;
     const promise = new Promise<WorkerResult>((resolve, reject) => {
-      this.activeWorkers.push({ worker, promise: null as unknown as Promise<WorkerResult>, resolve, reject, chunkIndex: chunk.startFrame, estimatedBytes });
+      this.activeWorkers.push({
+        worker,
+        promise: null as unknown as Promise<WorkerResult>,
+        resolve,
+        reject,
+        chunkIndex: chunk.startFrame,
+        estimatedBytes,
+      });
       worker.postMessage({ frames });
     });
     const active = this.activeWorkers[this.activeWorkers.length - 1];
@@ -213,17 +244,20 @@ export class WorkerManager {
 
     while (this.activeWorkers.length > 0) {
       const raced = this.activeWorkers.map((a) =>
-        a.promise.then((value) => ({ promise: a.promise, value }))
+        a.promise.then((value) => ({ promise: a.promise, value })),
       );
       const winner = await Promise.race(raced);
       results.push(winner.value);
 
-      const completedIndex = this.activeWorkers.findIndex((a) => Object.is(a.promise, winner.promise));
+      const completedIndex = this.activeWorkers.findIndex((a) =>
+        Object.is(a.promise, winner.promise),
+      );
       let completedWorker: Worker | undefined;
       if (completedIndex >= 0) {
         const completed = this.activeWorkers[completedIndex]!;
         completedWorker = completed.worker;
-        if (completed.estimatedBytes > 0) this.memoryTracker.releaseAllocation(completed.estimatedBytes);
+        if (completed.estimatedBytes > 0)
+          this.memoryTracker.releaseAllocation(completed.estimatedBytes);
         this.activeWorkers.splice(completedIndex, 1);
       }
 
@@ -270,9 +304,8 @@ export function resolveChunkSize(composition: Composition, defaultChunkSize = 32
   for (const track of composition.rootTimeline.tracks) {
     if (track.kind === "audio") continue;
     for (const clip of track.clips) {
-      const duration = typeof clip.duration === "number"
-        ? clip.duration
-        : parseFloat(clip.duration as string);
+      const duration =
+        typeof clip.duration === "number" ? clip.duration : parseFloat(clip.duration as string);
       if (duration > 0) totalFrames += Math.ceil(duration * composition.fps);
     }
   }
@@ -287,8 +320,14 @@ function estimateComplexity(composition: Composition): number {
   for (const track of composition.rootTimeline.tracks) {
     if (track.kind === "audio") continue;
     for (const clip of track.clips) {
-      const typedClip = clip as { effects?: unknown[]; transitionIn?: boolean; transitionOut?: boolean; matte?: unknown; mask?: unknown };
-      complexity += (typedClip.effects?.length ?? 0);
+      const typedClip = clip as {
+        effects?: unknown[];
+        transitionIn?: boolean;
+        transitionOut?: boolean;
+        matte?: unknown;
+        mask?: unknown;
+      };
+      complexity += typedClip.effects?.length ?? 0;
       if (typedClip.transitionIn || typedClip.transitionOut) complexity += 0.5;
       if (typedClip.matte) complexity += 0.3;
       if (typedClip.mask) complexity += 0.2;

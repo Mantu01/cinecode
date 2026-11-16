@@ -14,7 +14,12 @@ export interface CanvasPoolEntry {
 }
 
 export interface CanvasAcquireOptions {
-  readonly dirty?: { readonly x: number; readonly y: number; readonly width: number; readonly height: number };
+  readonly dirty?: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+  };
 }
 
 export interface CanvasPool {
@@ -24,7 +29,10 @@ export interface CanvasPool {
   readonly size: number;
 }
 
-export function clearRegion(ctx: SKRSContext2D, region: { x: number; y: number; width: number; height: number }): void {
+export function clearRegion(
+  ctx: SKRSContext2D,
+  region: { x: number; y: number; width: number; height: number },
+): void {
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(region.x, region.y, region.width, region.height);
@@ -73,7 +81,15 @@ export function createCanvasPool(maxPerSize = 4): CanvasPool {
       return total;
     },
   };
+
   return pool;
+}
+
+export function evictOldest<K, V>(map: Map<K, V>, maxSize: number): void {
+  if (map.size >= maxSize) {
+    const firstKey = map.keys().next().value;
+    if (firstKey !== undefined) map.delete(firstKey);
+  }
 }
 
 export interface BufferPool {
