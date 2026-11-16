@@ -1,6 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
-import { resolve, extname, isAbsolute } from "node:path";
+import { resolve, extname, isAbsolute, dirname } from "node:path";
 import type {
   AspectRatio,
   CinecodeConfig,
@@ -17,9 +16,11 @@ import {
   substituteEnvVarsDeep,
 } from "./envsubst.js";
 import { mergeConfigInheritance } from "./inherit.js";
+import { isUserModuleFile, loadUserModule } from "../loader/index.js";
 
 export interface LoadConfigOptions {
   readonly configPath?: string;
+  readonly fresh?: boolean;
 }
 
 export const DEFAULT_PROJECT: ProjectConfig = {
@@ -105,16 +106,15 @@ const DEFAULT_CONFIG: Required<CinecodeConfig> = {
 
 export const SCHEMA_VERSION = 2;
 
-export async function loadConfig(configPath: string): Promise<CinecodeConfig> {
+export async function loadConfig(configPath: string, options: LoadConfigOptions = {}): Promise<CinecodeConfig> {
   const resolvedPath = resolve(configPath);
   const ext = extname(resolvedPath).toLowerCase();
 
   let rawConfig: Record<string, unknown>;
 
   try {
-    if (ext === ".js" || ext === ".mjs" || ext === ".cjs" || ext === ".ts" || ext === ".mts") {
-      const module = await import(pathToFileURL(resolvedPath).href);
-      rawConfig = (module.default ?? module) as Record<string, unknown>;
+    if (isUserModuleFile(resolvedPath)) {
+      rawConfig = await loadUserModule<Record<string, unknown>>(resolvedPath, dirname(resolvedPath), { fresh: options.fresh });
     } else if (ext === ".json") {
       const rawText = readFileSync(resolvedPath, "utf-8");
       assertEnvVarsPresent(findMissingEnvVars(rawText));

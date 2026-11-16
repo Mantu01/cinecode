@@ -12,6 +12,7 @@ import { checkGitignoreEntries, ensureGitignoreEntries } from "../config/gitigno
 import { createMediaResolver } from "../media/resolver.js";
 import { createMediaCache } from "../media/cache.js";
 import { renderVideo, type RenderOptions } from "../pipeline/index.js";
+import { checkRuntime } from "../loader/index.js";
 
 interface DoctorCheck {
   name: string;
@@ -21,12 +22,23 @@ interface DoctorCheck {
 }
 
 async function checkNodeVersion(): Promise<DoctorCheck> {
-  const version = process.version;
-  const major = parseInt(version.slice(1).split(".")[0] ?? "0", 10);
-  if (major >= 20) {
-    return { name: "Node version", status: "PASS", message: `Node.js ${version} (>= 20 required)` };
-  }
-  return { name: "Node version", status: "FAIL", message: `Node.js ${version} is not supported. Minimum required: 20`, fixable: false };
+  const runtime = checkRuntime();
+  return {
+    name: "Node version",
+    status: runtime.supported ? "PASS" : "FAIL",
+    message: `Node.js ${runtime.version} (required ${runtime.minimum})`,
+    fixable: false,
+  };
+}
+
+async function checkAuthoringContract(): Promise<DoctorCheck> {
+  const runtime = checkRuntime();
+  return {
+    name: "Authoring contract",
+    status: runtime.supported ? "PASS" : "WARN",
+    message: `${runtime.loaderMode}: ${runtime.authoringContract}`,
+    fixable: false,
+  };
 }
 
 async function checkPlatform(): Promise<DoctorCheck> {
@@ -234,6 +246,7 @@ export async function doctorCommand(options: { config?: string; fix?: boolean; j
 
   const checks = await Promise.all([
     checkNodeVersion(),
+    checkAuthoringContract(),
     checkPlatform(),
     checkRenderer(),
     checkEncoder(),

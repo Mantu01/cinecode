@@ -1,9 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, resolve, isAbsolute, extname } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, resolve, isAbsolute } from "node:path";
 import type { CinecodeConfig, Composition } from "../core/types/index.js";
 import { normalizeConfig } from "./schema.js";
 import { substituteEnvVars, substituteEnvVarsDeep } from "./envsubst.js";
+import { hotReloadEnabled, isUserModuleFile, loadUserModule } from "../loader/index.js";
 
 const BASE_CONFIG_FILES = ["cinecode.base.json", "cinecode.base.ts", "cinecode.base.js", "cinecode.base.mjs", ".cinecode.base.json"];
 
@@ -32,10 +32,9 @@ export function deepMergeConfig(base: RawRecord, override: RawRecord): RawRecord
 }
 
 async function readRawConfig(configPath: string): Promise<RawRecord> {
-  const ext = extname(configPath).toLowerCase();
-  if (ext === ".ts" || ext === ".js" || ext === ".mjs" || ext === ".cjs" || ext === ".mts") {
-    const module = await import(pathToFileURL(configPath).href);
-    return ((module.default ?? module) ?? {}) as RawRecord;
+  if (isUserModuleFile(configPath)) {
+    const module = await loadUserModule<RawRecord>(configPath, dirname(configPath), { fresh: hotReloadEnabled() });
+    return module ?? {};
   }
   const text = substituteEnvVars(readFileSync(configPath, "utf-8"));
   return JSON.parse(text) as RawRecord;
@@ -54,7 +53,7 @@ function findBaseConfig(startDir: string): string | null {
   }
 }
 
-function resolveExtendsField(configPath: string, raw: RawRecord, chain: string[], visited: Set<string>): RawRecord {
+async function resolveExtendsField(configPath: string, raw: RawRecord, chain: string[], visited: Set<string>): Promise<RawRecord> {
   const extendsPath = raw.extends;
   if (typeof extendsPath !== "string" || extendsPath.length === 0) return raw;
   const target = isAbsolute(extendsPath) ? extendsPath : resolve(dirname(configPath), extendsPath);
@@ -65,27 +64,10 @@ function resolveExtendsField(configPath: string, raw: RawRecord, chain: string[]
     throw new Error(`Circular config inheritance detected: ${target}`);
   }
   visited.add(target);
-  const parentRaw = substituteEnvVarsDeep(readRawConfigSync(target));
-  const resolvedParent = resolveExtendsField(target, parentRaw, chain, visited);
+  const parentRaw = substituteEnvVarsDeep(await readRawConfig(target));
+  const resolvedParent = await resolveExtendsField(target, parentRaw, chain, visited);
   chain.push(target);
   return deepMergeConfig(resolvedParent, raw);
-}
-
-function readRawConfigSync(configPath: string): RawRecord {
-  const ext = extname(configPath).toLowerCase();
-  if (ext === ".ts" || ext === ".js" || ext === ".mjs" || ext === ".cjs" || ext === ".mts") {
-    throw new Error(`Async config "${configPath}" cannot participate in extends chains loaded synchronously`);
-  }
-  const text = substituteEnvVars(readFileSync(configPath, "utf-8"));
-  return JSON.parse(text) as RawRecord;
-}
-
-function extnameSync(path: string): string {
-  let name = path;
-  const slash = Math.max(name.lastIndexOf("/"), name.lastIndexOf("\\"));
-  if (slash >= 0) name = name.slice(slash + 1);
-  const dot = name.lastIndexOf(".");
-  return dot > 0 ? name.slice(dot) : "";
 }
 
 export async function resolveConfigChain(configPath: string, baseDirs: readonly string[] = []): Promise<CinecodeConfig> {
@@ -104,15 +86,14 @@ export async function mergeConfigInheritance(
   const visited = new Set<string>([resolve(configPath)]);
 
   if (typeof raw.extends === "string" && raw.extends.length > 0) {
-    merged = resolveExtendsField(resolve(configPath), raw, chain, visited);
+    merged = await resolveExtendsField(resolve(configPath), raw, chain, visited);
   } else {
     for (const dir of baseDirs.map((entry) => resolve(entry))) {
       const baseFile = findBaseConfig(dir);
       if (baseFile && !visited.has(baseFile)) {
         visited.add(baseFile);
         chain.push(baseFile);
-        const baseRaw = substituteEnvVarsDeep(readRawConfigSync(baseFile));
-        merged = deepMergeConfig(baseRaw, merged);
+        merged = deepMergeConfig(substituteEnvVarsDeep(await readRawConfig(baseFile)), merged);
       }
     }
     let currentDir = dirname(resolve(configPath));
@@ -122,8 +103,7 @@ export async function mergeConfigInheritance(
       if (baseFile && !visited.has(baseFile)) {
         visited.add(baseFile);
         chain.push(baseFile);
-        const baseRaw = substituteEnvVarsDeep(readRawConfigSync(baseFile));
-        merged = deepMergeConfig(baseRaw, merged);
+        merged = deepMergeConfig(substituteEnvVarsDeep(await readRawConfig(baseFile)), merged);
       }
     }
   }

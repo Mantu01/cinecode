@@ -6,6 +6,7 @@ import { loadConfig } from "../config/schema.js";
 import { loadManifestProject } from "../manifest/index.js";
 import { DevServer } from "../dev/index.js";
 import { startMetricsServer, type MetricsServerHandle } from "../observability/metrics-server.js";
+import { setHotReload } from "../loader/index.js";
 
 export interface DevCliOptions {
   config?: string;
@@ -29,8 +30,9 @@ function openBrowser(url: string): void {
 }
 
 export async function devCommand(options: DevCliOptions): Promise<void> {
+  setHotReload(true);
   const configPath = options.config ?? "cinecode.config.js";
-  const config = await loadConfig(resolve(configPath));
+  const config = await loadConfig(resolve(configPath), { fresh: true });
   const project = await loadManifestProject(config, process.cwd());
 
   const port = options.port ?? config.dev?.port ?? 3000;

@@ -246,6 +246,20 @@ record("scaffolded project pins a registry range", () => {
   return dependency;
 });
 
+record("scaffolded templates load", () => {
+  const target = path.join(workDir, "scaffolded");
+  const manifestPath = path.join(target, "package.json");
+  const scaffoldManifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  scaffoldManifest.dependencies.cinecode = framework.tarball;
+  writeFileSync(manifestPath, JSON.stringify(scaffoldManifest, null, 2));
+  const install = npm(["install", "--no-package-lock"], target, cacheDir);
+  assert(install.status === 0, `scaffolded install failed: ${(install.stderr || install.stdout).trim().slice(0, 300)}`);
+  const plan = shell(binPath(target, "cinecode"), ["render", "--dry-run", "--props", "./cinecode.config.ts"], { cwd: target });
+  assert(plan.status === 0, `scaffolded render plan failed: ${(plan.stderr || plan.stdout).trim().slice(0, 400)}`);
+  assert(plan.stdout.includes("main"), `render plan did not list the template timeline: ${plan.stdout.trim().slice(0, 200)}`);
+  return "config, manifest and scene modules loaded";
+});
+
 rmSync(workDir, { recursive: true, force: true });
 
 const failed = results.filter((result) => !result.ok);

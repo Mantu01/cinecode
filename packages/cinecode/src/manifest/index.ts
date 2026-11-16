@@ -20,6 +20,7 @@ import {
 import { createConversion } from "../core/time/index.js";
 import { computeClipSpan } from "../core/validation/index.js";
 import { loadModuleFile, resolveEntryFile } from "./loader.js";
+import { hotReloadEnabled } from "../loader/index.js";
 
 export interface ManifestProject {
   readonly rootDir: string;
@@ -68,7 +69,7 @@ export async function loadManifestProject(
   if (!existsSync(entryPath)) {
     return { rootDir, entryPath, config, manifest: normalizeManifest({}), hasManifest: false };
   }
-  const raw = await loadModuleFile<MainManifest>(entry, rootDir, { fresh: true });
+  const raw = await loadModuleFile<MainManifest>(entry, rootDir, { fresh: hotReloadEnabled() });
   return { rootDir, entryPath, config, manifest: normalizeManifest(raw), hasManifest: true };
 }
 
@@ -185,7 +186,7 @@ export async function resolveScene(
   if (!scene.file) {
     throw new Error(`Scene "${scene.id}" has no "file" to load`);
   }
-  const raw = await loadModuleFile<unknown>(scene.file, rootDir, { fresh: true });
+  const raw = await loadModuleFile<unknown>(scene.file, rootDir, { fresh: hotReloadEnabled() });
   const timeline = await resolveTimelineValue(raw, scene.file);
   const explicit =
     toSeconds(scene.duration, fps) ?? (isSceneDef(raw) ? toSeconds(raw.duration, fps) : undefined);
@@ -222,7 +223,7 @@ export async function assembleTimelineComposition(
 
   let timeline: Timeline;
   if (entry.file) {
-    const raw = await loadModuleFile<unknown>(entry.file, rootDir, { fresh: true });
+    const raw = await loadModuleFile<unknown>(entry.file, rootDir, { fresh: hotReloadEnabled() });
     if (isComposition(raw)) {
       return { ...raw, name: raw.name ?? entry.id };
     }
@@ -289,7 +290,7 @@ export async function resolveAudioBuffer(
     toSeconds(entry.duration, fps) ?? toSeconds(project.config.video?.defaultDuration, fps) ?? 5;
 
   if (entry.file) {
-    const raw = await loadModuleFile<unknown>(entry.file, project.rootDir, { fresh: true });
+    const raw = await loadModuleFile<unknown>(entry.file, project.rootDir, { fresh: hotReloadEnabled() });
     const built = await evaluateAudio(raw, {
       sampleRate,
       channels,
@@ -454,7 +455,7 @@ export async function resolveImageClip(
   if (!entry.file) {
     throw new Error(`Image "${imageId}" has no "file" to load`);
   }
-  const raw = await loadModuleFile<unknown>(entry.file, project.rootDir, { fresh: true });
+  const raw = await loadModuleFile<unknown>(entry.file, project.rootDir, { fresh: hotReloadEnabled() });
   const scaledWidth = Math.round(width * scaleFactor);
   const scaledHeight = Math.round(height * scaleFactor);
 

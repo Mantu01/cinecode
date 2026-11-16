@@ -1,7 +1,7 @@
-import { pathToFileURL } from "node:url";
 import { Command } from "commander";
 import { writeFileSync, readFileSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { resolve, join, dirname } from "node:path";
+import { isUserModuleFile, loadUserModuleNamespace } from "../loader/index.js";
 import type { Composition } from "../core/types/index.js";
 import { renderStill } from "../renderer/engine.js";
 
@@ -29,16 +29,15 @@ export function parseTimeInput(input: string, fps: number): number {
 }
 
 export async function loadComposition(file: string, _compositionName?: string): Promise<Composition[]> {
-  const ext = file.split(".").pop()?.toLowerCase();
-  if (ext === "js" || ext === "mjs" || ext === "ts") {
-    const resolvedPath = resolve(file);
-    const fileUrl = pathToFileURL(resolvedPath).href;
-    const module = await import(fileUrl);
+  const resolvedPath = resolve(file);
+  if (isUserModuleFile(resolvedPath)) {
+    const module = await loadUserModuleNamespace<Record<string, unknown>>(resolvedPath, dirname(resolvedPath));
     const compositions = module.main ?? module.default ?? module;
     if (Array.isArray(compositions)) return compositions;
-    if (compositions && typeof compositions === "object") return [compositions];
+    if (compositions && typeof compositions === "object") return [compositions as Composition];
     throw new Error("Module must export a composition or array of compositions");
   }
+  const ext = file.split(".").pop()?.toLowerCase();
   if (ext === "json") {
     return JSON.parse(readFileSync(file, "utf-8"));
   }

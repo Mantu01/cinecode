@@ -29,6 +29,10 @@ if (readFileSync(schemaPath, "utf8") !== generatedSchema) {
 }
 
 const manifest = JSON.parse(readFileSync(path.join(pkg, "package.json"), "utf8"));
+const { MIN_NODE_VERSION } = await import(pathToFileURL(path.join(pkg, "src/loader/runtime.ts")).href);
+if (manifest.engines?.node !== `>=${MIN_NODE_VERSION}`) {
+  fail(`engines.node is ${manifest.engines?.node}, but the runtime support contract declares >=${MIN_NODE_VERSION}`);
+}
 
 execFileSync(
   process.execPath,

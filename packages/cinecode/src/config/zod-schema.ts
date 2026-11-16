@@ -73,7 +73,7 @@ export const RenderConfigSchema = z.object({
   crf: z.number().min(0).max(63).optional(),
   preset: z.string().optional(),
   hardwareAcceleration: z.enum(["auto", "off", "nvenc", "qsv", "videotoolbox", "vaapi"]).optional(),
-  concurrency: z.number().int().positive().optional(),
+  concurrency: z.union([z.number().int().positive(), z.literal("auto")]).optional(),
   chunkSize: z.number().int().positive().optional(),
 });
 
@@ -138,7 +138,7 @@ export const CinecodeConfigSchema = z.object({
   sourceDir: z.string().optional(),
   outputDir: z.string().optional(),
   cacheDir: z.string().optional(),
-  concurrency: z.number().int().positive().optional(),
+  concurrency: z.union([z.number().int().positive(), z.literal("auto")]).optional(),
   logLevel: z.enum(["debug", "info", "warn", "error"]).optional(),
   overwrite: z.boolean().optional(),
   gitignore: z.boolean().optional(),

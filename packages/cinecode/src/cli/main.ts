@@ -39,6 +39,13 @@ import { createPublishCommand } from "./publish.js";
 import { createProbeCommand } from "./uptime-probe.js";
 import { expandCliArgs } from "./profiles.js";
 import { setJsonMode } from "../observability/logger.js";
+import { checkRuntime, formatUnsupportedRuntime } from "../loader/index.js";
+
+const runtime = checkRuntime();
+if (!runtime.supported) {
+  console.error(formatUnsupportedRuntime(runtime));
+  process.exit(78);
+}
 
 const program = new Command()
   .name("cinecode")

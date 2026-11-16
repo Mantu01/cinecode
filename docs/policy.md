@@ -17,9 +17,27 @@ no `require` export condition. Consequences:
 ## Node support
 
 Minimum supported Node version: **22.18.0** (first release with native
-TypeScript type stripping enabled by default). The value lives in one place per
-manifest (`engines.node`) and is consumed by doctor, health, the install gate and
-the templates.
+TypeScript type stripping enabled by default). The declared value lives in
+`packages/cinecode/src/loader/runtime.ts` (`MIN_NODE_VERSION`); the build fails
+when `engines.node` disagrees, and doctor, health, the install gate and the
+templates all read the same range.
+
+## Authoring contract
+
+User modules (config, `extends` targets, manifest, scenes, timelines, plugins)
+load through one loader (`src/loader/index.ts`) with native type stripping.
+
+- Authoring surface: erasable TypeScript only. No `enum`, `namespace`,
+  parameter properties or decorators; Node cannot strip those and the loader
+  reports `USER_MODULE_UNSUPPORTED_SYNTAX` with the file and cause instead.
+- Relative imports must name the real file extension (`./theme.ts`, not
+  `./theme`). A missing extension fails with `USER_MODULE_IMPORT_NOT_FOUND`
+  naming the file, the unresolved specifier and the rule.
+- An unsupported Node version fails at startup with
+  `CINECODE_RUNTIME_UNSUPPORTED`, the required range, the actual version and an
+  install hint. It never degrades into a default config or an empty manifest.
+- Loading is cached once per process in production; the dev server reloads with
+a cache-busting key so an edited module and its transitive imports reload.
 
 ## Version ownership
 

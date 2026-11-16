@@ -4,6 +4,7 @@ import { statfs } from "node:fs/promises";
 import { cpus, totalmem } from "node:os";
 import { resolve } from "node:path";
 import ffmpegStatic from "@ffmpeg-installer/ffmpeg";
+import { checkRuntime } from "../loader/index.js";
 
 export interface FfmpegHealth {
   readonly version: string;
@@ -18,6 +19,7 @@ export interface NodeHealth {
   readonly version: string;
   readonly compatible: boolean;
   readonly minimum: string;
+  readonly loaderMode: string;
 }
 
 export interface WorkerHealth {
@@ -56,7 +58,7 @@ export interface SystemHealthReport {
   readonly issues: readonly string[];
 }
 
-const MINIMUM_NODE_MAJOR = 20;
+
 const NETWORK_PROBE_HOST = "https://registry.npmjs.org/-/ping";
 
 function runBinary(path: string, args: readonly string[], timeoutMs = 5000): Promise<string | null> {
@@ -106,11 +108,12 @@ async function probeFfmpeg(): Promise<FfmpegHealth> {
 }
 
 function probeNode(): NodeHealth {
-  const major = Number.parseInt(process.version.slice(1).split(".")[0] ?? "0", 10);
+  const runtime = checkRuntime();
   return {
-    version: process.version,
-    compatible: major >= MINIMUM_NODE_MAJOR,
-    minimum: `>= ${MINIMUM_NODE_MAJOR}`,
+    version: runtime.version,
+    compatible: runtime.supported,
+    minimum: runtime.minimum,
+    loaderMode: runtime.loaderMode,
   };
 }
 
@@ -195,7 +198,7 @@ function formatHealth(report: SystemHealthReport): string {
   lines.push("Cinecode health");
   lines.push("---------------");
   lines.push(`ffmpeg        ${report.ffmpeg.version} (h264=${report.ffmpeg.h264} hevc=${report.ffmpeg.hevc} av1=${report.ffmpeg.av1} vp9=${report.ffmpeg.vp9})`);
-  lines.push(`node          ${report.node.version} (${report.node.compatible ? "compatible" : "unsupported"})`);
+  lines.push(`node          ${report.node.version} (${report.node.compatible ? "compatible" : "unsupported"}, ${report.node.loaderMode})`);
   lines.push(`workers       ${report.workers.available} available (recommended ${report.workers.recommended})`);
   lines.push(`memory        ${report.workers.totalMemoryMb} MB total`);
   lines.push(`disk cache    ${report.diskSpace.cacheDir}`);
