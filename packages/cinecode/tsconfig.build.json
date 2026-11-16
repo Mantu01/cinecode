@@ -2,7 +2,7 @@
   "extends": "@repo/typescript-config/base",
   "compilerOptions": {
     "noEmit": false,
-    "outDir": "dist",
+    "outDir": "dist/esm",
     "rootDir": "src",
     "sourceMap": false,
     "declaration": true,

@@ -1,73 +1,49 @@
-import { execSync } from "node:child_process";
-import { spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { readFileSync, writeFileSync } from "node:fs";
+import {
+  assertPack,
+  assertTargets,
+  cleanDir,
+  fail,
+  declarationEntriesOf,
+  packFiles,
+  pruneDeclarations,
+  report,
+} from "../../../scripts/artifact.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pkg = path.resolve(here, "..");
+const dist = path.join(pkg, "dist");
+const startedAt = Date.now();
 
-rmSync(path.join(pkg, "dist"), { recursive: true, force: true });
+cleanDir(dist);
 
-const schemaResult = spawnSync(process.execPath, [path.join(here, "generate-schema.mjs")], { cwd: pkg, stdio: "inherit" });
-if (schemaResult.status !== 0) {
-  console.error("build: schema generation failed");
-  process.exit(schemaResult.status ?? 1);
+const schemaPath = path.join(pkg, "cinecode.schema.json");
+const { generateSchemaJson } = await import(pathToFileURL(path.join(pkg, "src/config/json-schema.ts")).href);
+const generatedSchema = generateSchemaJson();
+JSON.parse(generatedSchema);
+if (readFileSync(schemaPath, "utf8") !== generatedSchema) {
+  fail("cinecode.schema.json is stale; run pnpm generate:schema");
 }
 
-function emit(extraArgs, label) {
-  const tscCmd =
-    process.platform === "win32"
-      ? path.resolve(pkg, "..", "..", "node_modules", ".bin", "tsc.cmd")
-      : path.resolve(pkg, "..", "..", "node_modules", ".bin", "tsc");
-  try {
-    execSync(
-      `"${tscCmd}" -p "${path.join(pkg, "tsconfig.build.json")}" ${extraArgs.join(" ")}`,
-      { cwd: pkg, stdio: "inherit" },
-    );
-  } catch (err) {
-    console.error(`build: ${label} emit failed`);
-    process.exit(err.status ?? 1);
-  }
-}
+const manifest = JSON.parse(readFileSync(path.join(pkg, "package.json"), "utf8"));
 
-function renameCjs(dir) {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      renameCjs(full);
-      continue;
-    }
-    if (entry.name.endsWith(".js.map")) {
-      renameSync(full, full.replace(/\.js\.map$/, ".cjs.map"));
-    } else if (entry.name.endsWith(".js")) {
-      renameSync(full, full.replace(/\.js$/, ".cjs"));
-      if (entry.name.endsWith(".d.js") === false) {
-      }
-    }
-  }
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name.endsWith(".cjs.map")) {
-      const mapPath = path.join(dir, entry.name);
-      const map = JSON.parse(readFileSync(mapPath, "utf8"));
-      if (map.file) {
-        map.file = map.file.replace(/\.js$/, ".cjs");
-        writeFileSync(mapPath, JSON.stringify(map));
-      }
-    } else if (entry.name.endsWith(".cjs") && !entry.name.endsWith(".d.cjs")) {
-      const file = path.join(dir, entry.name);
-      const src = readFileSync(file, "utf8");
-      writeFileSync(file, src.replace(/\/\/# sourceMappingURL=(.*)\.js\.map/g, "//# sourceMappingURL=$1.cjs.map"));
-    }
-  }
-}
+execFileSync(
+  process.execPath,
+  [path.resolve(pkg, "..", "..", "node_modules", "typescript", "bin", "tsc"), "-p", "tsconfig.build.json"],
+  { cwd: pkg, stdio: "inherit" },
+);
 
-emit(["--module", "NodeNext", "--moduleResolution", "NodeNext", "--outDir", "dist/esm"], "esm");
-emit(["--module", "NodeNext", "--moduleResolution", "NodeNext", "--outDir", "dist/cjs"], "cjs");
-renameCjs(path.join(pkg, "dist", "cjs"));
-
-const binEntry = path.join(pkg, "dist", "esm", "cli", "main.js");
+const binEntry = path.join(dist, "esm", "cli", "main.js");
 const binSource = readFileSync(binEntry, "utf8");
-if (!binSource.startsWith("#!")) {
-  writeFileSync(binEntry, `#!/usr/bin/env node\n${binSource}`, "utf8");
-}
+if (!binSource.startsWith("#!")) writeFileSync(binEntry, `#!/usr/bin/env node\n${binSource}`, "utf8");
+if (!readFileSync(binEntry, "utf8").startsWith("#!/usr/bin/env node")) fail("cli entry is not executable as a script");
+
+pruneDeclarations(pkg, declarationEntriesOf(manifest));
+assertTargets(pkg, manifest);
+
+const pack = packFiles(pkg);
+assertPack(pkg, manifest, pack.files);
+report("build", startedAt, [dist], pack);

@@ -1,71 +1,42 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { readFileSync, readdirSync, renameSync, rmSync, writeFileSync, cpSync } from "node:fs";
-import { createRequire } from "node:module";
+import { cpSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  assertPack,
+  assertTargets,
+  cleanDir,
+  declarationEntriesOf,
+  fail,
+  packFiles,
+  pruneDeclarations,
+  report,
+} from "../../../scripts/artifact.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pkg = path.resolve(here, "..");
+const dist = path.join(pkg, "dist");
+const startedAt = Date.now();
 
-rmSync(path.join(pkg, "dist"), { recursive: true, force: true });
+cleanDir(dist);
 
-function emit(extraArgs, label) {
-  const tscBin = createRequire(path.join(pkg, "package.json")).resolve("typescript/bin/tsc");
-  const result = spawnSync(process.execPath, [tscBin, "-p", "tsconfig.build.json", ...extraArgs], {
-    cwd: pkg,
-    stdio: "inherit",
-    shell: false,
-  });
-  if (result.status !== 0) {
-    console.error(`build: ${label} emit failed`);
-    process.exit(result.status ?? 1);
-  }
-}
+execFileSync(
+  process.execPath,
+  [path.resolve(pkg, "..", "..", "node_modules", "typescript", "bin", "tsc"), "-p", "tsconfig.build.json"],
+  { cwd: pkg, stdio: "inherit" },
+);
 
-function renameCjs(dir) {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      renameCjs(full);
-      continue;
-    }
-    if (entry.name.endsWith(".js.map")) {
-      renameSync(full, full.replace(/\.js\.map$/, ".cjs.map"));
-    } else if (entry.name.endsWith(".js")) {
-      renameSync(full, full.replace(/\.js$/, ".cjs"));
-    }
-  }
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name.endsWith(".cjs.map")) {
-      const mapPath = path.join(dir, entry.name);
-      const map = JSON.parse(readFileSync(mapPath, "utf8"));
-      if (map.file) {
-        map.file = map.file.replace(/\.js$/, ".cjs");
-        writeFileSync(mapPath, JSON.stringify(map));
-      }
-    } else if (entry.name.endsWith(".cjs") && !entry.name.endsWith(".d.cjs")) {
-      const file = path.join(dir, entry.name);
-      const src = readFileSync(file, "utf8");
-      writeFileSync(file, src.replace(/\/\/# sourceMappingURL=(.*)\.js\.map/g, "//# sourceMappingURL=$1.cjs.map"));
-    }
-  }
-}
+cpSync(path.join(pkg, "templates"), path.join(dist, "esm", "templates"), { recursive: true });
 
-function copyTemplates() {
-  const src = path.join(pkg, "templates");
-  const destEsm = path.join(pkg, "dist", "esm", "templates");
-  const destCjs = path.join(pkg, "dist", "cjs", "templates");
-  cpSync(src, destEsm, { recursive: true });
-  cpSync(src, destCjs, { recursive: true });
-}
-
-emit(["--module", "nodenext", "--moduleResolution", "nodenext", "--outDir", "dist/esm"], "esm");
-emit(["--module", "nodenext", "--moduleResolution", "nodenext", "--outDir", "dist/cjs"], "cjs");
-renameCjs(path.join(pkg, "dist", "cjs"));
-copyTemplates();
-
-const binEntry = path.join(pkg, "dist", "esm", "cli.js");
+const binEntry = path.join(dist, "esm", "cli.js");
 const binSource = readFileSync(binEntry, "utf8");
-if (!binSource.startsWith("#!")) {
-  writeFileSync(binEntry, `#!/usr/bin/env node\n${binSource}`, "utf8");
-}
+if (!binSource.startsWith("#!")) writeFileSync(binEntry, `#!/usr/bin/env node\n${binSource}`, "utf8");
+if (!readFileSync(binEntry, "utf8").startsWith("#!/usr/bin/env node")) fail("cli entry is not executable as a script");
+
+const manifest = JSON.parse(readFileSync(path.join(pkg, "package.json"), "utf8"));
+pruneDeclarations(pkg, declarationEntriesOf(manifest));
+assertTargets(pkg, manifest);
+
+const pack = packFiles(pkg);
+assertPack(pkg, manifest, pack.files);
+report("build", startedAt, [dist], pack);
