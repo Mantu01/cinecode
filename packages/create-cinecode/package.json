@@ -1,26 +1,58 @@
 {
   "name": "create-cinecode",
-  "version": "0.0.0",
-  "private": true,
+  "version": "1.0.0",
+  "description": "Scaffold a Cinecode project",
   "license": "MIT",
-  "type": "module",
-  "bin": {
-    "create-cinecode": "./dist/esm/cli.js"
+  "author": {
+    "name": "Cinecode",
+    "email": "hello@cinecode.dev",
+    "url": "https://cinecode.dev"
   },
+  "homepage": "https://cinecode.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cinecode/cinecode.git",
+    "directory": "packages/create-cinecode"
+  },
+  "bugs": {
+    "url": "https://github.com/cinecode/cinecode/issues"
+  },
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/cinecode"
+  },
+  "keywords": [
+    "cinecode",
+    "create",
+    "scaffold",
+    "video",
+    "animation"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "packageManager": "pnpm@11.1.3",
+  "types": "./dist/esm/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/esm/index.d.ts",
-      "import": "./dist/esm/index.js",
-      "require": "./dist/cjs/index.cjs"
+      "import": "./dist/esm/index.js"
     },
     "./package.json": "./package.json"
   },
+  "bin": {
+    "create-cinecode": "./dist/esm/cli.js"
+  },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
   "sideEffects": false,
-  "dependencies": {
-    "commander": "^15.0.0"
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   },
   "scripts": {
     "build": "node ./scripts/build.mjs",
@@ -28,6 +60,9 @@
     "lint": "eslint src",
     "test": "node --test \"src/**/*.test.mjs\"",
     "test:e2e": "node --test tests/smoke.test.mjs"
+  },
+  "dependencies": {
+    "commander": "^15.0.0"
   },
   "devDependencies": {
     "@repo/eslint-config": "workspace:*",

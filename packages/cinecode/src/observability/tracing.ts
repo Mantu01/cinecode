@@ -1,6 +1,21 @@
+import { createRequire } from "node:module";
 import { trace, context, type Tracer, type Span, SpanStatusCode } from "@opentelemetry/api";
-import { BasicTracerProvider, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
+
+const optionalRequire = createRequire(import.meta.url);
+
+interface TracerProviderLike {
+  getTracer(name: string, version?: string): Tracer;
+  forceFlush(): Promise<void>;
+}
+
+interface TracerSdk {
+  BasicTracerProvider: new (config: { spanProcessors: unknown[] }) => TracerProviderLike;
+  SimpleSpanProcessor: new (exporter: unknown) => unknown;
+}
+
+interface OtlpExporterModule {
+  OTLPTraceExporter: new (config: { url: string }) => unknown;
+}
 
 export interface TracerOptions {
   serviceName?: string;
@@ -10,7 +25,7 @@ export interface TracerOptions {
 
 export class CinecodeTracer {
   private tracer: Tracer;
-  private provider: BasicTracerProvider | null = null;
+  private provider: TracerProviderLike | null = null;
   private enabled: boolean;
 
   constructor(options: TracerOptions = {}) {
@@ -18,30 +33,37 @@ export class CinecodeTracer {
     const serviceName = options.serviceName ?? "cinecode-engine";
 
     if (this.enabled) {
-      const exporter = new OTLPTraceExporter({
-        url: options.otlpUrl ?? process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "http://localhost:4318/v1/traces",
-      });
-      this.provider = new BasicTracerProvider({
-        spanProcessors: [new SimpleSpanProcessor(exporter)],
-      });
-      trace.setGlobalTracerProvider(this.provider);
-      this.tracer = this.provider.getTracer(serviceName, "1.0.0");
+      const sdk = loadOptional<TracerSdk>("@opentelemetry/sdk-trace-base");
+      const otlp = loadOptional<OtlpExporterModule>("@opentelemetry/exporter-trace-otlp-http");
+      if (sdk && otlp) {
+        const exporter = new otlp.OTLPTraceExporter({
+          url: options.otlpUrl ?? process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "http://localhost:4318/v1/traces",
+        });
+        this.provider = new sdk.BasicTracerProvider({
+          spanProcessors: [new sdk.SimpleSpanProcessor(exporter)],
+        });
+        trace.setGlobalTracerProvider(this.provider as never);
+        this.tracer = this.provider.getTracer(serviceName, "1.0.0");
+      } else {
+        this.enabled = false;
+        this.tracer = trace.getTracer(serviceName);
+      }
     } else {
       this.tracer = trace.getTracer(serviceName);
     }
   }
 
   startJobSpan(jobId: string, metadata: Record<string, unknown> = {}): Span {
-    const span = this.tracer.startSpan("cinecode.render.job", {
-      attributes: {
-        "job.id": jobId,
-        ...metadata,
-      },
+    return this.tracer.startSpan("cinecode.render.job", {
+      attributes: { "job.id": jobId, ...metadata },
     });
-    return span;
   }
 
-  startChildSpan(name: "cinecode.config.load" | "cinecode.media.resolve" | "cinecode.frame.render" | "cinecode.audio.process" | "cinecode.video.encode" | string, parentSpan?: Span, attributes: Record<string, unknown> = {}): Span {
+  startChildSpan(
+    name: "cinecode.config.load" | "cinecode.media.resolve" | "cinecode.frame.render" | "cinecode.audio.process" | "cinecode.video.encode" | string,
+    parentSpan?: Span,
+    attributes: Record<string, unknown> = {},
+  ): Span {
     const ctx = parentSpan ? trace.setSpan(context.active(), parentSpan) : context.active();
     return this.tracer.startSpan(name, { attributes }, ctx);
   }
@@ -52,10 +74,7 @@ export class CinecodeTracer {
   }
 
   endSpanError(span: Span, error: Error | string): void {
-    span.setStatus({
-      code: SpanStatusCode.ERROR,
-      message: typeof error === "string" ? error : error.message,
-    });
+    span.setStatus({ code: SpanStatusCode.ERROR, message: typeof error === "string" ? error : error.message });
     span.end();
   }
 
@@ -63,6 +82,17 @@ export class CinecodeTracer {
     if (this.provider) {
       await this.provider.forceFlush();
     }
+  }
+}
+
+function loadOptional<T>(specifier: string): T | null {
+  try {
+    return optionalRequire(specifier) as T;
+  } catch {
+    process.emitWarning(
+      `Tracing requested but ${specifier} is not installed. Install @opentelemetry/sdk-trace-base and @opentelemetry/exporter-trace-otlp-http, or unset OTEL_EXPORTER_OTLP_ENDPOINT.`,
+    );
+    return null;
   }
 }
 
