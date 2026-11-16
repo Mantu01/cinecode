@@ -10,7 +10,8 @@
     "test": "turbo run test",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "verify:inert-install": "node scripts/verify-inert-install.mjs"
+    "verify:artifact": "node scripts/gate/install-gate.mjs",
+    "verify:artifact:full": "node scripts/gate/install-gate.mjs --full"
   },
   "devDependencies": {
     "eslint": "^10.9.1",

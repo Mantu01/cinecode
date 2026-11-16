@@ -7,5 +7,5 @@ packages:
 allowBuilds:
   canvas: true
   esbuild: false
-  midi: true
+  midi: set this to true or false
   unrs-resolver: true

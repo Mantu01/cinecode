@@ -29,7 +29,6 @@ export interface ScaffoldOptions {
   readonly dryRun: boolean;
   readonly verbose: boolean;
   readonly pm: PackageManager;
-  readonly monorepoRoot?: string;
   readonly skipInstall?: boolean;
 }
 
@@ -74,16 +73,12 @@ function listTemplateFiles(language: Language): string[] {
   return files;
 }
 
-function resolveCinecodeDep(targetDir: string, monorepoRoot?: string): string {
-  if (!monorepoRoot) return "latest";
-  const localPackage = resolve(monorepoRoot, "packages", "cinecode", "package.json");
-  if (!existsSync(localPackage)) return "latest";
-  const relPath = relative(targetDir, resolve(monorepoRoot, "packages", "cinecode"));
-  return `file:${relPath.replace(/\\/g, "/")}`;
+function resolveCinecodeDep(): string {
+  return `^${CREATE_CINECODE_VERSION}`;
 }
 
 function generateScaffoldPlan(options: ScaffoldOptions): ScaffoldPlan {
-  const { targetDir, language, fps, resolution, noGit, monorepoRoot } = options;
+  const { targetDir, language, fps, resolution, noGit } = options;
 
   const isTypeScript = language === "typescript";
   const [width, height] = resolution.split("x").map(Number);
@@ -96,7 +91,7 @@ function generateScaffoldPlan(options: ScaffoldOptions): ScaffoldPlan {
     EXT: isTypeScript ? "ts" : "js",
     CONFIG_EXT: isTypeScript ? "ts" : "js",
     LANGUAGE: language,
-    CINECODE_DEP: resolveCinecodeDep(targetDir, monorepoRoot),
+    CINECODE_DEP: resolveCinecodeDep(),
     PROJECT_NAME: basename(targetDir),
   };
 
@@ -360,7 +355,6 @@ export function createScaffoldCommand(): Command {
           verbose: opts.verbose ?? false,
           skipInstall: opts.skipInstall ?? false,
           pm,
-          monorepoRoot: process.cwd(),
         });
       },
     );
