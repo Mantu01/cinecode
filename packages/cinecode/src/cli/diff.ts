@@ -1,5 +1,6 @@
 import { Command } from "commander";
-import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
+import { createError, ErrorCode } from "../errors/index.js";
+import { runReport } from "./run-report.js";
 import fs from "node:fs";
 import path from "node:path";
 import { execSync } from "node:child_process";
@@ -11,35 +12,31 @@ async function loadCompositionData(target: string): Promise<{ comp: Composition;
   if (fs.existsSync(target)) {
     const absPath = path.resolve(target);
     if (absPath.endsWith(".json")) {
-      const data = JSON.parse(fs.readFileSync(absPath, "utf8"));
-      return { comp: data, label: path.basename(target) };
+      try {
+        return { comp: JSON.parse(fs.readFileSync(absPath, "utf8")), label: path.basename(target) };
+      } catch (error) {
+        throw createError(ErrorCode.CC1006, { path: absPath, reason: error instanceof Error ? error.message : String(error) }, { location: { file: absPath }, cause: error });
+      }
     }
-    const imported = await import(absPath);
-    const comp = imported.default || imported.composition || imported;
-    return { comp, label: path.basename(target) };
+    try {
+      const imported = await import(absPath);
+      const comp = imported.default || imported.composition || imported;
+      return { comp, label: path.basename(target) };
+    } catch (error) {
+      throw createError(ErrorCode.CC3008, { path: absPath, expected: "a composition export" }, { location: { file: absPath }, cause: error });
+    }
   }
 
   try {
     const gitContent = execSync(`git show ${target}`, { encoding: "utf8", stdio: ["pipe", "pipe", "ignore"] });
     try {
       return { comp: JSON.parse(gitContent), label: target };
-    } catch {
-      return {
-        comp: {
-          name: target,
-          width: 1920,
-          height: 1080,
-          fps: 30,
-          duration: 10,
-          background: "#000000",
-          audio: {},
-          rootTimeline: { tracks: [] },
-        } as unknown as Composition,
-        label: target,
-      };
+    } catch (error) {
+      throw createError(ErrorCode.CC1006, { path: target, reason: "git revision content is not a JSON composition" }, { cause: error });
     }
-  } catch {
-    throw new Error(`Unable to resolve composition file or git ref: ${target}`);
+  } catch (error) {
+    if (error instanceof Error && "code" in error) throw error;
+    throw createError(ErrorCode.CC1009, { path: target }, { cause: error });
   }
 }
 
@@ -48,22 +45,20 @@ export function createDiffCommand(): Command {
     .description("Semantic comparison between two compositions or git revisions")
     .argument("<sourceA>", "First composition file or git revision")
     .argument("[sourceB]", "Second composition file or git revision (defaults to working copy if sourceA is a git ref)")
-    .option("-f, --format <format>", "Output format: text, markdown, json", "text")
+    .option("-f, --format <format>", "Output format: text or markdown (use --json for machine output)", "text")
     .option("--side-by-side", "Display terminal diff side-by-side", false)
     .action(async (srcA: string, srcB?: string, options = {}) => {
       const targetB = srcB || (fs.existsSync(srcA) ? srcA : "HEAD");
       const targetA = srcB ? srcA : "HEAD";
 
-      try {
+      {
         const { comp: compA, label: labelA } = await loadCompositionData(targetA);
         const { comp: compB, label: labelB } = await loadCompositionData(targetB);
 
         const diff = diffCompositions(compA, compB, labelA, labelB);
+        runReport.result({ ...diff });
 
-        if (options.format === "json") {
-          console.log(JSON.stringify(diff, null, 2));
-          return;
-        }
+        if ((options as { json?: boolean }).json) return;
 
         if (options.format === "markdown") {
           console.log(formatDiffMarkdown(diff));
@@ -95,9 +90,6 @@ export function createDiffCommand(): Command {
           }
         }
         console.log();
-      } catch (err) {
-        console.error(pc.red(`Diff error: ${err instanceof Error ? err.message : String(err)}`));
-        throw new ExitSignal(EXIT_CODES.runtime);
       }
     });
 

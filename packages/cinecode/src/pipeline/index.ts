@@ -1,5 +1,5 @@
-import { mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import { extname, join, resolve } from "node:path";
+import { rename, rm, stat, writeFile } from "node:fs/promises";
+import { extname, join } from "node:path";
 import type { Composition, RenderFormat, QualitySetting } from "../core/types/index.js";
 import type { VideoEncoding } from "../core/quality.js";
 import { encodingCacheKey, normalizeQuality, resolveVideoEncoding } from "../core/quality.js";
@@ -41,7 +41,9 @@ import type { MidiPlayback } from "../midi/index.js";
 import { ffmpegLayoutForChannelCount } from "../audio/channels.js";
 import { muxAudioVideo, type MuxerOptions } from "../audio/muxer.js";
 import { computeCompositionHash } from "./cache.js";
-import { preprocessVideo, type VideoEditOptions } from "../media/preprocess.js";
+import { createError, ErrorCode } from "../errors/codes.js";
+import { recordDegradation } from "../errors/degradations.js";
+import { preprocessVideo } from "../media/preprocess.js";
 import { getPluginRegistry } from "../plugin/registry.js";
 import {
   renderFrameWithRecovery,
@@ -255,7 +257,7 @@ class FrameQueue {
       throw err;
     }
     if (!result.success) {
-      throw new Error(result.error ?? "Encoding failed");
+      throw createError(ErrorCode.CC4002, { details: result.error ?? "Encoding failed" });
     }
   }
 }
@@ -342,8 +344,10 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
     );
     if (overshoots.length > 0) {
       const first = overshoots[0]!;
-      throw new Error(
-        `[CC1004] clip "${first.clipName}" overshoots the composition boundary by ${first.overshootFrames} frame(s); boundaryBehavior is "strict"`,
+      throw createError(
+        ErrorCode.CC3003,
+        { clip: `${first.clipName} (${first.overshootFrames} frame(s) past the boundary)` },
+        { fixHint: "Extend the composition duration or trim the clip; boundaryBehavior is \"strict\"." },
       );
     }
   }
@@ -491,8 +495,14 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
   // path. They render frames directly and hand them to the image-output
   // encoders so a .gif or .pdf request can never silently emit H.264.
   if (alpha && format === "gif") {
-    reporter.reportWarning(
+    reporter.reportDegradation(
       "[CC6001] GIF does not support alpha transparency — the background will be composited opaque",
+      {
+        code: ErrorCode.CC6001,
+        what: "alpha channel requested for GIF",
+        input: outputPath,
+        instead: "opaque background composited into the GIF",
+      },
     );
   }
 
@@ -504,7 +514,7 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
     reporter.setStage("rendering");
     const buffers: Buffer[] = [];
     for (let frame = effectiveFromFrame; frame < effectiveToFrame; frame += 1) {
-      if (cancelled) throw new Error("Render cancelled");
+      if (cancelled) throw createError(ErrorCode.CC4003);
       await registry.runHook("beforeFrame", {
         composition: processedComposition,
         frame,
@@ -525,10 +535,18 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
         totalFrames,
         timestamp: frameToSeconds(frame, renderConversion),
       });
-      if (!outcome.buffer) throw outcome.error ?? new Error(`Render failed at frame ${frame}`);
+      if (!outcome.buffer) {
+        throw createError(ErrorCode.CC4001, { frame, source: composition.name }, { cause: outcome.error });
+      }
       if (outcome.error) {
-        reporter.reportWarning(
+        reporter.reportDegradation(
           `[CC4001] frame ${frame} failed: ${outcome.error.message} — ${outcome.usedFallback ? "placeholder substituted" : "recovered"}`,
+          {
+            code: ErrorCode.CC4001,
+            what: `frame ${frame} failed to render`,
+            input: composition.name,
+            instead: outcome.usedFallback ? "a placeholder frame was substituted" : "the frame was recovered on retry",
+          },
         );
       }
       buffers.push(outcome.buffer);
@@ -542,7 +560,7 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
         fps: composition.fps,
         overwrite,
       });
-      if (!gifResult.success) throw new Error(gifResult.error ?? "GIF output failed");
+      if (!gifResult.success) throw createError(ErrorCode.CC4002, { details: gifResult.error ?? "GIF output failed" }, { location: { file: outputPath } });
       const outputStat = await stat(outputPath).catch(() => null);
       const fileSize = outputStat?.size ?? 0;
       const duration = frameToSeconds(totalFrames, renderConversion);
@@ -559,7 +577,7 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
     }
     if (format === "png") {
       const seqResult = await writeFrameSequence(buffers, outputPath, { overwrite });
-      if (!seqResult.success) throw new Error(seqResult.error ?? "PNG sequence output failed");
+      if (!seqResult.success) throw createError(ErrorCode.CC4002, { details: seqResult.error ?? "PNG sequence output failed" }, { location: { file: outputPath } });
       const outputStat = await stat(outputPath).catch(() => null);
       const fileSize = outputStat?.size ?? 0;
       const duration = frameToSeconds(totalFrames, renderConversion);
@@ -731,7 +749,14 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
             }),
             "utf8",
           );
-        } catch {
+        } catch (error) {
+          recordDegradation({
+            code: ErrorCode.CC4001,
+            what: "worker frame cache decode failed",
+            reason: error instanceof Error ? error.message : String(error),
+            input: src,
+            instead: "the worker decodes the frame itself",
+          });
           return undefined;
         }
       },
@@ -865,9 +890,9 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
         }
 
         if (result.aborted) {
-          throw new Error(
-            `[CC4003] ${result.error ?? "frame rendering aborted"}${result.diagnostics ? `\n${result.diagnostics}` : ""}`,
-          );
+          throw createError(ErrorCode.CC4003, {
+            details: `${result.error ?? "frame rendering aborted"}${result.diagnostics ? `\n${result.diagnostics}` : ""}`,
+          });
         }
 
         let framesToEncode = result.frames;
@@ -900,8 +925,14 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
               index: frame,
               buffer: createFallbackFrameBuffer(processedComposition),
             }));
-            reporter.reportWarning(
+            reporter.reportDegradation(
               `[CC4001] chunk ${chunkIndex} failed: ${result.error} — placeholder frames substituted for ${entry.chunk.frames.length} frame(s)`,
+              {
+                code: ErrorCode.CC4001,
+                what: `chunk ${chunkIndex} failed to render`,
+                input: composition.name,
+                instead: `${entry.chunk.frames.length} placeholder frame(s) substituted`,
+              },
             );
           } else {
             throw chunkError;
@@ -925,14 +956,14 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
     await workerManager.terminate();
 
     if (lastEmittedChunk !== chunks.length - 1 && !cancelled) {
-      throw new Error(
-        `Render incomplete: last encoded chunk ${lastEmittedChunk} of ${chunks.length - 1}`,
-      );
+      throw createError(ErrorCode.CC4002, {
+        details: `Render incomplete: last encoded chunk ${lastEmittedChunk} of ${chunks.length - 1}`,
+      });
     }
 
     if (cancelled) {
       await cleanup();
-      throw new Error("Render cancelled");
+      throw createError(ErrorCode.CC4003);
     }
 
     // Close the frame queue — drains all remaining frames, then closes ffmpeg's
@@ -968,7 +999,7 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
         bitrateKbps: options.bitrateKbps,
       });
       if (!twoPassResult.success) {
-        throw new Error(twoPassResult.error ?? "Two-pass encoding failed");
+        throw createError(ErrorCode.CC4002, { details: twoPassResult.error ?? "Two-pass encoding failed" }, { location: { file: outputPath } });
       }
       await rm(rawFramePath, { force: true });
     }
@@ -994,19 +1025,6 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
       stemCacheDir: cacheDir,
     };
 
-    const silentMix = () => ({
-      buffer: {
-        sampleRate,
-        channels,
-        length: Math.round(duration * sampleRate),
-        data: new Float32Array(Math.round(duration * sampleRate) * channels),
-      },
-      peakLevel: 0,
-      limiterEngaged: false,
-      limiterDuration: 0,
-      limiterPeak: 0,
-    });
-
     const mixTrackCount = composition.rootTimeline.tracks.filter(
       (track) => track.kind === "audio",
     ).length;
@@ -1029,22 +1047,21 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
           });
           tracks.push(...prepared);
         }
-        return tracks.length > 0 ? mixAudioTracks(tracks, mixerOptions) : silentMix();
+        if (tracks.length === 0) return null;
+        return mixAudioTracks(tracks, mixerOptions);
       },
       resolveStrategy(recovery, "audio"),
       recovery?.maxRetries ?? 0,
     );
 
-    let mixResult: ReturnType<typeof mixAudioTracks>;
-    if (audioOutcome.status === "ok" || audioOutcome.status === "recovered") {
-      mixResult = audioOutcome.value!;
-    } else {
-      const err = audioOutcome.error?.message ?? "unknown";
-      reporter.reportWarning(
-        `[CC5001] audio preparation/mixing failed: ${err} — muxing video without audio`,
+    if (audioOutcome.status !== "ok" && audioOutcome.status !== "recovered") {
+      throw createError(
+        ErrorCode.CC5001,
+        { name: composition.name, reason: audioOutcome.error?.message ?? "unknown" },
+        { location: { file: outputPath }, cause: audioOutcome.error },
       );
-      mixResult = silentMix();
     }
+    const mixResult = audioOutcome.value ?? mixAudioTracks([], mixerOptions);
 
     await registry.runHook("afterMix", {
       composition: processedComposition,
@@ -1078,7 +1095,7 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
         overwrite: true,
       });
       if (!muxResult.success) {
-        throw new Error(muxResult.error ?? "Muxing failed");
+        throw muxError(muxResult.error, outputPath);
       }
     });
 
@@ -1098,8 +1115,9 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
         });
       } else {
         await rm(chapterPath, { force: true });
-        reporter.reportWarning(
+        reporter.reportDegradation(
           "[CC8002] chapter metadata could not be embedded — the video is still valid",
+          { code: ErrorCode.CC8002, what: "chapter metadata", input: outputPath, instead: "video written without chapters" },
         );
       }
     }
@@ -1121,7 +1139,14 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
 
     const { flushFontFallbackWarnings } = await import("../renderer/text/engine.js");
     const fallbackWarning = flushFontFallbackWarnings();
-    if (fallbackWarning) reporter.reportWarning(fallbackWarning);
+    if (fallbackWarning) {
+      reporter.reportDegradation(fallbackWarning, {
+        code: "CC3006",
+        what: "text font fallback",
+        input: composition.name,
+        instead: "fallback glyphs rendered",
+      });
+    }
 
     if (options.generateThumbnail && (format === "mp4" || format === "webm")) {
       const config = options.generateThumbnail === true ? {} : options.generateThumbnail;
@@ -1131,8 +1156,9 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
         formats: config.formats ?? ["png"],
         seed,
       }).catch((error: unknown) => {
-        reporter.reportWarning(
+        reporter.reportDegradation(
           `[CC8003] thumbnail generation failed: ${error instanceof Error ? error.message : String(error)}`,
+          { code: ErrorCode.CC8003, what: "thumbnail generation", input: thumbPath, instead: "video written without a thumbnail" },
         );
       });
     }
@@ -1163,6 +1189,14 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
     });
     throw error;
   }
+}
+
+export function muxError(reason: string | undefined, outputPath: string) {
+  return createError(
+    ErrorCode.CC4005,
+    { reason: reason ?? "ffmpeg mux exited without an output" },
+    { location: { file: outputPath } },
+  );
 }
 
 export function createRenderJob(options: RenderOptions): RenderJob {

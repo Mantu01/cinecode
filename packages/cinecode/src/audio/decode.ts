@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import ffmpegStatic from "@ffmpeg-installer/ffmpeg";
 import type { AudioBuffer } from "./types.js";
 import type { MediaCache } from "../media/cache.js";
+import { createError, ErrorCode } from "../errors/codes.js";
 
 export interface AudioDecodeOptions {
   cache?: MediaCache;
@@ -54,14 +55,14 @@ export async function getAudioInfo(filePath: string): Promise<{
 
     child.on("close", (code) => {
       if (code !== 0) {
-        reject(new Error(`ffprobe failed: ${stderr}`));
+        reject(createError(ErrorCode.CC2003, { path: filePath, reason: `ffprobe failed: ${stderr}` }, { location: { file: filePath } }));
         return;
       }
       try {
         const data = JSON.parse(stdout);
         const stream = data.streams?.[0];
         if (!stream) {
-          reject(new Error("No audio stream found"));
+          reject(createError(ErrorCode.CC2003, { path: filePath, reason: "No audio stream found" }, { location: { file: filePath } }));
           return;
         }
         resolve({
@@ -70,13 +71,13 @@ export async function getAudioInfo(filePath: string): Promise<{
           channels: Number(stream.channels) || 2,
           codec: String(stream.codec_name) || "unknown",
         });
-      } catch (e) {
-        reject(new Error(`Failed to parse ffprobe output: ${e}`));
+      } catch (error) {
+        reject(createError(ErrorCode.CC2003, { path: filePath, reason: `Failed to parse ffprobe output: ${error instanceof Error ? error.message : String(error)}` }, { location: { file: filePath }, cause: error }));
       }
     });
 
     child.on("error", (err) => {
-      reject(new Error(`Failed to spawn ffprobe: ${err.message}`));
+      reject(createError(ErrorCode.CC2003, { path: filePath, reason: `Failed to spawn ffprobe: ${err.message}` }, { location: { file: filePath }, cause: err }));
     });
   });
 }

@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { loadConfig } from "../config/schema.js";
 import { ensureGitignoreEntries } from "../config/gitignore.js";
 import { createError, ErrorCode } from "../errors/index.js";
-import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
+import { runReport } from "./run-report.js";
 
 interface DownloadOptions {
   force?: boolean;
@@ -131,6 +131,7 @@ export async function mediaDownloadCommand(options: DownloadOptions): Promise<vo
   console.log("");
 
   const results: Array<{ name: string; status: "ok" | "skipped" | "failed"; error?: string }> = [];
+  runReport.setProject({ root: process.cwd(), config: resolve(options.config ?? "cinecode.config.js") });
 
   for (const entry of cloudMedia) {
     const fileName = entry.name ?? getFileNameFromUrl(entry.url);
@@ -166,6 +167,7 @@ export async function mediaDownloadCommand(options: DownloadOptions): Promise<vo
       process.stdout.write("\r\x1b[K");
       console.log(`\u2713  ${fileName} - done`);
       results.push({ name: fileName, status: "ok" });
+      runReport.artifact({ kind: "media", path: destPath, units: 1, unit: "file" });
     } catch (e) {
       process.stdout.write("\r\x1b[K");
       const error = e instanceof Error ? e.message : "Unknown error";
@@ -179,10 +181,11 @@ export async function mediaDownloadCommand(options: DownloadOptions): Promise<vo
   const ok = results.filter(r => r.status === "ok").length;
   const skipped = results.filter(r => r.status === "skipped").length;
 
+  runReport.result({ downloaded: ok, skipped, failed, files: results });
   console.log(`Summary: ${ok} downloaded, ${skipped} skipped, ${failed} failed`);
 
   if (failed > 0) {
-    throw new ExitSignal(EXIT_CODES.environment);
+    throw createError(ErrorCode.CC6002, { url: `${failed} cloud media file(s)`, reason: results.filter(r => r.status === "failed").map(r => `${r.name}: ${r.error}`).join("; ") });
   }
 }
 

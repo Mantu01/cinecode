@@ -1,5 +1,6 @@
 import { readFile, writeFile, rm, mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { recordDegradation } from "../errors/degradations.js";
 
 export interface ChunkState {
   readonly index: number;
@@ -62,7 +63,16 @@ export class ResumeManager {
       const content = await readFile(resumePath, "utf-8");
       this.state = JSON.parse(content);
       return this.state;
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        recordDegradation({
+          code: "CC4006",
+          what: "resume state ignored",
+          reason: error instanceof Error ? error.message : String(error),
+          input: join(this.cacheDir, RESUME_FILE),
+          instead: "the render starts from the first frame",
+        });
+      }
       return null;
     }
   }

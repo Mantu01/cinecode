@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { runCli } from "./program.js";
 
 export { createProgram, runCli, type RunCliOptions } from "./program.js";
+export { MACHINE_SCHEMA_VERSION, runReport, validateMachineReport, type MachineReport } from "./run-report.js";
 export { EXIT_CODES, EXIT_CODE_MEANINGS, exitCodeForError, ExitSignal } from "./exit-codes.js";
 
 function isEntryPoint(): boolean {

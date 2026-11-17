@@ -2,7 +2,8 @@ import { Command } from "commander";
 import { readdir, stat } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
 import type { Composition } from "../core/types/index.js";
-import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
+import { createError, ErrorCode } from "../errors/index.js";
+import { runReport } from "./run-report.js";
 import { createMediaCache } from "../media/cache.js";
 import { loadCinecodeIgnore, type CinecodeIgnore } from "../config/ignore.js";
 import { loadComposition } from "./still.js";
@@ -194,8 +195,13 @@ export function createSyncCommand(): Command {
         dryRun: options.dryRun,
         deleteOrphans: options.deleteOrphans,
       });
+      runReport.result({ ...report });
+      for (const file of report.missingFiles) runReport.warn(ErrorCode.CC2001, `Media file not found: ${file}`, file);
+      for (const warning of report.pluginWarnings) runReport.warn(ErrorCode.CC8002, warning);
       if (options.json) {
-        console.log(JSON.stringify(report, null, 2));
+        if (report.missingFiles.length > 0 && !options.dryRun) {
+          throw createError(ErrorCode.CC1013, { count: report.missingFiles.length });
+        }
       } else {
         if (options.dryRun) {
           console.log("[DRY-RUN] Previewing sync operations (no changes will be applied):\n");
@@ -217,6 +223,8 @@ export function createSyncCommand(): Command {
         for (const plugin of report.pluginsDiscovered) console.log(`  + ${plugin}`);
         for (const warning of report.pluginWarnings) console.log(`  ⚠ ${warning}`);
       }
-      if (report.missingFiles.length > 0 && !options.dryRun) throw new ExitSignal(EXIT_CODES.validation);
+      if (report.missingFiles.length > 0 && !options.dryRun) {
+        throw createError(ErrorCode.CC1013, { count: report.missingFiles.length });
+      }
     });
 }

@@ -1,9 +1,10 @@
 import { Command } from "commander";
-import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
 import fs from "node:fs";
 import path from "node:path";
 import pc from "picocolors";
 import { ConfigMigrationEngine } from "../config/migration/engine.js";
+import { createError, ErrorCode, isCinecodeError } from "../errors/index.js";
+import { runReport } from "./run-report.js";
 
 export function createMigrateCommand(): Command {
   const cmd = new Command("migrate")
@@ -19,11 +20,15 @@ export function createMigrateCommand(): Command {
         else if (fs.existsSync(jsonVariant)) resolved = jsonVariant;
       }
 
+      runReport.setProject({ root: process.cwd(), config: resolved });
+      if (options.dryRun !== true) runReport.expectArtifact("config");
       console.log(`Migrating configuration: ${pc.cyan(resolved)}...`);
 
       try {
         const engine = new ConfigMigrationEngine();
         const result = engine.migrate(resolved, { dryRun: options.dryRun === true });
+        runReport.result({ originalVersion: result.originalVersion, targetVersion: result.targetVersion, dryRun: options.dryRun === true });
+        if (options.dryRun !== true) runReport.artifact({ kind: "config", path: resolved, units: result.appliedSteps.length, unit: "steps" });
 
         console.log(pc.green(`✔ Successfully migrated schema from v${result.originalVersion} to v${result.targetVersion}`));
         if (options.dryRun === true) {
@@ -47,9 +52,13 @@ export function createMigrateCommand(): Command {
         } else {
           console.log(pc.dim("\nConfiguration is already up-to-date with latest schema."));
         }
-      } catch (err: any) {
-        console.error(pc.red(`\n✖ Migration failed: ${err.message}`));
-        throw new ExitSignal(EXIT_CODES.validation);
+      } catch (error) {
+        if (isCinecodeError(error)) throw error;
+        throw createError(
+          ErrorCode.CC1006,
+          { path: resolved, reason: error instanceof Error ? error.message : String(error) },
+          { location: { file: resolved }, cause: error },
+        );
       }
     });
 

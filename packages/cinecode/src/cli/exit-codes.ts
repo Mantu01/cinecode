@@ -34,6 +34,7 @@ export class ExitSignal extends Error {
 
 export function exitCodeForError(code: ErrorCode | string): number {
   if (code === ErrorCode.CC4003) return EXIT_CODES.cancelled;
+  if (code === ErrorCode.CC0001 || code === ErrorCode.CC1014) return EXIT_CODES.usage;
   if (VALIDATION_PREFIXES.some((prefix) => code.startsWith(prefix))) return EXIT_CODES.validation;
   if (ENVIRONMENT_PREFIXES.some((prefix) => code.startsWith(prefix))) return EXIT_CODES.environment;
   return EXIT_CODES.runtime;

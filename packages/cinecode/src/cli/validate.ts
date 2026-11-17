@@ -9,7 +9,7 @@ import { createMediaResolver } from "../media/resolver.js";
 import { createMediaCache } from "../media/cache.js";
 import { loadComposition } from "./still.js";
 import { allClips } from "../core/types/tracks.js";
-import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
+import { runReport } from "./run-report.js";
 
 export interface ValidateOptions {
   config?: string;
@@ -109,13 +109,9 @@ export async function validateCommand(options: ValidateOptions): Promise<void> {
 
   const config = await loadConfig(resolvedConfigPath);
   const validation = validateConfig(config, resolvedConfigPath);
+  runReport.setProject({ root: projectRoot, config: resolvedConfigPath });
 
-  let compositions: Composition[] = [];
-  try {
-    compositions = await loadComposition(resolvedConfigPath);
-  } catch {
-    void 0;
-  }
+  const compositions: Composition[] = await loadComposition(resolvedConfigPath);
 
   const determinismErrors = await checkCompositionDeterminism(compositions, resolvedConfigPath);
   const mediaErrors = await checkMediaFiles(config);
@@ -136,26 +132,27 @@ export async function validateCommand(options: ValidateOptions): Promise<void> {
     console.log("Fixed: .gitignore entries added");
   }
 
-  if (options.json) {
-    const output = {
-      valid: allErrors.length === 0,
-      errors: allErrors.map(e => ({
-        code: e.code,
-        severity: e.severity,
-        message: e.message,
-        fixHint: e.fixHint,
-        location: e.location,
-      })),
-      warnings: allWarnings.map(w => ({
-        code: w.code,
-        severity: w.severity,
-        message: w.message,
-        fixHint: w.fixHint,
-        location: w.location,
-      })),
-    };
-    console.log(JSON.stringify(output, null, 2));
-  } else {
+  const output = {
+    valid: allErrors.length === 0,
+    errors: allErrors.map(e => ({
+      code: e.code,
+      severity: e.severity,
+      message: e.message,
+      fixHint: e.fixHint,
+      location: e.location,
+    })),
+    warnings: allWarnings.map(w => ({
+      code: w.code,
+      severity: w.severity,
+      message: w.message,
+      fixHint: w.fixHint,
+      location: w.location,
+    })),
+  };
+  runReport.result(output);
+  for (const warning of allWarnings) runReport.warn(warning.code, warning.message, warning.location?.file);
+
+  if (!runReport.isMachine()) {
     for (const error of allErrors) {
       console.error(formatError(error, false, true));
     }
@@ -171,7 +168,8 @@ export async function validateCommand(options: ValidateOptions): Promise<void> {
   }
 
   if (allErrors.length > 0 || (options.strict && allWarnings.length > 0)) {
-    throw new ExitSignal(EXIT_CODES.validation);
+    const count = allErrors.length + (options.strict ? allWarnings.length : 0);
+    throw createError(ErrorCode.CC1013, { count }, { location: { file: resolvedConfigPath } });
   }
 }
 

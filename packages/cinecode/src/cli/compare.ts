@@ -1,5 +1,6 @@
 import { Command } from "commander";
-import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
+import { createError, ErrorCode } from "../errors/codes.js";
+import { runReport } from "./run-report.js";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { Canvas } from "@napi-rs/canvas";
@@ -89,6 +90,10 @@ export function createCompareCommand(): Command {
       console.log(`Average diff:    ${result.averageDifference.toFixed(4)} (0-255)`);
       console.log(`Max diff:        ${result.maxDifference.toFixed(4)}`);
       console.log(`Worst frames:    ${result.worstFrames.join(", ")}`);
-      if (result.maxDifference > 2) throw new ExitSignal(EXIT_CODES.runtime);
+      runReport.result({ frames: result.frames.length, averageDifference: result.averageDifference, maxDifference: result.maxDifference, worstFrames: result.worstFrames });
+      if (options.diff) runReport.artifact({ kind: "diff", path: options.diff, units: 1, unit: "image" });
+      if (result.maxDifference > 2) {
+        throw createError(ErrorCode.CC9002, { reason: `max pixel difference ${result.maxDifference.toFixed(2)} exceeds 2.00` });
+      }
     });
 }

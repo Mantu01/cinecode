@@ -4,6 +4,8 @@ import path from "node:path";
 import pc from "picocolors";
 import { serializeFrameToSvg, type CssMode, type FontStrategy } from "../svg/serializer.js";
 import type { Composition } from "../core/types/index.js";
+import { createError, ErrorCode } from "../errors/index.js";
+import { runReport } from "./run-report.js";
 
 export function createExportSvgCommand(): Command {
   const cmd = new Command("export-svg")
@@ -19,39 +21,29 @@ export function createExportSvgCommand(): Command {
     .option("--no-optimize", "Disable SVGO optimization")
     .action(async (entry: string, options) => {
       const absEntry = path.resolve(entry);
+      if (!fs.existsSync(absEntry)) {
+        throw createError(ErrorCode.CC1009, { path: absEntry }, { location: { file: absEntry } });
+      }
       let comp: Composition;
-      if (fs.existsSync(absEntry)) {
-        if (absEntry.endsWith(".json")) {
+      if (absEntry.endsWith(".json")) {
+        try {
           comp = JSON.parse(fs.readFileSync(absEntry, "utf8"));
-        } else {
-          try {
-            const mod = await import(absEntry);
-            comp = mod.default || mod.composition || mod;
-          } catch {
-            comp = {
-              name: "export",
-              width: 1920,
-              height: 1080,
-              fps: 30,
-              duration: 10,
-              background: "#000000",
-              audio: {},
-              rootTimeline: { tracks: [] },
-            } as unknown as Composition;
-          }
+        } catch (error) {
+          throw createError(ErrorCode.CC1006, { path: absEntry, reason: error instanceof Error ? error.message : String(error) }, { location: { file: absEntry }, cause: error });
         }
       } else {
-        comp = {
-          name: "export",
-          width: 1920,
-          height: 1080,
-          fps: 30,
-          duration: 10,
-          background: "#000000",
-          audio: {},
-          rootTimeline: { tracks: [] },
-        } as unknown as Composition;
+        try {
+          const mod = await import(absEntry);
+          comp = mod.default || mod.composition || mod;
+        } catch (error) {
+          throw createError(ErrorCode.CC3008, { path: absEntry, expected: "a composition export" }, { location: { file: absEntry }, cause: error });
+        }
       }
+      if (!comp || typeof comp.width !== "number" || !comp.rootTimeline) {
+        throw createError(ErrorCode.CC3008, { path: absEntry, expected: "a composition with width, height and rootTimeline" }, { location: { file: absEntry } });
+      }
+      runReport.setProject({ root: process.cwd(), manifest: absEntry });
+      runReport.expectArtifact("svg");
 
       const outDir = path.resolve(options.out);
       fs.mkdirSync(outDir, { recursive: true });
@@ -74,12 +66,16 @@ export function createExportSvgCommand(): Command {
           const fname = `frame-${String(f).padStart(4, "0")}.svg`;
           fs.writeFileSync(path.join(outDir, fname), svg, "utf8");
         }
+        runReport.artifact({ kind: "svg-sequence", path: outDir, units: end - start + 1, unit: "frames" });
+        runReport.result({ frames: end - start + 1, output: outDir });
         console.log(pc.green(`✔ Exported ${end - start + 1} SVG frames to ${outDir}`));
       } else {
         const f = parseInt(options.frame, 10);
         const svg = serializeFrameToSvg(comp, f, serializerOpts);
         const outPath = outDir.endsWith(".svg") ? outDir : path.join(outDir, `frame-${String(f).padStart(4, "0")}.svg`);
         fs.writeFileSync(outPath, svg, "utf8");
+        runReport.artifact({ kind: "svg", path: outPath, units: 1, unit: "frame" });
+        runReport.result({ frame: f, output: outPath });
         console.log(pc.green(`✔ Exported SVG frame ${f} to ${outPath}`));
       }
     });

@@ -1,5 +1,6 @@
 import { Command } from "commander";
-import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
+import { resolve } from "node:path";
+import { createError, ErrorCode } from "../errors/codes.js";
 import { marketplaceClient } from "../plugin/marketplace/client.js";
 import { installPlugin, removePlugin, listInstalledPlugins } from "../plugin/marketplace/installer.js";
 import { scaffoldPlugin, type TemplateType } from "../plugin/scaffold/index.js";
@@ -49,8 +50,7 @@ export function createPluginCommand(): Command {
       if (res.success) {
         console.log(`✔ ${res.message}`);
       } else {
-        console.error(`✖ Failed to install '${packageName}': ${res.message}`);
-        throw new ExitSignal(EXIT_CODES.environment);
+        throw createError(ErrorCode.CC8005, { plugin: packageName, reason: res.message }, { location: { file: resolve("package.json") } });
       }
     });
 
@@ -64,8 +64,7 @@ export function createPluginCommand(): Command {
       if (res.success) {
         console.log(`✔ ${res.message}`);
       } else {
-        console.error(`✖ Failed to remove '${packageName}': ${res.message}`);
-        throw new ExitSignal(EXIT_CODES.environment);
+        throw createError(ErrorCode.CC8005, { plugin: packageName, reason: res.message }, { location: { file: resolve("package.json") } });
       }
     });
 

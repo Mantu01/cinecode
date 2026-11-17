@@ -82,7 +82,7 @@ export class StructuredLogger {
     };
 
     if (this.format === "json") {
-      process.stdout.write(JSON.stringify(entry) + "\n");
+      process.stderr.write(JSON.stringify(entry) + "\n");
     } else {
       const time = pc.dim(entry.timestamp.substring(11, 19));
       const comp = pc.cyan(`[${component}]`);

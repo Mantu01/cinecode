@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { loadComposition } from "./still.js";
+import { runReport } from "./run-report.js";
 
 export interface EditOptions {
   json?: boolean;
@@ -32,7 +33,7 @@ export async function openFileInEditor(file: string, editor?: string): Promise<v
 export async function editCommand(file: string, options: EditOptions): Promise<void> {
   if (options.json) {
     const compositions = await loadComposition(file);
-    console.log(JSON.stringify(compositions.length === 1 ? compositions[0] : compositions, null, 2));
+    runReport.result({ composition: compositions.length === 1 ? compositions[0] : compositions });
     return;
   }
   await openFileInEditor(file, options.editor);

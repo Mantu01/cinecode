@@ -1,5 +1,6 @@
 import { Command } from "commander";
-import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
+import { createError, ErrorCode } from "../errors/codes.js";
+import { runReport } from "./run-report.js";
 import { resolve } from "node:path";
 import { loadComposition, selectComposition } from "./still.js";
 import { resolveCacheDir, resolveOutputDir } from "./shared.js";
@@ -50,7 +51,16 @@ export function createMultiResCommand(): Command {
           console.log(`✓ ${variant.label.padEnd(6)} ${variant.width}x${variant.height}  ${mb} MB  ${variant.outputPath}`);
         }
       }
-      const failures = result.variants.filter((variant) => variant.error).length;
-      if (failures > 0) throw new ExitSignal(EXIT_CODES.runtime);
+      const failedVariants = result.variants.filter((variant) => variant.error);
+      runReport.result({ variants: result.variants.map(({ label, width, height, outputPath, error }) => ({ label, width, height, outputPath, error })) });
+      for (const variant of result.variants) {
+        if (!variant.error) runReport.artifact({ kind: "video", path: variant.outputPath, units: 1, unit: "file" });
+      }
+      if (failedVariants.length > 0) {
+        throw createError(ErrorCode.CC4009, {
+          count: failedVariants.length,
+          reason: failedVariants.map((variant) => `${variant.label}: ${variant.error}`).join("; "),
+        }, { location: { file: failedVariants[0]!.outputPath } });
+      }
     });
 }

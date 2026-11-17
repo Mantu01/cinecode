@@ -1,5 +1,6 @@
 import { Command } from "commander";
-import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
+import { createError, ErrorCode } from "../errors/codes.js";
+import { runReport } from "./run-report.js";
 import { cpus } from "node:os";
 import { performance } from "node:perf_hooks";
 import fs from "node:fs";
@@ -134,13 +135,14 @@ export function createBenchmarkCommand(): Command {
         if (timeDeltaPct > 5.0 || memDeltaPct > 10.0) {
           console.warn(pc.red(pc.bold("\n⚠ PERFORMANCE REGRESSION DETECTED!")));
           if (options.failOnRegression) {
-            throw new ExitSignal(EXIT_CODES.runtime);
+            throw createError(ErrorCode.CC9002, { reason: `frame time ${timeDeltaPct.toFixed(1)}%, memory ${memDeltaPct.toFixed(1)}% over baseline` });
           }
         } else {
           console.log(pc.green("\n✔ No performance regressions detected."));
         }
       }
 
+      runReport.result({ frames: stats.frames, averageMs: stats.averageMs, peakMemoryMb: stats.peakMemoryMb });
       saveBenchmarkRun({
         ...stats,
         file,

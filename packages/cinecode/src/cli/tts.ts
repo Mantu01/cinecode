@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { getVoiceRegistry, type VoiceDescriptor } from "../tts/registry.js";
-import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
+import { runReport } from "./run-report.js";
 
 export interface TtsCliOptions {
   listVoices?: boolean;
@@ -27,10 +27,8 @@ export async function ttsCommand(options: TtsCliOptions = {}): Promise<void> {
     search: options.search,
     provider: options.provider as VoiceDescriptor["provider"] | undefined,
   });
-  if (options.json) {
-    console.log(JSON.stringify(voices, null, 2));
-    return;
-  }
+  runReport.result({ voices });
+  if (options.json) return;
   if (voices.length === 0) {
     console.log("No voices matched the filter.");
     return;
@@ -48,11 +46,6 @@ export function createTtsCommand(): Command {
     .option("--search <text>", "Search voice names, locales and styles")
     .option("--provider <name>", "Filter voices by provider")
     .action(async (options: TtsCliOptions) => {
-      try {
-        await ttsCommand(options);
-      } catch (error) {
-        console.error((error as Error).message);
-        throw new ExitSignal(EXIT_CODES.runtime);
-      }
+      await ttsCommand(options);
     });
 }

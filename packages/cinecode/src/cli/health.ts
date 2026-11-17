@@ -5,7 +5,8 @@ import { cpus, totalmem } from "node:os";
 import { resolve } from "node:path";
 import ffmpegStatic from "@ffmpeg-installer/ffmpeg";
 import { checkRuntime } from "../loader/index.js";
-import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
+import { createError, ErrorCode } from "../errors/index.js";
+import { runReport } from "./run-report.js";
 
 export interface FfmpegHealth {
   readonly version: string;
@@ -220,11 +221,11 @@ export function createHealthCommand(): Command {
     .option("--strict", "Exit non-zero when any issue is detected")
     .action(async (options: { cache?: string; json?: boolean; strict?: boolean }) => {
       const report = await collectHealth(options.cache ?? ".cinecode/cache");
-      if (options.json) {
-        console.log(JSON.stringify(report, null, 2));
-      } else {
-        console.log(formatHealth(report));
+      runReport.result({ ...report });
+      for (const issue of report.issues) runReport.warn("CC7002", issue);
+      if (!options.json) console.log(formatHealth(report));
+      if (options.strict && report.issues.length > 0) {
+        throw createError(ErrorCode.CC7004, { reason: report.issues.join("; ") });
       }
-      if (options.strict && report.issues.length > 0) throw new ExitSignal(EXIT_CODES.environment);
     });
 }

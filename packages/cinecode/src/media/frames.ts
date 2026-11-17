@@ -2,6 +2,8 @@ import { spawn } from "node:child_process";
 import ffmpegStatic from "@ffmpeg-installer/ffmpeg";
 import type { MediaCache } from "./cache.js";
 import { frameCacheKey, getDefaultFrameCache, type FrameCache } from "./frame-cache.js";
+import { createError, ErrorCode } from "../errors/codes.js";
+import { recordDegradation } from "../errors/degradations.js";
 
 async function getFfprobeStatic(): Promise<{ path: string }> {
   const mod = await import("@ffprobe-installer/ffprobe");
@@ -162,7 +164,7 @@ async function extractFrameBatchWithFfmpeg(
 
     child.on("close", (code) => {
       if (code !== 0) {
-        reject(new Error(`ffmpeg batch frame extraction failed: ${stderr}`));
+        reject(createError(ErrorCode.CC4001, { frame: startFrame, source: filePath, reason: stderr.trim() || `ffmpeg exited with code ${code}` }, { location: { file: filePath } }));
         return;
       }
       const buffer = Buffer.concat(chunks);
@@ -200,8 +202,17 @@ export async function extractFramesByIndex(
 
   const cachedResult = await options.cache.getBatchFrames(filePath, startFrame, count);
   if (cachedResult) {
-    const { width, height } = await getVideoResolution(filePath).catch(() => ({ width: 1920, height: 1080 }));
-    return cachedResult.map((buffer, i) => ({ buffer, width, height, format: "rgba" as const }));
+    let resolution: { width: number; height: number };
+    try {
+      resolution = await getVideoResolution(filePath);
+    } catch (error) {
+      throw createError(
+        ErrorCode.CC2003,
+        { path: filePath, reason: "cached frames exist but the video resolution is unreadable" },
+        { location: { file: filePath }, cause: error },
+      );
+    }
+    return cachedResult.map((buffer) => ({ buffer, ...resolution, format: "rgba" as const }));
   }
 
   try {
@@ -221,9 +232,24 @@ export async function extractFramesByIndex(
         frames.push({ buffer: frameBuffer, width, height, format: "rgba" });
       }
     }
-  } catch {
+  } catch (error) {
+    recordDegradation({
+      code: "CC4001",
+      what: "batch frame extraction failed",
+      reason: error instanceof Error ? error.message : String(error),
+      input: filePath,
+      instead: "frames are decoded one at a time",
+    });
     for (let i = 0; i < count; i++) {
-      frames.push(await extractFrameByIndex(filePath, startFrame + i, options, fps));
+      try {
+        frames.push(await extractFrameByIndex(filePath, startFrame + i, options, fps));
+      } catch (frameError) {
+        throw createError(
+          ErrorCode.CC4001,
+          { frame: startFrame + i, source: filePath },
+          { location: { file: filePath }, cause: frameError },
+        );
+      }
     }
   }
 

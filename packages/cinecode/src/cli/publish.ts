@@ -1,9 +1,10 @@
 import { Command } from "commander";
-import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
 import fs from "node:fs";
 import path from "node:path";
 import pc from "picocolors";
 import { loadCinecodeIgnore } from "../config/ignore.js";
+import { createError, ErrorCode } from "../errors/index.js";
+import { runReport } from "./run-report.js";
 
 export interface PublishOptions {
   provider?: "aws" | "gcs" | "local";
@@ -143,12 +144,16 @@ export function createPublishCommand(): Command {
     .action(async (outputPath: string, options: PublishOptions) => {
       console.log(`Publishing '${outputPath}' via ${options.provider ?? "local"} provider...`);
       const result = await publishOutput(outputPath, options);
+      runReport.result({ success: result.success, target: result.target, message: result.message });
       if (result.success) {
+        runReport.artifact({ kind: "published", path: result.target, units: 1, unit: "file" });
         console.log(pc.green(`✔ ${result.message}`));
         console.log(pc.cyan(result.target));
       } else {
-        console.error(pc.red(`✖ ${result.message}`));
-        throw new ExitSignal(EXIT_CODES.environment);
+        if (!fs.existsSync(outputPath)) {
+          throw createError(ErrorCode.CC2001, { path: path.resolve(outputPath) }, { location: { file: path.resolve(outputPath) } });
+        }
+        throw createError(ErrorCode.CC6002, { url: result.target, reason: result.message });
       }
     });
 }

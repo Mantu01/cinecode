@@ -6,6 +6,7 @@ import type { CinecodeConfig } from "../core/types/index.js";
 import { loadConfig } from "../config/schema.js";
 import { createMediaCache } from "../media/cache.js";
 import { createMediaResolver } from "../media/resolver.js";
+import { runReport } from "./run-report.js";
 
 export interface MediaListOptions {
   json?: boolean;
@@ -70,13 +71,11 @@ export async function mediaListCommand(options: MediaListOptions): Promise<void>
     });
   }
 
+  runReport.result({ media: output });
   if (options.json) {
-    const json = JSON.stringify(output, null, 2);
     if (options.out) {
-      writeFileSync(options.out, json);
-      console.log(`Written to ${options.out}`);
-    } else {
-      console.log(json);
+      writeFileSync(options.out, JSON.stringify(output, null, 2));
+      runReport.artifact({ kind: "media-list", path: options.out, units: output.length, unit: "entries" });
     }
     return;
   }

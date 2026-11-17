@@ -7,6 +7,15 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const pkg = path.resolve(here, "..");
 const outDir = path.join(pkg, "dist-test");
 
+const silent = spawnSync(process.execPath, [path.join(pkg, "scripts/check-silent-catches.mjs")], {
+  cwd: pkg,
+  stdio: "inherit",
+});
+if (silent.status !== 0) {
+  console.error("test: silent-catch check failed");
+  process.exit(silent.status ?? 1);
+}
+
 const emit = spawnSync("npx", ["tsc", "-p", "tsconfig.build.json", "--outDir", "dist-test", "--noEmit", "false"], {
   cwd: pkg,
   stdio: "inherit",

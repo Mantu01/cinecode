@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, chown, copyFile, mkdir, open, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
+import { ErrorCode } from "../errors/codes.js";
 
 export interface AtomicWriteOptions {
   readonly fileMode?: number;
@@ -17,11 +18,12 @@ export interface AtomicWriteResult {
 }
 
 export class AtomicWriteError extends Error {
+  readonly code = ErrorCode.CC4008;
   readonly targetPath: string;
   readonly tempPath: string;
 
   constructor(targetPath: string, tempPath: string, message: string, options?: { cause?: unknown }) {
-    super(`[CC2401] ${message}`, options);
+    super(`Output write failed: ${targetPath}. ${message}`, options);
     this.name = "AtomicWriteError";
     this.targetPath = targetPath;
     this.tempPath = tempPath;

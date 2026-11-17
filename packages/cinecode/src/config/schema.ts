@@ -17,6 +17,7 @@ import {
 } from "./envsubst.js";
 import { mergeConfigInheritance } from "./inherit.js";
 import { isUserModuleFile, loadUserModule } from "../loader/index.js";
+import { createError, ErrorCode, isCinecodeError } from "../errors/index.js";
 
 export interface LoadConfigOptions {
   readonly configPath?: string;
@@ -117,28 +118,55 @@ export async function loadConfig(configPath: string, options: LoadConfigOptions 
       rawConfig = await loadUserModule<Record<string, unknown>>(resolvedPath, dirname(resolvedPath), { fresh: options.fresh });
     } else if (ext === ".json") {
       const rawText = readFileSync(resolvedPath, "utf-8");
-      assertEnvVarsPresent(findMissingEnvVars(rawText));
-      rawConfig = JSON.parse(substituteEnvVars(rawText));
+      assertEnvVarsPresent(findMissingEnvVars(rawText), resolvedPath);
+      try {
+        rawConfig = JSON.parse(substituteEnvVars(rawText));
+      } catch (parseError) {
+        throw createError(
+          ErrorCode.CC1006,
+          { path: resolvedPath, reason: parseError instanceof Error ? parseError.message : String(parseError) },
+          { location: { file: resolvedPath }, cause: parseError },
+        );
+      }
     } else {
-      throw new Error(`Unsupported config file extension: ${ext}`);
+      throw createError(ErrorCode.CC1007, { path: resolvedPath }, { location: { file: resolvedPath } });
     }
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    throw new Error(`Failed to load config from ${resolvedPath}: ${message}`, { cause: e });
+    if (isCinecodeError(e)) throw e;
+    const reason = e instanceof Error ? e.message : String(e);
+    throw createError(
+      ErrorCode.CC1005,
+      { path: resolvedPath, reason },
+      { location: { file: resolvedPath }, cause: e },
+    );
   }
 
-  assertEnvVarsPresent(findMissingEnvVarsDeep(rawConfig));
-  const withEnv = substituteEnvVarsDeep(rawConfig);
-  const merged = await mergeConfigInheritance(resolvedPath, withEnv);
-  return normalizeConfig(merged);
+  try {
+    assertEnvVarsPresent(findMissingEnvVarsDeep(rawConfig), resolvedPath);
+    const withEnv = substituteEnvVarsDeep(rawConfig);
+    const merged = await mergeConfigInheritance(resolvedPath, withEnv);
+    return normalizeConfig(merged);
+  } catch (e) {
+    if (isCinecodeError(e)) throw e;
+    const reason = e instanceof Error ? e.message : String(e);
+    throw createError(
+      ErrorCode.CC1005,
+      { path: resolvedPath, reason },
+      { location: { file: resolvedPath }, cause: e },
+    );
+  }
 }
 
-function assertEnvVarsPresent(missing: readonly string[]): void {
+function assertEnvVarsPresent(missing: readonly string[], configPath: string): void {
   if (missing.length === 0) return;
   const list = missing.map((name) => `'${name}'`).join(", ");
-  throw new Error(
-    `Missing required environment variable${missing.length > 1 ? "s" : ""} ${list}. ` +
-      `Set ${missing.length > 1 ? "them" : "it"} before running cinecode: export ${missing[0]}=...`,
+  throw createError(
+    ErrorCode.CC1005,
+    {
+      path: configPath,
+      reason: `Missing required environment variable${missing.length > 1 ? "s" : ""} ${list}. Set ${missing.length > 1 ? "them" : "it"} before running cinecode: export ${missing[0]}=...`,
+    },
+    { location: { file: configPath } },
   );
 }
 

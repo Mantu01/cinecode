@@ -4,6 +4,7 @@ import type { VisualClip, AudioClip, SoundClip, Clip } from "../core/types/index
 import { loadComposition, selectComposition, parseTimeInput } from "./still.js";
 import { allClips } from "../core/types/tracks.js";
 import { createError, ErrorCode } from "../errors/index.js";
+import { runReport } from "./run-report.js";
 
 interface InspectOptions {
   composition?: string;
@@ -259,7 +260,7 @@ export async function inspectCommand(options: InspectOptions): Promise<void> {
         return base;
       }),
     };
-    console.log(JSON.stringify(output, null, 2));
+    runReport.result(output);
     return;
   }
 

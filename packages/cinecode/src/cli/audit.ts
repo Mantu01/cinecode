@@ -1,7 +1,8 @@
 import { Command } from "commander";
 import pc from "picocolors";
 import { runSecurityAudit } from "./security/scanner.js";
-import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
+import { createError, ErrorCode } from "../errors/index.js";
+import { runReport } from "./run-report.js";
 
 export function createAuditCommand(): Command {
   const cmd = new Command("audit")
@@ -10,11 +11,12 @@ export function createAuditCommand(): Command {
     .action(async (options) => {
       console.log("Running Cinecode security and license audit...\n");
       const report = await runSecurityAudit();
+      runReport.result({ ...report });
+      for (const issue of report.issues) runReport.warn(`CC${issue.severity === "critical" || issue.severity === "high" ? "8002" : "8003"}`, issue.title, issue.packageOrFile);
 
       if (options.json) {
-        console.log(JSON.stringify(report, null, 2));
         if (report.status === "fail" && !options.allowCopyleft) {
-          throw new ExitSignal(EXIT_CODES.runtime);
+          throw createError(ErrorCode.CC1013, { count: report.issues.length });
         }
         return;
       }
@@ -50,8 +52,7 @@ export function createAuditCommand(): Command {
 
       console.log();
       if (report.status === "fail" && !options.allowCopyleft) {
-        console.error(pc.red("✖ Audit failed due to high-risk issues or copyleft licenses."));
-        throw new ExitSignal(EXIT_CODES.runtime);
+        throw createError(ErrorCode.CC1013, { count: report.issues.length }, { fixHint: "Audit failed due to high-risk issues or copyleft licenses; use --allow-copyleft to report without failing." });
       }
     });
 

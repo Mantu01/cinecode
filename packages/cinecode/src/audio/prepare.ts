@@ -7,6 +7,7 @@ import { decodeAudioFile } from "./decode.js";
 import { separateStems, type StemName } from "./stem-separation.js";
 import { applySpatialPanning } from "./spatial/panning.js";
 import type { SpatialPosition } from "./spatial/attenuation.js";
+import { recordDegradation } from "../errors/degradations.js";
 
 interface AuthoredAudioClip {
   readonly buffer?: AudioBuffer;
@@ -69,7 +70,13 @@ async function sourceBuffer(
       const stemPath = separation.stems[authored.stem];
       if (stemPath) src = stemPath;
     } catch (error) {
-      console.warn(`CC5205: Stem separation failed for ${src}: ${(error as Error).message}`);
+      recordDegradation({
+        code: "CC5001",
+        what: `stem separation (${authored.stem})`,
+        reason: (error as Error).message,
+        input: src,
+        instead: "the original mixdown is used for this clip",
+      });
     }
   }
   const decoded = await decodeAudioFile(resolve(src), {

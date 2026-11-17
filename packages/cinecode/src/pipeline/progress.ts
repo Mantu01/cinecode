@@ -1,3 +1,5 @@
+import { degradationCode, recordDegradation, recordWarning } from "../errors/degradations.js";
+
 export type RenderStage = "preparing" | "rendering" | "mixing-audio" | "encoding" | "multiplexing" | "done";
 
 export interface ProgressEvent {
@@ -257,9 +259,24 @@ export class ProgressReporter {
   }
 
   reportWarning(message: string): void {
+    recordWarning({ code: degradationCode(message), message });
     if (this.terminal) this.clearTerminalLine();
     this.emit({ type: "warning", stage: this.currentStage, percent: this.getPercent(), frame: this.frameCount, totalFrames: this.totalFrames, message });
     this.onWarning?.(message, this.currentStage);
+  }
+
+  reportDegradation(
+    message: string,
+    detail: { code: string; what: string; input?: string; instead: string },
+  ): void {
+    recordDegradation({
+      code: String(detail.code),
+      what: detail.what,
+      reason: message,
+      input: detail.input,
+      instead: detail.instead,
+    });
+    this.reportWarning(message);
   }
 
   formatLine(elapsedMs: number, remainingMs: number): string {

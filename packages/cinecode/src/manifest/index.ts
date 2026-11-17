@@ -21,6 +21,7 @@ import { createConversion } from "../core/time/index.js";
 import { computeClipSpan } from "../core/validation/index.js";
 import { loadModuleFile, resolveEntryFile } from "./loader.js";
 import { hotReloadEnabled } from "../loader/index.js";
+import { createError, ErrorCode } from "../errors/index.js";
 
 export interface ManifestProject {
   readonly rootDir: string;
@@ -30,14 +31,17 @@ export interface ManifestProject {
   readonly hasManifest: boolean;
 }
 
-export function normalizeManifest(raw: unknown): MainManifest {
+export function normalizeManifest(raw: unknown, manifestPath = "main.ts"): MainManifest {
   const manifest = (raw ?? {}) as MainManifest;
   const checkIds = (entries: readonly { id: string }[] | undefined, kind: string): void => {
     if (!entries) return;
     const seen = new Set<string>();
     for (const entry of entries) {
-      if (!entry.id) throw new Error(`main.ts: every ${kind} entry requires an "id"`);
-      if (seen.has(entry.id)) throw new Error(`main.ts: duplicate ${kind} id "${entry.id}"`);
+      const fail = (reason: string): never => {
+        throw createError(ErrorCode.CC1010, { path: manifestPath, reason }, { location: { file: manifestPath } });
+      };
+      if (!entry.id) fail(`every ${kind} entry requires an "id"`);
+      if (seen.has(entry.id)) fail(`duplicate ${kind} id "${entry.id}"`);
       seen.add(entry.id);
     }
   };
@@ -67,10 +71,10 @@ export async function loadManifestProject(
   const entry = config.project?.entry ?? "./main.ts";
   const entryPath = resolveEntryFile(entry, rootDir);
   if (!existsSync(entryPath)) {
-    return { rootDir, entryPath, config, manifest: normalizeManifest({}), hasManifest: false };
+    return { rootDir, entryPath, config, manifest: normalizeManifest({}, entryPath), hasManifest: false };
   }
   const raw = await loadModuleFile<MainManifest>(entry, rootDir, { fresh: hotReloadEnabled() });
-  return { rootDir, entryPath, config, manifest: normalizeManifest(raw), hasManifest: true };
+  return { rootDir, entryPath, config, manifest: normalizeManifest(raw, entryPath), hasManifest: true };
 }
 
 export function findEntry<T extends { id: string }>(
@@ -81,7 +85,7 @@ export function findEntry<T extends { id: string }>(
   const found = entries?.find((entry) => entry.id === id);
   if (!found) {
     const available = (entries ?? []).map((entry) => entry.id).join(", ") || "none";
-    throw new Error(`Unknown ${kind} "${id}". Registered: ${available}`);
+    throw createError(ErrorCode.CC3007, { kind, id, available });
   }
   return found;
 }
@@ -165,8 +169,10 @@ async function resolveTimelineValue(raw: unknown, file: string): Promise<Timelin
       );
     }
   }
-  throw new Error(
-    `Module "${file}" does not export a timeline (expected defineTimeline/defineScene)`,
+  throw createError(
+    ErrorCode.CC3008,
+    { path: file, expected: "a timeline (defineTimeline/defineScene)" },
+    { location: { file } },
   );
 }
 
@@ -184,7 +190,7 @@ export async function resolveScene(
   fps: number,
 ): Promise<ResolvedScene> {
   if (!scene.file) {
-    throw new Error(`Scene "${scene.id}" has no "file" to load`);
+    throw createError(ErrorCode.CC3008, { path: `scene:${scene.id}`, expected: 'a "file" to load' });
   }
   const raw = await loadModuleFile<unknown>(scene.file, rootDir, { fresh: hotReloadEnabled() });
   const timeline = await resolveTimelineValue(raw, scene.file);
@@ -317,7 +323,7 @@ export async function resolveAudioBuffer(
     return decoded.buffer;
   }
 
-  throw new Error(`Audio "${audioId}" has neither "file" nor "src"`);
+  throw createError(ErrorCode.CC3008, { path: `audio:${audioId}`, expected: '"file" or "src"' });
 }
 
 async function evaluateAudio(
@@ -453,7 +459,7 @@ export async function resolveImageClip(
   const height = entry.height ?? project.config.video?.height ?? 1080;
 
   if (!entry.file) {
-    throw new Error(`Image "${imageId}" has no "file" to load`);
+    throw createError(ErrorCode.CC3008, { path: `image:${imageId}`, expected: 'a "file" to load' });
   }
   const raw = await loadModuleFile<unknown>(entry.file, project.rootDir, { fresh: hotReloadEnabled() });
   const scaledWidth = Math.round(width * scaleFactor);
@@ -475,7 +481,11 @@ export async function resolveImageClip(
   } else if (raw && typeof raw === "object") {
     build = raw as Clip;
   } else {
-    throw new Error(`Module "${entry.file}" does not export an image (expected defineImage)`);
+    throw createError(
+      ErrorCode.CC3008,
+      { path: entry.file, expected: "an image (defineImage)" },
+      { location: { file: entry.file } },
+    );
   }
 
   return {

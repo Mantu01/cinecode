@@ -1,5 +1,6 @@
 import { Command } from "commander";
-import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
+import { createError, ErrorCode } from "../errors/index.js";
+import { runReport } from "./run-report.js";
 import { platform, arch, freemem } from "node:os";
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
@@ -298,8 +299,14 @@ export async function doctorCommand(options: { config?: string; fix?: boolean; j
     }
   }
 
+  runReport.result({ checks });
+  for (const check of checks) {
+    if (check.status !== "PASS") runReport.warn(String(check.name).startsWith("ffmpeg") ? ErrorCode.CC7002 : ErrorCode.CC7004, check.message);
+  }
+
   if (options.json) {
-    console.log(JSON.stringify(checks, null, 2));
+    const failed = checks.filter(c => c.status === "FAIL").length;
+    if (failed > 0) throw createError(ErrorCode.CC7004, { reason: `${failed} check(s) failed` });
     return;
   }
 
@@ -312,7 +319,7 @@ export async function doctorCommand(options: { config?: string; fix?: boolean; j
 
   const failed = checks.filter(c => c.status === "FAIL").length;
   if (failed > 0) {
-    throw new ExitSignal(EXIT_CODES.environment);
+    throw createError(ErrorCode.CC7004, { reason: `${failed} check(s) failed` });
   }
 }
 

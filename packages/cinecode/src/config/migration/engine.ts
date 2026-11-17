@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createError, ErrorCode } from "../../errors/index.js";
 
 export const CURRENT_SCHEMA_VERSION = 3;
 export const OLDEST_SUPPORTED_VERSION = 1;
@@ -142,11 +143,15 @@ export class ConfigMigrationEngine {
     if (absPath.endsWith(".json")) {
       try {
         return JSON.parse(originalContent);
-      } catch {
-        return {};
+      } catch (error) {
+        throw createError(
+          ErrorCode.CC1006,
+          { path: absPath, reason: error instanceof Error ? error.message : String(error) },
+          { location: { file: absPath }, cause: error },
+        );
       }
     }
-    return this.extractObjectFromCode(originalContent);
+    return this.extractObjectFromCode(originalContent, absPath);
   }
 
   private serialize(absPath: string, parsed: ConfigObject, originalContent: string): string {
@@ -156,17 +161,25 @@ export class ConfigMigrationEngine {
     return this.formatCodeConfig(parsed, originalContent);
   }
 
-  private extractObjectFromCode(code: string): ConfigObject {
-    try {
-      const match = code.match(/defineConfig\s*\(\s*(\{[\s\S]*\})\s*\)/);
-      if (match && match[1]) {
-        const fn = new Function(`return (${match[1]});`);
-        return fn();
-      }
-    } catch {
-      void 0;
+  private extractObjectFromCode(code: string, absPath: string): ConfigObject {
+    const match = code.match(/defineConfig\s*\(\s*(\{[\s\S]*\})\s*\)/);
+    if (!match || !match[1]) {
+      throw createError(
+        ErrorCode.CC1006,
+        { path: absPath, reason: "no defineConfig({ ... }) object found" },
+        { location: { file: absPath } },
+      );
     }
-    return {};
+    try {
+      const fn = new Function(`return (${match[1]});`);
+      return fn();
+    } catch (error) {
+      throw createError(
+        ErrorCode.CC1006,
+        { path: absPath, reason: error instanceof Error ? error.message : String(error) },
+        { location: { file: absPath }, cause: error },
+      );
+    }
   }
 
   private formatCodeConfig(config: ConfigObject, originalCode: string): string {

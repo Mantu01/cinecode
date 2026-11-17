@@ -5,6 +5,8 @@ import { isUserModuleFile, loadUserModuleNamespace } from "../loader/index.js";
 import { assertExclusive } from "./usage-error.js";
 import type { Composition } from "../core/types/index.js";
 import { renderStill } from "../renderer/engine.js";
+import { createError, ErrorCode } from "../errors/index.js";
+import { runReport } from "./run-report.js";
 
 export interface StillOptions {
   composition?: string;
@@ -37,23 +39,30 @@ export async function loadComposition(file: string, _compositionName?: string): 
     const compositions = module.main ?? module.default ?? module;
     if (Array.isArray(compositions)) return compositions;
     if (compositions && typeof compositions === "object") return [compositions as Composition];
-    throw new Error("Module must export a composition or array of compositions");
+    throw createError(ErrorCode.CC3008, { path: resolvedPath, expected: "a composition or array of compositions" }, { location: { file: resolvedPath } });
   }
   const ext = file.split(".").pop()?.toLowerCase();
   if (ext === "json") {
-    return JSON.parse(readFileSync(file, "utf-8"));
+    try {
+      return JSON.parse(readFileSync(file, "utf-8"));
+    } catch (error) {
+      throw createError(ErrorCode.CC1006, { path: resolvedPath, reason: error instanceof Error ? error.message : String(error) }, { location: { file: resolvedPath }, cause: error });
+    }
   }
-  throw new Error(`Unsupported file type: ${ext}`);
+  throw createError(ErrorCode.CC1007, { path: resolvedPath }, { location: { file: resolvedPath } });
 }
 
 export function selectComposition(compositions: Composition[], name?: string): Composition {
   if (name) {
     const found = compositions.find(c => c.name === name);
-    if (!found) throw new Error(`Composition "${name}" not found`);
+    if (!found) {
+      const available = compositions.map((composition) => composition.name).join(", ") || "none";
+      throw createError(ErrorCode.CC3007, { kind: "composition", id: name, available });
+    }
     return found;
   }
   if (compositions.length === 1) return compositions[0]!;
-  throw new Error("Multiple compositions found, specify --composition");
+  throw createError(ErrorCode.CC1012, { reason: "Multiple compositions found, specify --composition" });
 }
 
 export async function stillCommand(options: StillOptions): Promise<void> {
@@ -90,6 +99,10 @@ export async function stillCommand(options: StillOptions): Promise<void> {
     buffer = (canvas as { toBuffer(mime: "image/jpeg", quality?: number): Buffer }).toBuffer("image/jpeg", 0.9);
   }
   writeFileSync(out, buffer);
+  runReport.setProject({ root: process.cwd(), config: resolve(options.config ?? options.props ?? "cinecode.config.js") });
+  runReport.expectArtifact("image");
+  runReport.artifact({ kind: "image", path: resolve(out), units: 1, unit: "frame" });
+  runReport.result({ composition: composition.name, frame, output: resolve(out), format });
   console.log(`Rendered frame ${frame} (${composition.width}x${composition.height}) to ${out}`);
 }
 

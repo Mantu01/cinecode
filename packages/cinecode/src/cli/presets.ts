@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { listPlatformPresets, resolvePlatformPreset } from "../encoder/presets.js";
-import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
+import { createError, ErrorCode } from "../errors/index.js";
+import { runReport } from "./run-report.js";
 
 export function createPresetsCommand(): Command {
   return new Command("presets")
@@ -9,12 +10,9 @@ export function createPresetsCommand(): Command {
     .action((name: string | undefined, options: { json?: boolean }) => {
       if (name) {
         const preset = resolvePlatformPreset(name as never);
-        if (!preset) {
-          console.error(`Unknown preset: ${name}`);
-          throw new ExitSignal(EXIT_CODES.usage);
-        }
+        if (!preset) throw createError(ErrorCode.CC1011, { name });
         if (options.json) {
-          console.log(JSON.stringify(preset, null, 2));
+          runReport.result({ ...preset });
           return;
         }
         const limit = preset.maxFileSizeMB ? `${preset.maxFileSizeMB} MB` : "none";
@@ -31,7 +29,7 @@ export function createPresetsCommand(): Command {
 
       const presets = listPlatformPresets();
       if (options.json) {
-        console.log(JSON.stringify(presets, null, 2));
+        runReport.result({ presets });
         return;
       }
       console.log("Platform presets\n");

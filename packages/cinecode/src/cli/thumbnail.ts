@@ -3,6 +3,8 @@ import { join, resolve } from "node:path";
 import { mkdir } from "node:fs/promises";
 import { loadComposition, selectComposition } from "./still.js";
 import { generateThumbnail } from "../encoder/thumbnail/index.js";
+import { createError, ErrorCode } from "../errors/index.js";
+import { runReport } from "./run-report.js";
 
 interface ThumbnailCliOptions {
   composition?: string;
@@ -18,6 +20,8 @@ export async function thumbnailCommand(file: string, options: ThumbnailCliOption
   const composition = selectComposition(compositions, options.composition);
   const outputDir = resolve(options.outputDir);
   await mkdir(outputDir, { recursive: true });
+  runReport.setProject({ root: process.cwd(), manifest: resolve(file) });
+  runReport.expectArtifact("thumbnail");
 
   const result = await generateThumbnail(composition, join(outputDir, `thumbnail.${options.format}`), {
     outputDir,
@@ -31,9 +35,12 @@ export async function thumbnailCommand(file: string, options: ThumbnailCliOption
   for (const candidate of candidates) {
     console.log(`  frame ${candidate.frame.toString().padStart(6)}  score ${candidate.score.toFixed(3)}`);
   }
-  for (const file of result.files) {
-    console.log(`  wrote ${file.path} (${file.width}x${file.height})`);
+  for (const output of result.files) {
+    runReport.artifact({ kind: "thumbnail", path: resolve(output.path), units: 1, unit: "image" });
+    console.log(`  wrote ${output.path} (${output.width}x${output.height})`);
   }
+  if (result.files.length === 0) throw createError(ErrorCode.CC4004, { path: join(outputDir, `thumbnail.${options.format}`) });
+  runReport.result({ frame: result.selection.frame, files: result.files.map((output) => output.path) });
 }
 
 export function createThumbnailCommand(): Command {

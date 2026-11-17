@@ -1,7 +1,8 @@
 import { Command } from "commander";
-import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
+import { createError, ErrorCode } from "../errors/index.js";
+import { runReport } from "./run-report.js";
 
 export function createCreateCommand(): Command {
   const cmd = new Command("create")
@@ -27,15 +28,21 @@ export function createCreateCommand(): Command {
       if (opts.dryRun) args.push("--dry-run");
       if (opts.verbose) args.push("-v");
 
-      try {
-        const result = spawnSync("npx", args, { stdio: "inherit", cwd: resolve(directory, ".."), shell: true });
-        if (result.status !== 0) {
-          throw new ExitSignal(result.status ?? EXIT_CODES.runtime);
-        }
-      } catch (e) {
-        console.error("Failed to create project. Try running 'npx create-cinecode@latest' directly.");
-        throw new ExitSignal(EXIT_CODES.environment);
+      const target = resolve(directory);
+      if (!opts.dryRun) runReport.expectArtifact("project");
+      const result = spawnSync("npx", args, {
+        stdio: ["ignore", runReport.isMachine() ? "pipe" : "inherit", "inherit"],
+        cwd: resolve(directory, ".."),
+        shell: true,
+      });
+      if (result.error) {
+        throw createError(ErrorCode.CC7004, { reason: `create-cinecode could not start: ${result.error.message}` }, { cause: result.error });
       }
+      if (result.status !== 0) {
+        throw createError(ErrorCode.CC7004, { reason: `create-cinecode exited with ${result.status ?? "no status"}` });
+      }
+      if (!opts.dryRun) runReport.artifact({ kind: "project", path: target, units: 1, unit: "directory" });
+      runReport.result({ directory: target, dryRun: opts.dryRun === true });
     });
 
   return cmd;

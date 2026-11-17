@@ -7,6 +7,8 @@ import { bundleStoryHtml } from "../encoder/story-bundler.js";
 import type { Composition } from "../core/types/index.js";
 import type { TransitionRef } from "../core/types/clips.js";
 import { multiSelect } from "./prompt-select.js";
+import { createError, ErrorCode, isCinecodeError } from "../errors/index.js";
+import { runReport } from "./run-report.js";
 
 export interface SceneShot {
   readonly type: "scene";
@@ -180,6 +182,8 @@ export function createStoryCommand(): Command {
 
       const outDir = path.resolve(options.out);
       fs.mkdirSync(outDir, { recursive: true });
+      runReport.setProject({ root: process.cwd(), manifest: path.resolve(entry) });
+      runReport.expectArtifact("story");
 
       let board: Storyboard | undefined;
       let boardSource: string | undefined;
@@ -202,10 +206,13 @@ export function createStoryCommand(): Command {
       if (board) {
         const composition = storyboardToComposition(board);
         const generatedPath = writeGeneratedComposition(board);
+        runReport.artifact({ kind: "composition", path: generatedPath, units: 1, unit: "file" });
         console.log(pc.green(`✔ Generated composition from storyboard: ${generatedPath}`));
         const html = bundleStoryHtml(composition, { title: options.title });
         const htmlPath = path.join(outDir, "index.html");
         fs.writeFileSync(htmlPath, html, "utf8");
+        runReport.artifact({ kind: "story", path: htmlPath, units: 1, unit: "file" });
+        runReport.result({ composition: generatedPath, html: htmlPath });
         console.log(pc.green(`✔ Bundled standalone review story: ${htmlPath}`));
         if (options.share) {
           printShareUrl(options.expires);
@@ -216,19 +223,26 @@ export function createStoryCommand(): Command {
       let comp: Composition;
       const absEntry = path.resolve(entry);
       if (absEntry.endsWith(".json")) {
-        comp = JSON.parse(fs.readFileSync(absEntry, "utf8"));
+        try {
+          comp = JSON.parse(fs.readFileSync(absEntry, "utf8"));
+        } catch (error) {
+          throw createError(ErrorCode.CC1006, { path: absEntry, reason: error instanceof Error ? error.message : String(error) }, { location: { file: absEntry }, cause: error });
+        }
       } else {
         try {
           const mod = await import(absEntry);
           comp = mod.default || mod.composition || mod;
-        } catch {
-          comp = fallbackComposition();
+        } catch (error) {
+          if (isCinecodeError(error)) throw error;
+          throw createError(ErrorCode.CC3008, { path: absEntry, expected: "a composition export" }, { location: { file: absEntry }, cause: error });
         }
       }
 
       const html = bundleStoryHtml(comp, { title: options.title });
       const htmlPath = path.join(outDir, "index.html");
       fs.writeFileSync(htmlPath, html, "utf8");
+      runReport.artifact({ kind: "story", path: htmlPath, units: 1, unit: "file" });
+      runReport.result({ html: htmlPath });
 
       console.log(pc.green(`✔ Bundled standalone review story: ${htmlPath}`));
 

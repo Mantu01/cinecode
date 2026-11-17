@@ -4,6 +4,7 @@ import type { MediaMetadata, MediaCache } from "./cache.js";
 import { inspectMedia, getMediaType, isSupportedVideoExtension, isSupportedImageExtension, isSupportedAudioExtension } from "./inspector.js";
 import { resolveMediaSource } from "../extensions/index.js";
 import { getMediaResolverChain } from "./resolverChain.js";
+import { recordDegradation } from "../errors/degradations.js";
 
 export interface ResolverOptions {
   sourceDir: string;
@@ -26,13 +27,23 @@ export interface MediaResolutionError extends Error {
 
 export class MediaResolutionErrorImpl extends Error {
   readonly code: "CC2001" | "CC2002" | "CC2003";
+  readonly severity = "error" as const;
   readonly suggestions?: string[];
+  readonly location?: { file: string };
+  readonly fixHint?: string;
 
-  constructor(code: "CC2001" | "CC2002" | "CC2003", message: string, suggestions?: string[]) {
+  constructor(
+    code: "CC2001" | "CC2002" | "CC2003",
+    message: string,
+    suggestions?: string[],
+    path?: string,
+  ) {
     super(message);
     this.name = "MediaResolutionError";
     this.code = code;
     this.suggestions = suggestions;
+    this.location = path ? { file: path } : undefined;
+    this.fixHint = code === "CC2001" ? "Verify the resolved path exists; run `cinecode media:list`." : "Check the file with `ffmpeg -i <file>` and re-export it if corrupted.";
   }
 }
 
@@ -73,8 +84,14 @@ export class MediaCatalog {
           this.fileIndex.set(entry.name.toLowerCase(), fullPath);
         }
       }
-    } catch {
-      return;
+    } catch (error) {
+      recordDegradation({
+        code: "CC2004",
+        what: "media source directory scan incomplete",
+        reason: error instanceof Error ? error.message : String(error),
+        input: dir,
+        instead: "files below this directory are not indexed until it is readable",
+      });
     }
   }
 
@@ -89,7 +106,7 @@ export class MediaCatalog {
         });
         const type = getMediaType(path);
         if (type === "unknown") {
-          throw new MediaResolutionErrorImpl("CC2002", `Unsupported remote format: ${name}`);
+          throw new MediaResolutionErrorImpl("CC2002", `Unsupported remote format: ${name}`, undefined, name);
         }
         const metadata = await inspectMedia(path, { cache: this.cache, sourceDir: this.sourceDir });
         return { path, name: basename(path), type, metadata };
@@ -98,6 +115,8 @@ export class MediaCatalog {
         throw new MediaResolutionErrorImpl(
           "CC2003",
           `Failed to resolve remote media "${name}": ${error instanceof Error ? error.message : String(error)}`,
+          undefined,
+          name,
         );
       }
     }
@@ -116,25 +135,30 @@ export class MediaCatalog {
           try {
             const metadata = await inspectMedia(resolution.path, { cache: this.cache, sourceDir: this.sourceDir });
             return { path: resolution.path, name: resolution.name ?? basename(resolution.path), type, metadata };
-          } catch {
-            /* fall through to the standard missing-media error */
+          } catch (error) {
+            throw new MediaResolutionErrorImpl(
+              "CC2003",
+              `Unreadable or corrupt file: ${resolution.path}. ${error instanceof Error ? error.message : String(error)}`,
+              undefined,
+              resolution.path,
+            );
           }
         }
       }
       const suggestions = this.findSimilar(normalizedName);
       const message = this.formatMissingError(name, suggestions, position);
-      throw new MediaResolutionErrorImpl("CC2001", message, suggestions);
+      throw new MediaResolutionErrorImpl("CC2001", message, suggestions, resolve(this.sourceDir, name));
     }
 
     const type = getMediaType(filePath);
     if (type === "unknown") {
-      throw new MediaResolutionErrorImpl("CC2002", `Unsupported format: ${filePath}`);
+      throw new MediaResolutionErrorImpl("CC2002", `Unsupported format: ${filePath}`, undefined, filePath);
     }
 
     try {
       await stat(filePath);
     } catch {
-      throw new MediaResolutionErrorImpl("CC2003", `Unreadable or corrupt file: ${filePath}`);
+      throw new MediaResolutionErrorImpl("CC2003", `Unreadable or corrupt file: ${filePath}`, undefined, filePath);
     }
 
     const metadata = await inspectMedia(filePath, { cache: this.cache, sourceDir: this.sourceDir });
@@ -215,8 +239,14 @@ export class MediaCatalog {
           type,
           metadata,
         });
-      } catch {
-        continue;
+      } catch (error) {
+        recordDegradation({
+          code: "CC2004",
+          what: "media file omitted from listing",
+          reason: error instanceof Error ? error.message : String(error),
+          input: filePath,
+          instead: "the file is skipped in `media:list` until it becomes readable",
+        });
       }
     }
     return results;

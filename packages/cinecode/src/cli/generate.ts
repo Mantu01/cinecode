@@ -23,7 +23,8 @@ import {
   startCompositionRender,
 } from "./shared.js";
 import { formatTime } from "../pipeline/progress.js";
-import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
+import { createError, ErrorCode } from "../errors/index.js";
+import { runReport } from "./run-report.js";
 
 export type GenerateKind = "audio" | "image" | "scene" | "timeline" | "all";
 
@@ -174,15 +175,15 @@ export async function generateCommand(kind: GenerateKind, options: GenerateOptio
   const project = await loadManifestProject(config);
 
   if (!project.hasManifest) {
-    console.error(`No main.ts manifest found at ${project.entryPath}. Create one with defineMain({...}).`);
-    throw new ExitSignal(EXIT_CODES.validation);
+    throw createError(ErrorCode.CC1009, { path: project.entryPath }, { location: { file: project.entryPath }, fixHint: "Create a main.ts manifest with defineMain({...})." });
   }
+  runReport.setProject({ root: process.cwd(), config: resolve(configPath), manifest: project.entryPath });
 
   const targets = await selectTargets(kind, project, options);
   if (targets.length === 0) {
-    console.log("Nothing selected");
-    return;
+    throw createError(ErrorCode.CC4004, { path: `generate ${kind}` }, { fixHint: "Select at least one id or register entries in main.ts." });
   }
+  if (!options.dryRun) runReport.expectArtifact(`generate ${kind}`);
 
   const startTime = Date.now();
   const results: Array<{ id: string; kind: string; path: string }> = [];
@@ -198,10 +199,12 @@ export async function generateCommand(kind: GenerateKind, options: GenerateOptio
       outputPath = await generateVideoTarget(project, target as { kind: "scene" | "timeline"; entry: ManifestEntryBase }, options);
     }
     results.push({ id: target.entry.id, kind: target.kind, path: outputPath });
+    if (!options.dryRun) runReport.artifact({ kind: target.kind, path: resolve(outputPath), units: 1, unit: "file" });
     if (!options.silent) {
       console.log(`✓ ${target.kind} → ${outputPath}`);
     }
   }
+  runReport.result({ generated: results });
 
   if (!options.silent) {
     console.log(`\nGenerated ${results.length} asset(s) in ${formatTime(Date.now() - startTime)}`);
@@ -224,8 +227,7 @@ export function createGenerateCommand(): Command {
     .action(async (kind: string, options: GenerateOptions, command: Command) => {
       const valid: GenerateKind[] = ["audio", "image", "scene", "timeline", "all"];
       if (!valid.includes(kind as GenerateKind)) {
-        console.error(`Unknown target "${kind}". Expected one of: ${valid.join(", ")}`);
-        throw new ExitSignal(EXIT_CODES.usage);
+        throw createError(ErrorCode.CC1014, { kind: "target", name: kind, available: valid.join(", ") });
       }
       await generateCommand(kind as GenerateKind, { ...command.optsWithGlobals(), ...options });
     });

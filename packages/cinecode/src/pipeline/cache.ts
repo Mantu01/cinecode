@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir, readFile, rename, rm, stat, readdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { recordDegradation } from "../errors/degradations.js";
 
 export interface MediaFingerprint {
   readonly src: string;
@@ -173,8 +174,23 @@ export class RenderCache {
         this.indexes.set(compositionHash, parsed);
         return parsed;
       }
-    } catch {
-      void 0;
+      recordDegradation({
+        code: "CC4007",
+        what: "render cache index ignored",
+        reason: `unsupported index version ${String((parsed as { version?: unknown }).version)}`,
+        input: this.indexPath(compositionHash),
+        instead: "frames are recomputed for this composition",
+      });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        recordDegradation({
+          code: "CC4007",
+          what: "render cache index unreadable",
+          reason: error instanceof Error ? error.message : String(error),
+          input: this.indexPath(compositionHash),
+          instead: "frames are recomputed for this composition",
+        });
+      }
     }
     const index = this.emptyIndex(compositionHash, compositionId);
     this.indexes.set(compositionHash, index);
@@ -208,9 +224,16 @@ export class RenderCache {
       index.frames[String(frameIndex)] = { ...entry, access: Date.now() };
       this.markDirty(compositionHash);
       return buffer;
-    } catch {
+    } catch (error) {
       delete index.frames[String(frameIndex)];
       this.markDirty(compositionHash);
+      recordDegradation({
+        code: "CC4007",
+        what: "cached frame discarded",
+        reason: error instanceof Error ? error.message : String(error),
+        input: objectPath(this.cacheDir, entry.hash),
+        instead: "the frame is re-rendered",
+      });
       return null;
     }
   }
@@ -300,7 +323,18 @@ export class RenderCache {
   }
 
   private async listIndexFiles(): Promise<string[]> {
-    return (await readdir(this.indexDir).catch(() => [])).filter((file) => file.endsWith(".json"));
+    try {
+      return (await readdir(this.indexDir)).filter((file) => file.endsWith(".json"));
+    } catch (error) {
+      recordDegradation({
+        code: "CC4007",
+        what: "render cache index directory unreadable",
+        reason: error instanceof Error ? error.message : String(error),
+        input: this.indexDir,
+        instead: "cache statistics and invalidation act on an empty index",
+      });
+      return [];
+    }
   }
 
   async invalidate(compositionHash: string): Promise<void> {

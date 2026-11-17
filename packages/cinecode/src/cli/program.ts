@@ -4,7 +4,8 @@ import { COMMANDS, findCommand, suggestCommand, type CommandSpec } from "./comma
 import { EXIT_CODES, ExitSignal, exitCodeForError } from "./exit-codes.js";
 import { UsageError } from "./usage-error.js";
 import { loadEnabledAliases, resolveAliases } from "./profiles.js";
-import { formatError, isCinecodeError } from "../errors/index.js";
+import { createError, ErrorCode, formatError, isCinecodeError, type CinecodeError } from "../errors/index.js";
+import { runReport, type MachineErrorRecord, type MachineReport } from "./run-report.js";
 
 const LICENSE = `Cinecode is MIT licensed.
 
@@ -128,20 +129,79 @@ function hoistGlobalOptions(args: readonly string[], tokenIndex: number): string
   return [...rest.slice(0, insertion), ...globals, ...rest.slice(insertion)];
 }
 
-function reportError(error: unknown, verbose: boolean, color: boolean): number {
-  if (error instanceof ExitSignal) return error.exitCode;
-  if (error instanceof CommanderError) return error.exitCode === 0 ? EXIT_CODES.success : EXIT_CODES.usage;
-  if (error instanceof UsageError) {
-    console.error(error.message);
-    return EXIT_CODES.usage;
+interface Failure {
+  readonly exitCode: number;
+  readonly error: MachineErrorRecord;
+  readonly errorObject?: CinecodeError;
+  readonly plainMessage?: string;
+}
+
+function isModuleError(error: unknown): error is Error & { code: string; file: string } {
+  return error instanceof Error && typeof (error as { code?: unknown }).code === "string" && "file" in error;
+}
+
+function describeFailure(error: unknown): Failure {
+  if (error instanceof ExitSignal) {
+    const coded = createError(error.message === "Render cancelled" ? ErrorCode.CC4003 : ErrorCode.CC9001, { reason: error.message });
+    return { exitCode: error.exitCode, error: { code: coded.code, message: coded.message, fixHint: coded.fixHint }, errorObject: coded };
+  }
+  if (error instanceof CommanderError || error instanceof UsageError) {
+    const coded = createError(ErrorCode.CC0001, { reason: error.message });
+    return {
+      exitCode: error instanceof CommanderError && error.exitCode === 0 ? EXIT_CODES.success : EXIT_CODES.usage,
+      error: { code: coded.code, message: error.message, fixHint: coded.fixHint },
+      errorObject: coded,
+    };
   }
   if (isCinecodeError(error)) {
-    console.error(formatError(error, verbose, color));
-    return exitCodeForError(error.code);
+    return {
+      exitCode: exitCodeForError(error.code),
+      error: {
+        code: error.code,
+        message: error.message,
+        path: error.location?.file,
+        location: error.location,
+        fixHint: error.fixHint,
+        cause: error.cause instanceof Error ? error.cause.message : undefined,
+      },
+      errorObject: error,
+    };
   }
-  console.error(error instanceof Error ? error.message : String(error));
-  return EXIT_CODES.runtime;
+  if (isModuleError(error)) {
+    return {
+      exitCode: error.code === "USER_MODULE_UNSUPPORTED_SYNTAX" ? EXIT_CODES.environment : EXIT_CODES.validation,
+      error: { code: error.code, message: error.message, path: error.file, location: { file: error.file } },
+    };
+  }
+  const reason = error instanceof Error ? error.message : String(error);
+  const wrapped = createError(ErrorCode.CC9001, { reason }, { cause: error });
+  return {
+    exitCode: EXIT_CODES.runtime,
+    error: { code: wrapped.code, message: wrapped.message, fixHint: wrapped.fixHint, cause: reason },
+    errorObject: wrapped,
+  };
 }
+
+function writeMachine(doc: MachineReport, write: (text: string) => void): void {
+  write(`${JSON.stringify(doc, null, 2)}\n`);
+}
+
+function reportError(error: unknown, verbose: boolean, color: boolean, machine: boolean, write: (text: string) => void): number {
+  const failure = describeFailure(error);
+  if (failure.errorObject) console.error(formatError(failure.errorObject, verbose, color));
+  else if (failure.plainMessage) console.error(failure.plainMessage);
+  const degraded = runReport.degradationSummary();
+  if (degraded) console.error(degraded);
+  if (machine) writeMachine(runReport.errorReport(failure.error), write);
+  return failure.exitCode;
+}
+
+function withCapturedOutput(report: MachineReport, captured: string): MachineReport {
+  if (Object.keys(report.result).length > 0 || captured.trim().length === 0) return report;
+  return { ...report, result: { output: captured.trim() } };
+}
+
+const NO_SUMMARY = new Set(["help", "version", "license"]);
 
 export interface RunCliOptions {
   readonly cwd?: string;
@@ -173,6 +233,24 @@ export async function runCli(argv: readonly string[] = process.argv, options: Ru
   const program = createProgram();
   const noColor = raw.includes("--no-color");
   const previousNoColor = process.env.NO_COLOR;
+  const machine = raw.includes("--json");
+  const stdoutWrite = process.stdout.write.bind(process.stdout) as (text: string) => void;
+  let captured = "";
+  let restored = false;
+  const restoreStdout = (): void => {
+    if (restored) return;
+    restored = true;
+    process.stdout.write = originalStdoutWrite;
+  };
+  const originalStdoutWrite = process.stdout.write;
+  if (machine) {
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+      if (captured.length < 262144) captured += text;
+      return true;
+    }) as typeof process.stdout.write;
+  }
+  runReport.start("cinecode", machine);
   let jsonMode = false;
   let args = [...raw];
   let applied: readonly string[] = [];
@@ -203,6 +281,7 @@ export async function runCli(argv: readonly string[] = process.argv, options: Ru
 
     const tokenIndex = commandIndex(args);
     const token = tokenIndex >= 0 ? args[tokenIndex] : undefined;
+    runReport.start(token ?? "cinecode", machine);
     const spec = token ? findCommand(token) : undefined;
     if (spec?.props && args.includes("--props")) {
       console.error("cinecode: --props is deprecated, use --config instead.");
@@ -231,11 +310,17 @@ export async function runCli(argv: readonly string[] = process.argv, options: Ru
     });
 
     await program.parseAsync(["node", "cinecode", ...hoistGlobalOptions(args, tokenIndex)]);
+    const report = withCapturedOutput(runReport.finish(), captured);
+    restoreStdout();
+    if (machine) writeMachine(report, stdoutWrite);
+    else if (!token || !NO_SUMMARY.has(token)) stdoutWrite(`\n${runReport.summary(report)}\n`);
     return EXIT_CODES.success;
   } catch (error) {
     const verbose = program.opts().verbose === true || args.includes("--verbose");
-    return reportError(error, verbose, !noColor);
+    restoreStdout();
+    return reportError(error, verbose, !noColor, machine, stdoutWrite);
   } finally {
+    restoreStdout();
     if (jsonMode) {
       const { setJsonMode } = await import("../observability/logger.js");
       setJsonMode(false);

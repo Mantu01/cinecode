@@ -1,6 +1,7 @@
 import { mkdir, readdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomic } from "../encoder/output.js";
+import { recordDegradation } from "../errors/degradations.js";
 
 export interface EncoderCheckpointState {
   readonly framesEncoded: number;
@@ -114,7 +115,16 @@ export class CheckpointManager {
       const checkpoint = JSON.parse(raw) as RenderCheckpoint;
       this.hydrate(checkpoint);
       return checkpoint;
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        recordDegradation({
+          code: "CC4006",
+          what: "render checkpoint ignored",
+          reason: error instanceof Error ? error.message : String(error),
+          input: this.checkpointPath,
+          instead: "rendering starts without the saved checkpoint",
+        });
+      }
       return null;
     }
   }
@@ -130,8 +140,14 @@ export class CheckpointManager {
         if (checkpoint.compositionHash !== this.compositionHash) continue;
         if (checkpoint.totalFrames !== this.totalFrames) continue;
         if (latest === null || checkpoint.timestamp > latest.timestamp) latest = checkpoint;
-      } catch {
-        continue;
+      } catch (error) {
+        recordDegradation({
+          code: "CC4006",
+          what: "render checkpoint skipped",
+          reason: error instanceof Error ? error.message : String(error),
+          input: join(this.checkpointsDir, file),
+          instead: "that checkpoint is not used for resume",
+        });
       }
     }
     if (latest) {

@@ -1,5 +1,6 @@
 import { Command } from "commander";
-import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
+import { recordDegradation } from "../errors/degradations.js";
+import { runReport } from "./run-report.js";
 import { resolve } from "node:path";
 import { readFile, stat } from "node:fs/promises";
 import type { CinecodeConfig, Composition } from "../core/types/index.js";
@@ -12,7 +13,7 @@ import { allClips } from "../core/types/tracks.js";
 import { checkMissingGlyphs } from "../renderer/text/engine.js";
 import { createMediaResolver } from "../media/resolver.js";
 import { createMediaCache } from "../media/cache.js";
-import { createError, ErrorCode, type CinecodeError } from "../errors/index.js";
+import { createError, ErrorCode, isCinecodeError, type CinecodeError } from "../errors/index.js";
 import { loadComposition } from "./still.js";
 import { assembleTimelineComposition, loadManifestProject } from "../manifest/index.js";
 
@@ -29,8 +30,14 @@ async function loadCheckCompositions(config: CinecodeConfig): Promise<Compositio
       }
       return compositions;
     }
-  } catch {
-    void 0; // fall through to direct composition loading
+  } catch (error) {
+    recordDegradation({
+      code: ErrorCode.CC1010,
+      what: "manifest composition assembly skipped",
+      reason: error instanceof Error ? error.message : String(error),
+      input: config.project?.entry,
+      instead: "direct composition loading from the configured entry",
+    });
   }
   const entry = config.project?.entry ?? "cinecode.config.js";
   return await loadComposition(entry);
@@ -127,14 +134,12 @@ export async function runCheck(configPath: string): Promise<CheckReport> {
     for (const e of shape.errors) errors.push(toIssue(e, "config"));
     for (const w of shape.warnings) warnings.push(toIssue(w, "config"));
   } catch (error) {
-    errors.push({
-      code: ErrorCode.CC1001,
-      severity: "error",
-      message: `Config could not be loaded: ${error instanceof Error ? error.message : String(error)}`,
-      category: "config",
-      file: configPath,
-      fixHint: "Verify the config file exists and exports a valid config",
-    });
+    if (isCinecodeError(error)) throw error;
+    throw createError(
+      ErrorCode.CC1005,
+      { path: configPath, reason: error instanceof Error ? error.message : String(error) },
+      { location: { file: configPath }, cause: error },
+    );
   }
 
   // --- authoring (compositions, timelines, keyframes, props, glyphs) ---
@@ -229,8 +234,14 @@ export async function runCheck(configPath: string): Promise<CheckReport> {
       for (const entry of entries) {
         if (entry.file) scanTargets.add(resolve(process.cwd(), entry.file));
       }
-    } catch {
-      void 0;
+    } catch (error) {
+      recordDegradation({
+        code: ErrorCode.CC1010,
+        what: "manifest determinism scan skipped",
+        reason: error instanceof Error ? error.message : String(error),
+        input: configPath,
+        instead: "only the config file is scanned for non-deterministic APIs",
+      });
     }
   }
   for (const target of scanTargets) {
@@ -239,8 +250,14 @@ export async function runCheck(configPath: string): Promise<CheckReport> {
       for (const issue of scanSourceForNonDeterminism(source, target)) {
         (issue.severity === "error" ? errors : warnings).push(issueFromValidation(issue, "determinism"));
       }
-    } catch {
-      void 0; // unreadable source already reported by composition load
+    } catch (error) {
+      recordDegradation({
+        code: ErrorCode.CC1005,
+        what: "authored source scan skipped",
+        reason: error instanceof Error ? error.message : String(error),
+        input: target,
+        instead: "non-determinism checks do not cover this file",
+      });
     }
   }
 
@@ -293,11 +310,12 @@ export async function runCheck(configPath: string): Promise<CheckReport> {
 
 export async function checkCommand(options: CheckOptions): Promise<void> {
   const configPath = resolve(process.cwd(), options.config ?? "cinecode.config.js");
+  runReport.setProject({ root: process.cwd(), config: configPath });
   const report = await runCheck(configPath);
+  runReport.result({ ...report });
+  for (const issue of report.warnings) runReport.warn(issue.code, issue.message, issue.file);
 
-  if (options.json) {
-    console.log(JSON.stringify(report, null, 2));
-  } else {
+  if (!runReport.isMachine()) {
     const groups: Array<[CheckCategory, CheckIssue[]]> = [
       ["config", [...report.errors, ...report.warnings].filter((i) => i.category === "config")],
       ["authoring", [...report.errors, ...report.warnings].filter((i) => i.category === "authoring")],
@@ -325,7 +343,10 @@ export async function checkCommand(options: CheckOptions): Promise<void> {
   }
 
   const failed = !report.ok || (options.strict && report.warnings.length > 0);
-  if (failed) throw new ExitSignal(EXIT_CODES.validation);
+  if (failed) {
+    const count = report.errors.length + (options.strict ? report.warnings.length : 0);
+    throw createError(ErrorCode.CC1013, { count }, { location: { file: configPath } });
+  }
 }
 
 export function createCheckCommand(): Command {

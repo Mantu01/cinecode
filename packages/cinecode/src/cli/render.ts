@@ -4,7 +4,7 @@ import type { CinecodeConfig, Composition, QualitySetting, VideoCodec, RenderFor
 import { clampCrf, resolveVideoEncoding, type VideoEncoding } from "../core/quality.js";
 import { fitToPreset, resolvePlatformPreset } from "../encoder/presets.js";
 import { getPreset, listPresets, listPresetIds, validatePreset } from "../encoder/platform-presets.js";
-import { loadConfig, getDefaultConfig } from "../config/schema.js";
+import { loadConfig } from "../config/schema.js";
 import { assembleTimelineComposition, findEntry, loadManifestProject, type ManifestProject } from "../manifest/index.js";
 import { loadComposition, selectComposition, parseTimeInput } from "./still.js";
 import {
@@ -17,9 +17,9 @@ import {
 } from "./shared.js";
 import { formatTime, type ProgressEvent } from "../pipeline/progress.js";
 import type { RenderJob } from "../pipeline/index.js";
-import { isCinecodeError, formatError } from "../errors/index.js";
-import { ExitSignal, EXIT_CODES } from "./exit-codes.js";
+import { createError, ErrorCode } from "../errors/index.js";
 import { assertAlphaFormat } from "./usage-error.js";
+import { runReport } from "./run-report.js";
 
 export interface RenderCliOptions {
   composition?: string;
@@ -82,15 +82,23 @@ const OUTPUT_EXTENSIONS: Readonly<Partial<Record<RenderFormat, string>>> = {
 };
 
 function outputExtension(format: RenderFormat | undefined): string {
-  return OUTPUT_EXTENSIONS[format ?? "mp4"] ?? ".mp4";
+  const resolved = format ?? "mp4";
+  const extension = OUTPUT_EXTENSIONS[resolved];
+  if (!extension) {
+    throw createError(ErrorCode.CC1008, {
+      format: resolved,
+      supported: Object.keys(OUTPUT_EXTENSIONS).join(", "),
+    });
+  }
+  return extension;
 }
 
 function applyPlatformPreset(options: RenderCliOptions): RenderCliOptions {
   if (!options.preset) return options;
   const preset = getPreset(options.preset);
-  if (!preset) throw new Error(validatePreset(options.preset) ?? `Unknown platform preset "${options.preset}"`);
+  if (!preset) throw createError(ErrorCode.CC1011, { name: options.preset });
   const containerError = validatePreset(options.preset);
-  if (containerError) throw new Error(containerError);
+  if (containerError) throw createError(ErrorCode.CC1012, { reason: containerError });
   const formatOverridden = options.format !== undefined && options.format !== "mp4";
   return {
     ...options,
@@ -129,14 +137,14 @@ function applyPostProcessingOverrides(
 
 function parseResolution(input: string): { width: number; height: number } {
   const match = input.match(/^(\d+)x(\d+)$/i);
-  if (!match) throw new Error(`Invalid resolution format: ${input}. Use WIDTHxHEIGHT (e.g., 1920x1080)`);
+  if (!match) throw createError(ErrorCode.CC1012, { reason: `Invalid resolution format: ${input}. Use WIDTHxHEIGHT (e.g., 1920x1080)` });
   return { width: parseInt(match[1]!, 10), height: parseInt(match[2]!, 10) };
 }
 
 function parseConcurrency(input: string): number | "auto" {
   if (input === "auto") return "auto";
   const num = parseInt(input, 10);
-  if (isNaN(num) || num < 1) throw new Error(`Invalid concurrency: ${input}`);
+  if (isNaN(num) || num < 1) throw createError(ErrorCode.CC1012, { reason: `Invalid concurrency: ${input}` });
   return num;
 }
 
@@ -247,7 +255,8 @@ async function renderTimelines(
       onProgress: undefined,
     });
     attachProgress(job);
-    await job.promise;
+    const result = await job.promise;
+    runReport.artifact({ kind: "video", path: result.outputPath, units: Math.round(result.duration * fps), unit: "frames" });
   }
 }
 
@@ -325,7 +334,8 @@ async function renderLegacyCompositions(
       toFrame,
     });
     attachProgress(job);
-    await job.promise;
+    const result = await job.promise;
+    runReport.artifact({ kind: "video", path: result.outputPath, units: Math.round(result.duration * fps), unit: "frames" });
   }
 }
 
@@ -337,20 +347,16 @@ export async function renderCommand(options: RenderCliOptions): Promise<void> {
     return;
   }
   const configPath = options.config ?? options.props ?? "cinecode.config.js";
-  let config: CinecodeConfig;
-  let configResolved: string;
-  try {
-    configResolved = resolve(configPath);
-    config = await loadConfig(configPath);
-  } catch {
-    config = getDefaultConfig();
-    configResolved = resolve("cinecode.config.js");
-  }
+  const configResolved = resolve(configPath);
+  const config = await loadConfig(configPath);
 
   const projectRoot = dirname(configResolved);
   const project = await loadManifestProject(config, projectRoot);
+  runReport.setProject({ root: projectRoot, config: configResolved, manifest: project.entryPath });
   options = applyPlatformPreset(options);
   const useManifest = project.hasManifest && (project.manifest.timelines?.length ?? 0) > 0 && !options.composition;
+
+  if (!options.dryRun) runReport.expectArtifact("video");
 
   try {
     if (useManifest) {
@@ -360,16 +366,11 @@ export async function renderCommand(options: RenderCliOptions): Promise<void> {
     }
   } catch (error) {
     if (error instanceof Error && error.message === "Render cancelled") {
-      console.log("Render cancelled");
-      throw new ExitSignal(EXIT_CODES.cancelled);
+      throw createError(ErrorCode.CC4003, {}, { cause: error });
     }
-    if (isCinecodeError(error)) {
-      console.error(formatError(error));
-    } else {
-      console.error(`Render failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
-    throw new ExitSignal(EXIT_CODES.runtime);
+    throw error;
   }
+  runReport.result({ rendered: runReport.artifactCount() });
 }
 
 /** Negated flag with its own key, so --effects and --no-effects are mutually exclusive. */
