@@ -4,7 +4,7 @@ import { runReport } from "./run-report.js";
 import { resolve } from "node:path";
 import { loadComposition, selectComposition } from "./still.js";
 import { resolveCacheDir, resolveOutputDir } from "./shared.js";
-import { getDefaultConfig, loadConfig } from "../config/schema.js";
+import { loadConfig } from "../config/schema.js";
 import { parseVariantLabel, renderMultiResolution } from "../pipeline/multiResolution.js";
 
 interface MultiResOptions {
@@ -25,7 +25,7 @@ export function createMultiResCommand(): Command {
     .option("--seed <number>", "Random seed", (value) => parseInt(value, 10))
     .option("--concurrency <number>", "Worker count")
     .action(async (file: string, options: MultiResOptions) => {
-      const config = await loadConfig(resolve("cinecode.config.ts")).catch(() => getDefaultConfig());
+      const config = await loadConfig(resolve("cinecode.config.ts"));
       const compositions = await loadComposition(file, options.composition);
       const composition = selectComposition(compositions, options.composition);
       const variants = options.variants.split(",").map((label) => parseVariantLabel(label.trim())).filter(Boolean);

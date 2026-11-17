@@ -5,6 +5,7 @@ import type {
   CinecodeConfig,
   DevConfig,
   ImageConfig,
+  PluginConfigEntry,
   ProjectConfig,
   RenderConfig,
   VideoConfig,
@@ -18,6 +19,8 @@ import {
 import { mergeConfigInheritance } from "./inherit.js";
 import { isUserModuleFile, loadUserModule } from "../loader/index.js";
 import { createError, ErrorCode, isCinecodeError } from "../errors/index.js";
+import { RESOLUTION_DIMENSIONS } from "./zod-schema.js";
+import { validateAuthoringConfig, validateNormalizedConfig } from "./validator.js";
 
 export interface LoadConfigOptions {
   readonly configPath?: string;
@@ -68,7 +71,7 @@ export const DEFAULT_DEV: DevConfig = {
   metricsPort: undefined,
 };
 
-const DEFAULT_CONFIG: Required<CinecodeConfig> = {
+const DEFAULT_CONFIG: CinecodeConfig = {
   schemaVersion: 2,
   project: DEFAULT_PROJECT,
   video: DEFAULT_VIDEO,
@@ -145,7 +148,11 @@ export async function loadConfig(configPath: string, options: LoadConfigOptions 
     assertEnvVarsPresent(findMissingEnvVarsDeep(rawConfig), resolvedPath);
     const withEnv = substituteEnvVarsDeep(rawConfig);
     const merged = await mergeConfigInheritance(resolvedPath, withEnv);
-    return normalizeConfig(merged);
+    assertAuthoringSchema(merged, resolvedPath);
+    const config = normalizeConfig(merged);
+    const normalized = validateNormalizedConfig(config, resolvedPath);
+    if (normalized.errors.length > 0) throw normalized.errors[0];
+    return config;
   } catch (e) {
     if (isCinecodeError(e)) throw e;
     const reason = e instanceof Error ? e.message : String(e);
@@ -155,6 +162,11 @@ export async function loadConfig(configPath: string, options: LoadConfigOptions 
       { location: { file: resolvedPath }, cause: e },
     );
   }
+}
+
+function assertAuthoringSchema(raw: Record<string, unknown>, configPath: string): void {
+  const { errors } = validateAuthoringConfig(raw, configPath);
+  if (errors.length > 0) throw errors[0];
 }
 
 function assertEnvVarsPresent(missing: readonly string[], configPath: string): void {
@@ -170,17 +182,17 @@ function assertEnvVarsPresent(missing: readonly string[], configPath: string): v
   );
 }
 
-/**
- * Flattens a raw config (schema v1 or v2, optionally merged with a raw
- * composition export) into a fully-populated `CinecodeConfig`. Both the
- * structured v2 blocks and the legacy flattened fields are always present.
- */
+function normalizePluginEntries(raw: unknown): PluginConfigEntry[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((entry) => (typeof entry === "string" ? { source: entry } : (entry as PluginConfigEntry)));
+}
+
 export function normalizeConfig(raw: Record<string, unknown>): CinecodeConfig {
   const rawProject = (raw.project as Partial<ProjectConfig> | undefined) ?? {};
   const rawVideo = (raw.video as Partial<VideoConfig> | undefined) ?? {};
   const rawImages = (raw.images as Partial<ImageConfig> | undefined) ?? {};
   const rawDev = (raw.dev as Partial<DevConfig> | undefined) ?? {};
-  const rawRender = (raw.render as RenderConfig | undefined) ?? {};
+  const rawRender = (raw.render as Partial<RenderConfig> | undefined) ?? {};
   const rawAudio = (raw.audio as CinecodeConfig["audio"]) ?? {};
 
   const name =
@@ -259,20 +271,25 @@ export function normalizeConfig(raw: Record<string, unknown>): CinecodeConfig {
   const render: RenderConfig = {
     fps,
     resolution: `${width}x${height}`,
-    format: rawRender.format ?? DEFAULT_RENDER.format,
+    format: rawRender.format ?? DEFAULT_RENDER.format!,
     background,
-    quality: rawRender.quality ?? DEFAULT_RENDER.quality,
-    codec: rawRender.codec ?? DEFAULT_RENDER.codec,
+    quality: rawRender.quality ?? DEFAULT_RENDER.quality!,
+    codec: rawRender.codec ?? DEFAULT_RENDER.codec!,
     crf: rawRender.crf,
-    preset: rawRender.preset ?? DEFAULT_RENDER.preset,
-    hardwareAcceleration:
-      rawRender.hardwareAcceleration ?? DEFAULT_RENDER.hardwareAcceleration,
+    preset: rawRender.preset ?? DEFAULT_RENDER.preset!,
+    hardwareAcceleration: rawRender.hardwareAcceleration ?? DEFAULT_RENDER.hardwareAcceleration!,
     concurrency: rawRender.concurrency ?? (raw.concurrency as number | "auto" | undefined),
     chunkSize: rawRender.chunkSize,
+    alpha: rawRender.alpha,
+    twoPass: rawRender.twoPass,
+    platformPreset: rawRender.platformPreset,
+    enforceAspectRatio: rawRender.enforceAspectRatio,
+    variants: rawRender.variants,
+    colorManagement: rawRender.colorManagement,
   };
 
   return {
-    schemaVersion: (raw.schemaVersion as number | undefined) ?? SCHEMA_VERSION,
+    schemaVersion: (raw.schemaVersion as CinecodeConfig["schemaVersion"] | undefined) ?? SCHEMA_VERSION,
     project,
     video,
     images: {
@@ -300,33 +317,36 @@ export function normalizeConfig(raw: Record<string, unknown>): CinecodeConfig {
       masterVolume: rawAudio?.masterVolume ?? DEFAULT_CONFIG.audio?.masterVolume,
       normalize: rawAudio?.normalize,
       limiter: rawAudio?.limiter,
+      sidechains: rawAudio?.sidechains,
     },
     fonts: (raw.fonts as CinecodeConfig["fonts"]) ?? DEFAULT_CONFIG.fonts,
     concurrency: (raw.concurrency as CinecodeConfig["concurrency"]) ?? DEFAULT_CONFIG.concurrency,
     logLevel: (raw.logLevel as CinecodeConfig["logLevel"]) ?? DEFAULT_CONFIG.logLevel,
     overwrite: (raw.overwrite as boolean | undefined) ?? DEFAULT_CONFIG.overwrite,
     gitignore: (raw.gitignore as boolean | undefined) ?? DEFAULT_CONFIG.gitignore,
-    plugins: (raw.plugins as CinecodeConfig["plugins"]) ?? DEFAULT_CONFIG.plugins,
+    plugins: normalizePluginEntries(raw.plugins),
+    pluginPrecedence: (raw.pluginPrecedence as string[] | undefined) ?? DEFAULT_CONFIG.pluginPrecedence,
+    pluginPermissions:
+      (raw.pluginPermissions as Record<string, string[]> | undefined) ?? DEFAULT_CONFIG.pluginPermissions,
+    security: {
+      ...DEFAULT_CONFIG.security,
+      ...(raw.security as CinecodeConfig["security"] | undefined),
+    },
+    telemetry: {
+      ...DEFAULT_CONFIG.telemetry,
+      ...(raw.telemetry as CinecodeConfig["telemetry"] | undefined),
+    },
     autoDiscoverPlugins:
       (raw.autoDiscoverPlugins as boolean | undefined) ?? DEFAULT_CONFIG.autoDiscoverPlugins,
     ignorePatterns: (raw.ignorePatterns as string[] | undefined) ?? DEFAULT_CONFIG.ignorePatterns,
   };
 }
 
-const RESOLUTION_PRESETS: Record<string, { width: number; height: number }> = {
-  "720p": { width: 1280, height: 720 },
-  "1080p": { width: 1920, height: 1080 },
-  "1440p": { width: 2560, height: 1440 },
-  "4k": { width: 3840, height: 2160 },
-  "vertical-1080": { width: 1080, height: 1920 },
-  "square-1080": { width: 1080, height: 1080 },
-};
-
 export function parseResolutionString(
   value: string | undefined,
 ): { width: number; height: number } | null {
   if (!value) return null;
-  const preset = RESOLUTION_PRESETS[value.toLowerCase()];
+  const preset = RESOLUTION_DIMENSIONS[value.toLowerCase() as keyof typeof RESOLUTION_DIMENSIONS];
   if (preset) return preset;
   const match = value.match(/^(\d+)x(\d+)$/i);
   if (!match) return null;
@@ -366,33 +386,6 @@ export function findConfigFile(dir = process.cwd()): string {
     if (existsSync(full)) return full;
   }
   return resolve(dir, "cinecode.config.js");
-}
-
-// Legacy shallow validator retained for backwards compatibility.
-export function validateConfig(config: CinecodeConfig): string[] {
-  const errors: string[] = [];
-
-  if (config.schemaVersion !== 1 && config.schemaVersion !== 2) {
-    errors.push(`Unsupported schema version: ${config.schemaVersion}`);
-  }
-  if (!config.sourceDir || typeof config.sourceDir !== "string") {
-    errors.push("sourceDir is required");
-  }
-  if (config.render?.fps !== undefined && (config.render.fps < 1 || config.render.fps > 120)) {
-    errors.push("render.fps must be between 1 and 120");
-  }
-  if (config.render?.resolution) {
-    if (!parseResolutionString(config.render.resolution)) {
-      errors.push('render.resolution must be a preset or "WIDTHxHEIGHT"');
-    }
-  }
-  if (config.audio?.sampleRate !== undefined && ![22050, 44100, 48000, 96000].includes(config.audio.sampleRate)) {
-    errors.push("audio.sampleRate must be 22050, 44100, 48000, or 96000");
-  }
-  if (config.audio?.channels !== undefined && ![1, 2].includes(config.audio.channels)) {
-    errors.push("audio.channels must be 1 or 2");
-  }
-  return errors;
 }
 
 export function getDefaultConfig(): CinecodeConfig {

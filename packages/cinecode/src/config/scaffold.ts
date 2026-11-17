@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { CinecodeConfig } from "../core/types/index.js";
+import type { InferredCinecodeConfig } from "./zod-schema.js";
 import { defineConfig as coreDefineConfig } from "../core/define/definitions.js";
 
-export function defineConfig(config: CinecodeConfig): CinecodeConfig {
+export function defineConfig(config: InferredCinecodeConfig): InferredCinecodeConfig {
   return coreDefineConfig(config);
 }
 

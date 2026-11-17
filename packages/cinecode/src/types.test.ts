@@ -32,8 +32,8 @@ const blurEffect = defineEffect({
 });
 
 // --- Config type tests ---
-import type { CinecodeConfig } from "./core/types/config.js";
-const config: CinecodeConfig = {
+import type { InferredCinecodeConfig } from "./config/zod-schema.js";
+const config: InferredCinecodeConfig = {
   schemaVersion: 2,
   project: { name: "test", entry: "./main.ts", sourceDir: "./src", outputDir: "./output", cacheDir: ".cinecode/cache" },
   sourceDir: "./src",

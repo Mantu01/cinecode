@@ -5,6 +5,7 @@ import { clampCrf, resolveVideoEncoding, type VideoEncoding } from "../core/qual
 import { fitToPreset, resolvePlatformPreset } from "../encoder/presets.js";
 import { getPreset, listPresets, listPresetIds, validatePreset } from "../encoder/platform-presets.js";
 import { loadConfig } from "../config/schema.js";
+import { QUALITY_SETTINGS, RENDER_FORMATS, VIDEO_CODECS } from "../config/zod-schema.js";
 import { assembleTimelineComposition, findEntry, loadManifestProject, type ManifestProject } from "../manifest/index.js";
 import { loadComposition, selectComposition, parseTimeInput } from "./still.js";
 import {
@@ -388,8 +389,8 @@ export function createRenderCommand(): Command {
     .option("-t, --timeline <id>", "Render a single timeline from main.ts")
     .option("--all", "Render every timeline", false)
     .option("-p, --preview", "Render preview quality (faster)", false)
-    .option("--quality <level>", "Quality: draft | preview | final | lossless (or legacy high/medium/low)", undefined)
-    .option("--codec <codec>", "Video codec: h264 | h265 | av1 | prores | vp9")
+    .option("--quality <level>", `Quality: ${QUALITY_SETTINGS.join(" | ")}`, undefined)
+    .option("--codec <codec>", `Video codec: ${VIDEO_CODECS.join(" | ")}`)
     .option("--crf <number>", "Override CRF (0 = lossless)", (v) => parseInt(v, 10))
     .option("--fps <number>", "Override FPS", (v) => parseInt(v, 10))
     .option("--resolution <WIDTHxHEIGHT>", "Override resolution")
@@ -403,7 +404,7 @@ export function createRenderCommand(): Command {
     .option("--overwrite", "Overwrite existing output file", false)
     .option("--dry-run", "Print render plan without rendering", false)
     .option("--seed <number>", "Random seed", (v) => parseInt(v, 10))
-    .option("--format <format>", "Output format: mp4, webm, mkv, avi, gif, apng, webp, avif, png, pdf, frames, spritesheet")
+    .option("--format <format>", `Output format: ${RENDER_FORMATS.join(", ")}`)
     .option("--preset <name>", `Platform preset (${listPresetIds().join(", ")})`)
     .option("--list-presets", "List available platform presets", false)
     .option("--gif-quality <n>", "GIF quality 1-8 (controls palette size)", (v) => parseInt(v, 10))

@@ -4,7 +4,8 @@ import type { TrackKind } from "../types/tracks.js";
 import type { Clip } from "../types/clips.js";
 import type { MainManifest } from "../types/manifest.js";
 import type { AudioBuffer } from "../../audio/types.js";
-import { validateConfigWithZod } from "../../config/zod-schema.js";
+import type { InferredCinecodeConfig } from "../../config/zod-schema.js";
+import { validateAuthoringConfig } from "../../config/validator.js";
 
 export interface TimelineFactory<P> {
   readonly props?: P;
@@ -104,19 +105,15 @@ export function defineSound<P>(
 // Allow defineConfig to accept either a CinecodeConfig or a Composition object.
 // When a composition is passed (has rootTimeline), it's returned as-is for
 // backward-compat with existing projects that export a raw composition.
-export function defineConfig(config: CinecodeConfig): CinecodeConfig;
+export function defineConfig(config: InferredCinecodeConfig): InferredCinecodeConfig;
 export function defineConfig(config: {
   readonly rootTimeline?: unknown;
   readonly [key: string]: unknown;
 }): { readonly rootTimeline?: unknown; readonly [key: string]: unknown };
 export function defineConfig(config: unknown): unknown {
-  if (typeof config === "object" && config !== null) {
-    const parsed = validateConfigWithZod(config);
-    if (!parsed.valid) {
-      throw new Error(
-        `defineConfig: invalid config — ${parsed.errors.map((e) => `${e.path}: ${e.message}`).join("; ")}`,
-      );
-    }
+  if (typeof config === "object" && config !== null && !("rootTimeline" in config)) {
+    const { errors } = validateAuthoringConfig(config);
+    if (errors.length > 0) throw errors[0];
   }
   return config;
 }

@@ -7,7 +7,6 @@ export {
   resolveConfigPath,
   parseResolutionString,
   guessAspectRatio,
-  validateConfig as validateConfigSchema,
   DEFAULT_PROJECT,
   DEFAULT_VIDEO,
   DEFAULT_RENDER,
@@ -15,7 +14,13 @@ export {
   DEFAULT_DEV,
   SCHEMA_VERSION,
 } from "./schema.js";
-export { validateConfig as validateConfigValidator, resolveResolution, resolveFps } from "./validator.js";
+export {
+  validateConfig,
+  validateAuthoringConfig,
+  validateNormalizedConfig,
+  resolveResolution,
+  resolveFps,
+} from "./validator.js";
 export type { ValidationResult } from "./validator.js";
 export { ensureGitignoreEntries, removeGitignoreEntries, checkGitignoreEntries } from "./gitignore.js";
 export type { GitignoreManagerOptions } from "./gitignore.js";
@@ -63,9 +68,8 @@ export {
   ImageConfigSchema,
   DevConfigSchema,
   AudioConfigSchema,
-  TrackConfigSchema,
-  ClipConfigSchema,
-  EffectConfigSchema,
+  NormalizedCinecodeConfigSchema,
+  validateNormalizedConfigWithZod,
   type InferredCinecodeConfig,
   type ZodValidationResult,
 } from "./zod-schema.js";

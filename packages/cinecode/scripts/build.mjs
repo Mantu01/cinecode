@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import {
   assertPack,
   assertTargets,
@@ -20,14 +20,6 @@ const startedAt = Date.now();
 
 cleanDir(dist);
 
-const schemaPath = path.join(pkg, "cinecode.schema.json");
-const { generateSchemaJson } = await import(pathToFileURL(path.join(pkg, "src/config/json-schema.ts")).href);
-const generatedSchema = generateSchemaJson();
-JSON.parse(generatedSchema);
-if (readFileSync(schemaPath, "utf8") !== generatedSchema) {
-  fail("cinecode.schema.json is stale; run pnpm generate:schema");
-}
-
 const manifest = JSON.parse(readFileSync(path.join(pkg, "package.json"), "utf8"));
 const { MIN_NODE_VERSION } = await import(pathToFileURL(path.join(pkg, "src/loader/runtime.ts")).href);
 if (manifest.engines?.node !== `>=${MIN_NODE_VERSION}`) {
@@ -39,6 +31,18 @@ execFileSync(
   [path.resolve(pkg, "..", "..", "node_modules", "typescript", "bin", "tsc"), "-p", "tsconfig.build.json"],
   { cwd: pkg, stdio: "inherit" },
 );
+
+const schemaPath = path.join(pkg, "cinecode.schema.json");
+const { generateSchemaJson, generateReferenceMarkdown } = await import(pathToFileURL(path.join(dist, "esm/config/json-schema.js")).href);
+const generatedSchema = generateSchemaJson();
+JSON.parse(generatedSchema);
+if (readFileSync(schemaPath, "utf8") !== generatedSchema) {
+  fail("cinecode.schema.json is stale; run pnpm generate:schema");
+}
+const referencePath = path.resolve(pkg, "..", "..", "docs/config-reference.md");
+if (!existsSync(referencePath) || readFileSync(referencePath, "utf8") !== generateReferenceMarkdown()) {
+  fail("docs/config-reference.md is stale; run pnpm generate:schema");
+}
 
 const binEntry = path.join(dist, "esm", "cli", "main.js");
 const binSource = readFileSync(binEntry, "utf8");

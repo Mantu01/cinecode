@@ -158,7 +158,7 @@ export interface ResolveEncodingOptions {
  * `render.crf` / `render.preset` / `render.codec` override the profile defaults.
  */
 export function resolveVideoEncoding(options: ResolveEncodingOptions = {}): VideoEncoding {
-  const render = options.render ?? {};
+  const render: Partial<RenderConfig> = options.render ?? {};
   const profile = normalizeQuality(options.quality ?? render.quality);
   const defaults = VIDEO_QUALITY_PROFILES[profile];
 
