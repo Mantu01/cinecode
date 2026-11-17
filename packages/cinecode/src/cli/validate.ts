@@ -1,15 +1,9 @@
 import { Command } from "commander";
-import { resolve } from "node:path";
 import type { CinecodeConfig, Composition } from "../core/types/index.js";
-import { loadConfig } from "../config/schema.js";
-import { resolveProjectLocation } from "../config/project.js";
 import { validateConfig } from "../config/validator.js";
 import { ensureGitignoreEntries } from "../config/gitignore.js";
 import { createError, ErrorCode, type CinecodeError, formatError } from "../errors/index.js";
-import { createMediaResolver } from "../media/resolver.js";
-import { mediaIgnore, printProjectContext } from "./shared.js";
-import { createMediaCache } from "../media/cache.js";
-import { loadComposition } from "./still.js";
+import { createProjectResolver, reportResolution, type MediaAccess } from "./project-resolver.js";
 import { allClips } from "../core/types/tracks.js";
 import { runReport } from "./run-report.js";
 
@@ -51,22 +45,15 @@ async function checkCompositionDeterminism(compositions: Composition[], file: st
   return errors;
 }
 
-async function checkMediaFiles(config: CinecodeConfig, projectRoot: string): Promise<CinecodeError[]> {
+async function checkMediaFiles(access: MediaAccess): Promise<CinecodeError[]> {
   const errors: CinecodeError[] = [];
-  const cache = createMediaCache(resolve(projectRoot, config.cacheDir));
-  await cache.initialize();
-  const resolver = createMediaResolver({ sourceDir: resolve(projectRoot, config.sourceDir), cache, cloudMedia: config.cloudMedia ?? [], ignore: mediaIgnore(config) });
-  await resolver.initialize();
-
-  const media = await resolver.listMedia();
-  for (const m of media) {
+  for (const media of await access.catalog.listMedia()) {
     try {
-      await resolver.resolve(m.name);
-    } catch (e) {
-      errors.push(createError(ErrorCode.CC2003, { path: m.path, reason: e instanceof Error ? e.message : "Unknown error" }, { location: { file: m.path } }));
+      await access.catalog.resolve(media.name);
+    } catch (error) {
+      errors.push(createError(ErrorCode.CC2003, { path: media.path, reason: error instanceof Error ? error.message : "Unknown error" }, { location: { file: media.path } }));
     }
   }
-
   return errors;
 }
 
@@ -106,21 +93,19 @@ async function checkProps(compositions: Composition[]): Promise<CinecodeError[]>
 }
 
 export async function validateCommand(options: ValidateOptions): Promise<void> {
-  const location = resolveProjectLocation({ root: options.root, config: options.config });
-  const projectRoot = location.root;
-  const resolvedConfigPath = location.configPath;
-
-  printProjectContext(location, (options as { verbose?: boolean }).verbose === true);
-  const config = await loadConfig(resolvedConfigPath);
+  const resolver = createProjectResolver({ root: options.root, config: options.config });
+  const resolution = await resolver.resolve();
+  reportResolution(resolution, (options as { verbose?: boolean }).verbose === true);
+  const projectRoot = resolution.root;
+  const resolvedConfigPath = resolution.configPath;
+  const config: CinecodeConfig = resolution.config;
   const validation = validateConfig(config, resolvedConfigPath);
-  runReport.setProject({ root: projectRoot, config: resolvedConfigPath, source: location.source });
+  const compositions = await resolver.all();
 
-  const compositions: Composition[] = await loadComposition(resolvedConfigPath);
-
-  const determinismErrors = await checkCompositionDeterminism(compositions, resolvedConfigPath);
-  const mediaErrors = await checkMediaFiles(config, projectRoot);
+  const determinismErrors = await checkCompositionDeterminism([...compositions], resolvedConfigPath);
+  const mediaErrors = await checkMediaFiles(await resolution.media());
   const fontErrors = await checkFonts(config);
-  const propErrors = await checkProps(compositions);
+  const propErrors = await checkProps([...compositions]);
 
   const allErrors = [...validation.errors, ...determinismErrors, ...mediaErrors, ...fontErrors, ...propErrors];
   const allWarnings = [...validation.warnings];

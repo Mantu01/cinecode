@@ -6,7 +6,8 @@ import { createError, ErrorCode } from "../errors/index.js";
 import { runReport } from "./run-report.js";
 import { createMediaCache } from "../media/cache.js";
 import { loadCinecodeIgnore, type CinecodeIgnore } from "../config/ignore.js";
-import { loadComposition } from "./still.js";
+import { loadComposition } from "./composition-loader.js";
+import { createProjectResolver, reportResolution } from "./project-resolver.js";
 
 export interface SyncReport {
   readonly totalCompositions: number;
@@ -184,10 +185,16 @@ export function createSyncCommand(): Command {
     .option("--no-default-ignores", "Disable built-in ignore patterns")
     .option("--dry-run", "Preview sync operations without uploading, downloading or deleting", false)
     .option("--delete-orphans", "Delete detected orphaned assets", false)
-    .action(async (options: { dir: string; cache?: string; prune: boolean; plugins: boolean; ignore: string[]; defaultIgnores: boolean; json?: boolean; dryRun?: boolean; deleteOrphans?: boolean }) => {
+    .action(async (options: { dir: string; cache?: string; prune: boolean; plugins: boolean; ignore: string[]; defaultIgnores: boolean; json?: boolean; dryRun?: boolean; deleteOrphans?: boolean; config?: string; root?: string; verbose?: boolean }) => {
+      const resolver = createProjectResolver({
+        root: options.root ?? (options.dir === "." ? undefined : options.dir),
+        config: options.config,
+      });
+      const resolution = await resolver.resolve();
+      reportResolution(resolution, options.dryRun === true || options.verbose === true);
       const report = await buildSyncReport({
-        dir: options.dir,
-        cacheDir: options.cache,
+        dir: resolution.root,
+        cacheDir: options.cache ?? resolve(resolution.root, resolution.config.cacheDir, "media"),
         pruneCache: options.prune,
         discoverPlugins: options.plugins,
         ignorePatterns: options.ignore,

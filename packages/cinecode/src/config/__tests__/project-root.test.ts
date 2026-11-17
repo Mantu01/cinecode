@@ -26,6 +26,7 @@ function project(extra: Record<string, unknown> = {}): { root: string; config: s
     }),
   );
   mkdirSync(join(root, BASE), { recursive: true });
+  writeFileSync(join(root, "main.ts"), "export default { audio: [{ id: 'a', src: './a.wav' }] };\n");
   return { root, config };
 }
 

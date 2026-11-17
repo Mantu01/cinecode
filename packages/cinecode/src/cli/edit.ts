@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
-import { loadComposition } from "./still.js";
+import { loadComposition } from "./composition-loader.js";
 import { runReport } from "./run-report.js";
 
 export interface EditOptions {

@@ -59,11 +59,7 @@ export function normalizeManifest(raw: unknown, manifestPath = "main.ts"): MainM
   };
 }
 
-/**
- * Loads `cinecode.config.ts` + the root manifest (`main.ts`). A missing
- * manifest is not an error — projects may still export a single composition
- * from the config file (legacy flow).
- */
+/** Loads the root manifest (`main.ts`); the caller decides whether a missing one is fatal. */
 export async function loadManifestProject(
   config: CinecodeConfig,
   rootDir = process.cwd(),

@@ -14,7 +14,10 @@ export interface ProjectRecord {
   readonly root: string;
   readonly config?: string;
   readonly manifest?: string;
-  readonly source?: "root-flag" | "config-flag" | "discovered";
+  readonly source?: "root-flag" | "config-flag" | "discovered" | "standalone";
+  readonly mode?: "project" | "file";
+  readonly selection?: string;
+  readonly resolution?: Record<string, unknown>;
 }
 
 export interface ArtifactRecord {
@@ -51,6 +54,7 @@ export class RunReport {
   private command = "cinecode";
   private startedAt = new Date();
   private projectRecord: ProjectRecord | null = null;
+  private resolutionRecord: Record<string, unknown> | undefined;
   private resultPayload: Record<string, unknown> = {};
   private artifacts: ArtifactRecord[] = [];
   private expectedArtifacts = 0;
@@ -62,6 +66,7 @@ export class RunReport {
     this.command = command;
     this.startedAt = new Date();
     this.projectRecord = null;
+    this.resolutionRecord = undefined;
     this.resultPayload = {};
     this.artifacts = [];
     this.expectedArtifacts = 0;
@@ -89,6 +94,18 @@ export class RunReport {
     return this.projectRecord;
   }
 
+  /** Mode, root, manifest and selection resolved once for this invocation. */
+  resolution(record: Record<string, unknown> | undefined): void {
+    this.resolutionRecord = record;
+  }
+
+  private projectOutput(): ProjectRecord | null {
+    if (!this.projectRecord) return null;
+    return this.resolutionRecord
+      ? { ...this.projectRecord, resolution: this.resolutionRecord }
+      : this.projectRecord;
+  }
+
   result(payload: Record<string, unknown>): void {
     this.resultPayload = { ...this.resultPayload, ...payload };
   }
@@ -110,6 +127,10 @@ export class RunReport {
     return this.artifacts.length;
   }
 
+  artifactList(): readonly ArtifactRecord[] {
+    return this.artifacts;
+  }
+
   finish(): MachineReport {
     if (this.expectedArtifacts > this.artifacts.length) {
       throw createError(
@@ -125,7 +146,7 @@ export class RunReport {
       command: this.command,
       ok: true,
       degraded: degradations.length > 0,
-      project: this.projectRecord,
+      project: this.projectOutput(),
       result: this.resultPayload,
       artifacts: [...this.artifacts],
       warnings: [...warnings],
@@ -142,7 +163,7 @@ export class RunReport {
       command: this.command,
       ok: false,
       degraded: degradations.length > 0,
-      project: this.projectRecord,
+      project: this.projectOutput(),
       result: this.resultPayload,
       artifacts: [...this.artifacts],
       warnings: [...warnings],

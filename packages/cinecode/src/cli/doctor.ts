@@ -8,12 +8,9 @@ import { resolve } from "node:path";
 import { access, constants } from "node:fs/promises";
 import ffmpegStatic from "@ffmpeg-installer/ffmpeg";
 import type { CinecodeConfig } from "../core/types/index.js";
-import { loadConfig } from "../config/schema.js";
-import { resolveProjectLocation } from "../config/project.js";
 import { validateConfig } from "../config/validator.js";
 import { checkGitignoreEntries, ensureGitignoreEntries } from "../config/gitignore.js";
-import { createMediaResolver } from "../media/resolver.js";
-import { mediaIgnore } from "./shared.js";
+import { createProjectResolver, reportResolution, type MediaAccess } from "./project-resolver.js";
 import { createMediaCache } from "../media/cache.js";
 import { renderVideo, type RenderOptions } from "../pipeline/index.js";
 import { checkRuntime } from "../loader/index.js";
@@ -154,16 +151,12 @@ async function checkConfig(config: CinecodeConfig, configPath: string): Promise<
   return { name: "Config", status: "FAIL", message: `${validation.errors.length} error(s)`, fixable: false };
 }
 
-async function checkMedia(config: CinecodeConfig, root: string): Promise<DoctorCheck> {
+async function checkMedia(load: () => Promise<MediaAccess>): Promise<DoctorCheck> {
   try {
-    const cache = createMediaCache(resolve(root, config.cacheDir));
-    await cache.initialize();
-    const resolver = createMediaResolver({ sourceDir: resolve(root, config.sourceDir), cache, cloudMedia: config.cloudMedia ?? [], ignore: mediaIgnore(config) });
-    await resolver.initialize();
-    const media = await resolver.listMedia();
+    const media = await (await load()).catalog.listMedia();
     return { name: "Media", status: "PASS", message: `${media.length} local media file(s) present` };
-  } catch (e) {
-    return { name: "Media", status: "FAIL", message: `Media check failed: ${e instanceof Error ? e.message : "Unknown error"}` };
+  } catch (error) {
+    return { name: "Media", status: "FAIL", message: `Media check failed: ${error instanceof Error ? error.message : "Unknown error"}` };
   }
 }
 
@@ -244,9 +237,11 @@ async function checkCache(config: CinecodeConfig): Promise<DoctorCheck> {
   }
 }
 
-export async function doctorCommand(options: { config?: string; root?: string; fix?: boolean; json?: boolean }): Promise<void> {
-  const location = resolveProjectLocation({ root: options.root, config: options.config });
-  const config = await loadConfig(location.configPath);
+export async function doctorCommand(options: { config?: string; root?: string; fix?: boolean; json?: boolean; verbose?: boolean }): Promise<void> {
+  const resolver = createProjectResolver({ root: options.root, config: options.config });
+  const resolution = await resolver.resolve();
+  reportResolution(resolution, options.verbose === true);
+  const config = resolution.config;
 
   const checks = await Promise.all([
     checkNodeVersion(),
@@ -258,12 +253,12 @@ export async function doctorCommand(options: { config?: string; root?: string; f
     checkFonts(config),
     checkFolders(config),
     checkDiskSpace(),
-    checkConfig(config, location.configPath),
-    checkMedia(config, location.root),
+    checkConfig(config, resolution.configPath),
+    checkMedia(() => resolution.media()),
     checkCache(config),
-    checkGitignore(config, location.root),
+    checkGitignore(config, resolution.root),
     checkCloudUrls(config),
-    checkDeprecatedUsage(location.configPath),
+    checkDeprecatedUsage(resolution.configPath),
   ]);
 
   if (options.fix) {
@@ -292,7 +287,7 @@ export async function doctorCommand(options: { config?: string; root?: string; f
             sourceDir: config.sourceDir,
             outputDir: config.outputDir ?? "output",
             cacheDir: config.cacheDir ?? ".cinecode/cache",
-            projectRoot: location.root,
+            projectRoot: resolution.root,
             enabled: config.gitignore ?? true,
           });
           console.log("Fixed: .gitignore entries added");

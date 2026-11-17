@@ -16,6 +16,7 @@ import { encodeWavBuffer } from "../audio/muxer.js";
 import { createMediaCache } from "../media/cache.js";
 import { createRenderCache } from "../pipeline/cache.js";
 import { runCheck, type CheckReport } from "../cli/check.js";
+import { createProjectResolver } from "../cli/project-resolver.js";
 import { WebSocketHub, type WsClient } from "./websocket.js";
 import { PreviewLoop } from "./previewLoop.js";
 import { renderInspectorHtml } from "./inspector/panel.js";
@@ -199,7 +200,12 @@ export class DevServer {
    * `check` also shows as a validation error in the dev UI.
    */
   async validate(): Promise<CheckReport> {
-    const report = await runCheck(this.options.configPath);
+    const resolver = createProjectResolver({
+      root: this.options.rootDir,
+      config: this.options.configPath,
+      fresh: true,
+    });
+    const report = await runCheck(await resolver.resolve());
     this.hub.broadcast({ type: "validation", report });
     return report;
   }

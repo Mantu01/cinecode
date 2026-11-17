@@ -1,16 +1,19 @@
 import { Command } from "commander";
-import { resolve } from "node:path";
 import type { VisualClip, AudioClip, SoundClip, Clip } from "../core/types/index.js";
-import { loadComposition, selectComposition, parseTimeInput } from "./still.js";
+import { parseTimeInput } from "./shared.js";
 import { allClips } from "../core/types/tracks.js";
-import { createError, ErrorCode } from "../errors/index.js";
 import { runReport } from "./run-report.js";
+import { createProjectResolver, reportResolution } from "./project-resolver.js";
 
 interface InspectOptions {
   composition?: string;
+  file?: string;
+  timeline?: string;
+  scene?: string;
   frame?: number;
   time?: string;
   config?: string;
+  root?: string;
   props?: string;
   json?: boolean;
   deep?: boolean;
@@ -212,14 +215,18 @@ function describeAudioClip(clip: AudioClip | SoundClip, fps: number): string[] {
 }
 
 export async function inspectCommand(options: InspectOptions): Promise<void> {
-  const configPath = options.config ?? options.props ?? "cinecode.config.js";
-  const compositions = await loadComposition(resolve(configPath), options.composition);
-
-  if (compositions.length === 0) {
-    throw createError(ErrorCode.CC3003, {}, { fixHint: "No compositions found in config" });
-  }
-
-  const composition = selectComposition(compositions, options.composition);
+  const resolver = createProjectResolver({
+    root: options.root,
+    config: options.config ?? options.props,
+    file: options.file,
+    composition: options.composition,
+    timeline: options.timeline,
+    scene: options.scene,
+    requireSelection: true,
+  });
+  const resolution = await resolver.resolve();
+  reportResolution(resolution, true);
+  const composition = (await resolver.selected())[0]!;
   const fps = composition.fps;
   const totalFrames = composition.duration ? Math.ceil((typeof composition.duration === "number" ? composition.duration : parseFloat(composition.duration as string)) * fps) : 0;
 
@@ -286,7 +293,10 @@ export async function inspectCommand(options: InspectOptions): Promise<void> {
 export function createInspectCommand(): Command {
   const cmd = new Command("inspect")
     .description("Print resolved timeline for a composition")
-    .option("-c, --composition <name>", "Composition name")
+    .option("--file <path>", "Standalone composition file (file mode)")
+    .option("-c, --composition <name>", "Composition name (requires --file)")
+    .option("--timeline <id>", "Timeline id from main.ts")
+    .option("--scene <id>", "Scene id from main.ts")
     .option("-f, --frame <number>", "Show clips active at frame", (v) => parseInt(v, 10))
     .option("-t, --time <timecode|seconds>", "Show clips active at time (HH:MM:SS:FF or seconds)")
     .option("--deep", "Generate deep dependency graph across audio, visual, and effects", false)

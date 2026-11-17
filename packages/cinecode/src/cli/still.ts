@@ -1,68 +1,24 @@
 import { Command } from "commander";
-import { writeFileSync, readFileSync } from "node:fs";
-import { resolve, join, dirname } from "node:path";
-import { isUserModuleFile, loadUserModuleNamespace } from "../loader/index.js";
+import { writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { assertExclusive } from "./usage-error.js";
-import type { Composition } from "../core/types/index.js";
-import { renderStill } from "../renderer/engine.js";
-import { createError, ErrorCode } from "../errors/index.js";
+import { renderStill, setMediaCacheForRenderer } from "../renderer/engine.js";
 import { runReport } from "./run-report.js";
+import { createProjectResolver, reportResolution } from "./project-resolver.js";
 
 export interface StillOptions {
   composition?: string;
+  file?: string;
+  timeline?: string;
+  scene?: string;
   frame?: number;
   time?: string;
   out?: string;
   format?: "png" | "jpg" | "webp";
   config?: string;
+  root?: string;
   props?: string;
   seed?: number;
-}
-
-export function parseTimeInput(input: string, fps: number): number {
-  if (input.includes(":")) {
-    const parts = input.split(":").map(Number);
-    if (parts.length === 4) {
-      return ((parts[0] ?? 0) * 3600 + (parts[1] ?? 0) * 60 + (parts[2] ?? 0)) * fps + (parts[3] ?? 0);
-    }
-    if (parts.length === 3) {
-      return ((parts[0] ?? 0) * 3600 + (parts[1] ?? 0) * 60 + (parts[2] ?? 0)) * fps;
-    }
-  }
-  return Math.round(parseFloat(input) * fps);
-}
-
-export async function loadComposition(file: string, _compositionName?: string): Promise<Composition[]> {
-  const resolvedPath = resolve(file);
-  if (isUserModuleFile(resolvedPath)) {
-    const module = await loadUserModuleNamespace<Record<string, unknown>>(resolvedPath, dirname(resolvedPath));
-    const compositions = module.main ?? module.default ?? module;
-    if (Array.isArray(compositions)) return compositions;
-    if (compositions && typeof compositions === "object") return [compositions as Composition];
-    throw createError(ErrorCode.CC3008, { path: resolvedPath, expected: "a composition or array of compositions" }, { location: { file: resolvedPath } });
-  }
-  const ext = file.split(".").pop()?.toLowerCase();
-  if (ext === "json") {
-    try {
-      return JSON.parse(readFileSync(file, "utf-8"));
-    } catch (error) {
-      throw createError(ErrorCode.CC1006, { path: resolvedPath, reason: error instanceof Error ? error.message : String(error) }, { location: { file: resolvedPath }, cause: error });
-    }
-  }
-  throw createError(ErrorCode.CC1007, { path: resolvedPath }, { location: { file: resolvedPath } });
-}
-
-export function selectComposition(compositions: Composition[], name?: string): Composition {
-  if (name) {
-    const found = compositions.find(c => c.name === name);
-    if (!found) {
-      const available = compositions.map((composition) => composition.name).join(", ") || "none";
-      throw createError(ErrorCode.CC3007, { kind: "composition", id: name, available });
-    }
-    return found;
-  }
-  if (compositions.length === 1) return compositions[0]!;
-  throw createError(ErrorCode.CC1012, { reason: "Multiple compositions found, specify --composition" });
 }
 
 export async function stillCommand(options: StillOptions): Promise<void> {
@@ -72,22 +28,29 @@ export async function stillCommand(options: StillOptions): Promise<void> {
     const { assertOutputFormat } = await import("../media/formats.js");
     assertOutputFormat(format, "image");
   }
-  const compositions = await loadComposition(options.config ?? options.props ?? "cinecode.config.js", options.composition);
-  const composition = selectComposition(compositions, options.composition);
-
-  const { createMediaCache } = await import("../media/cache.js");
-  const { setMediaCacheForRenderer } = await import("../renderer/engine.js");
-  const { getDefaultCacheDir } = await import("./render.js");
-  const mediaCache = createMediaCache(join(getDefaultCacheDir(), "media"));
-  await mediaCache.initialize();
-  setMediaCacheForRenderer(mediaCache);
+  const resolver = createProjectResolver({
+    root: options.root,
+    config: options.config ?? options.props,
+    file: options.file,
+    composition: options.composition,
+    timeline: options.timeline,
+    scene: options.scene,
+    requireSelection: true,
+  });
+  const project = await resolver.resolve();
+  reportResolution(project, (options as { verbose?: boolean }).verbose === true);
+  const composition = (await resolver.selected())[0]!;
+  const media = await project.media();
+  setMediaCacheForRenderer(media.cache);
 
   let frame = options.frame ?? 0;
   if (options.time) {
+    const { parseTimeInput } = await import("./shared.js");
     frame = parseTimeInput(options.time, composition.fps);
   }
   if (frame < 0) frame = 0;
 
+  runReport.expectArtifact("image");
   const canvas = await renderStill(composition, frame, options.seed);
 
   let buffer: Buffer;
@@ -99,8 +62,6 @@ export async function stillCommand(options: StillOptions): Promise<void> {
     buffer = (canvas as { toBuffer(mime: "image/jpeg", quality?: number): Buffer }).toBuffer("image/jpeg", 0.9);
   }
   writeFileSync(out, buffer);
-  runReport.setProject({ root: process.cwd(), config: resolve(options.config ?? options.props ?? "cinecode.config.js") });
-  runReport.expectArtifact("image");
   runReport.artifact({ kind: "image", path: resolve(out), units: 1, unit: "frame" });
   runReport.result({ composition: composition.name, frame, output: resolve(out), format });
   console.log(`Rendered frame ${frame} (${composition.width}x${composition.height}) to ${out}`);
@@ -109,7 +70,10 @@ export async function stillCommand(options: StillOptions): Promise<void> {
 export function createStillCommand(): Command {
   const cmd = new Command("still")
     .description("Render a single frame to PNG or JPEG")
-    .option("-c, --composition <name>", "Composition name")
+    .option("--file <path>", "Standalone composition file (file mode)")
+    .option("-c, --composition <name>", "Composition name (requires --file)")
+    .option("-T, --timeline <id>", "Timeline id from main.ts")
+    .option("-s, --scene <id>", "Scene id from main.ts")
     .option("-f, --frame <number>", "Frame number", (v) => parseInt(v, 10))
     .option("-t, --time <timecode|seconds>", "Time (HH:MM:SS:FF or seconds)")
     .option("-o, --out <path>", "Output file path")

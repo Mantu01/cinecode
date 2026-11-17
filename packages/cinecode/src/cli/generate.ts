@@ -3,16 +3,14 @@ import { writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { CinecodeConfig, Composition } from "../core/types/index.js";
 import type { AudioEntry, ImageEntry, ManifestEntryBase, SceneEntry, TimelineEntry } from "../core/types/manifest.js";
-import { loadConfig } from "../config/schema.js";
-import { resolveProjectLocation } from "../config/project.js";
 import {
   assembleTimelineComposition,
   composeSceneComposition,
-  loadManifestProject,
   resolveAudioBuffer,
   resolveImageClip,
   type ManifestProject,
 } from "../manifest/index.js";
+import { createProjectResolver, reportResolution } from "./project-resolver.js";
 import { renderImageBuffer } from "../renderer/image.js";
 import { encodeWavBuffer } from "../audio/muxer.js";
 import { multiSelect, type SelectItem } from "./prompt-select.js";
@@ -172,14 +170,11 @@ async function generateVideoTarget(
 }
 
 export async function generateCommand(kind: GenerateKind, options: GenerateOptions): Promise<void> {
-  const location = resolveProjectLocation({ root: options.root, config: options.config });
-  const config: CinecodeConfig = await loadConfig(location.configPath);
-  const project = await loadManifestProject(config, location.root);
-
-  if (!project.hasManifest) {
-    throw createError(ErrorCode.CC1009, { path: project.entryPath }, { location: { file: project.entryPath }, fixHint: "Create a main.ts manifest with defineMain({...})." });
-  }
-  runReport.setProject({ root: location.root, config: location.configPath, manifest: project.entryPath, source: location.source });
+  const resolver = createProjectResolver({ root: options.root, config: options.config });
+  const resolution = await resolver.resolve();
+  const config: CinecodeConfig = resolution.config;
+  const project = resolution.manifest!;
+  reportResolution(resolution, options.dryRun === true || (options as { verbose?: boolean }).verbose === true);
 
   const targets = await selectTargets(kind, project, options);
   if (targets.length === 0) {

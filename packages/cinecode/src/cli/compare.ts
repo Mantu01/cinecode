@@ -6,7 +6,7 @@ import { dirname } from "node:path";
 import { Canvas } from "@napi-rs/canvas";
 import type { Composition } from "../core/types/index.js";
 import { renderStill } from "../renderer/engine.js";
-import { loadComposition, selectComposition } from "./still.js";
+import { loadComposition, selectComposition } from "./composition-loader.js";
 
 export interface FrameComparison {
   readonly frame: number;

@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import pc from "picocolors";
 import { renderStill } from "../renderer/engine.js";
-import { loadComposition, selectComposition } from "./still.js";
+import { loadComposition, selectComposition } from "./composition-loader.js";
 
 export interface BenchmarkStats {
   readonly frames: number;
@@ -59,7 +59,7 @@ export async function benchmarkComposition(
   file: string,
   options: { frames?: number; runs?: number; seed?: number; composition?: string },
 ): Promise<BenchmarkStats> {
-  const composition = selectComposition(await loadComposition(file, options.composition), options.composition);
+  const composition = selectComposition(await loadComposition(file), options.composition);
   const frames = Math.max(1, options.frames ?? 30);
   const runs = Math.max(1, options.runs ?? 3);
   const seed = options.seed ?? 0;

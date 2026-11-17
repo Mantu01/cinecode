@@ -3,9 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import pc from "picocolors";
 import { serializeFrameToSvg, type CssMode, type FontStrategy } from "../svg/serializer.js";
-import type { Composition } from "../core/types/index.js";
-import { createError, ErrorCode } from "../errors/index.js";
 import { runReport } from "./run-report.js";
+import { createProjectResolver, reportResolution } from "./project-resolver.js";
 
 export function createExportSvgCommand(): Command {
   const cmd = new Command("export-svg")
@@ -19,30 +18,12 @@ export function createExportSvgCommand(): Command {
     .option("--font-strategy <strategy>", "Font strategy: embed-base64, link-webfont, convert-to-paths", "convert-to-paths")
     .option("--optimize", "Run SVGO optimization passes", true)
     .option("--no-optimize", "Disable SVGO optimization")
+    .option("-c, --composition <name>", "Composition name")
     .action(async (entry: string, options) => {
-      const absEntry = path.resolve(entry);
-      if (!fs.existsSync(absEntry)) {
-        throw createError(ErrorCode.CC1009, { path: absEntry }, { location: { file: absEntry } });
-      }
-      let comp: Composition;
-      if (absEntry.endsWith(".json")) {
-        try {
-          comp = JSON.parse(fs.readFileSync(absEntry, "utf8"));
-        } catch (error) {
-          throw createError(ErrorCode.CC1006, { path: absEntry, reason: error instanceof Error ? error.message : String(error) }, { location: { file: absEntry }, cause: error });
-        }
-      } else {
-        try {
-          const mod = await import(absEntry);
-          comp = mod.default || mod.composition || mod;
-        } catch (error) {
-          throw createError(ErrorCode.CC3008, { path: absEntry, expected: "a composition export" }, { location: { file: absEntry }, cause: error });
-        }
-      }
-      if (!comp || typeof comp.width !== "number" || !comp.rootTimeline) {
-        throw createError(ErrorCode.CC3008, { path: absEntry, expected: "a composition with width, height and rootTimeline" }, { location: { file: absEntry } });
-      }
-      runReport.setProject({ root: process.cwd(), manifest: absEntry });
+      const resolver = createProjectResolver({ root: options.root, config: options.config, file: entry, composition: options.composition });
+      const resolution = await resolver.resolve();
+      reportResolution(resolution, (options as { verbose?: boolean }).verbose === true);
+      const comp = (await resolver.selected())[0]!;
       runReport.expectArtifact("svg");
 
       const outDir = path.resolve(options.out);

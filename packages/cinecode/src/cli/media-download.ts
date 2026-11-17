@@ -3,17 +3,17 @@ import { createWriteStream } from "node:fs";
 import { mkdir, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createHash } from "node:crypto";
-import { loadConfig } from "../config/schema.js";
-import { resolveProjectLocation } from "../config/project.js";
 import { ensureGitignoreEntries } from "../config/gitignore.js";
 import { createError, ErrorCode } from "../errors/index.js";
 import { runReport } from "./run-report.js";
+import { createProjectResolver, reportResolution } from "./project-resolver.js";
 
 interface DownloadOptions {
   force?: boolean;
   only?: string;
   config?: string;
   root?: string;
+  verbose?: boolean;
 }
 
 async function downloadFile(
@@ -107,8 +107,10 @@ function getFileNameFromUrl(url: string): string {
 }
 
 export async function mediaDownloadCommand(options: DownloadOptions): Promise<void> {
-  const location = resolveProjectLocation({ root: options.root, config: options.config });
-  const config = await loadConfig(location.configPath);
+  const resolver = createProjectResolver({ root: options.root, config: options.config });
+  const resolution = await resolver.resolve();
+  reportResolution(resolution, options.verbose === true);
+  const config = resolution.config;
 
   if (!config.gitignore) {
     console.warn("gitignore is disabled; downloaded media will not be ignored");
@@ -117,7 +119,7 @@ export async function mediaDownloadCommand(options: DownloadOptions): Promise<vo
       sourceDir: config.sourceDir,
       outputDir: config.outputDir ?? "output",
       cacheDir: config.cacheDir ?? ".cinecode/cache",
-      projectRoot: location.root,
+      projectRoot: resolution.root,
       enabled: true,
     });
   }
@@ -129,15 +131,14 @@ export async function mediaDownloadCommand(options: DownloadOptions): Promise<vo
     return;
   }
 
-  console.log(`Downloading ${cloudMedia.length} file(s) to ${resolve(location.root, config.sourceDir)}...`);
+  console.log(`Downloading ${cloudMedia.length} file(s) to ${resolve(resolution.root, config.sourceDir)}...`);
   console.log("");
 
   const results: Array<{ name: string; status: "ok" | "skipped" | "failed"; error?: string }> = [];
-  runReport.setProject({ root: location.root, config: location.configPath });
 
   for (const entry of cloudMedia) {
     const fileName = entry.name ?? getFileNameFromUrl(entry.url);
-    const destPath = resolve(location.root, config.sourceDir, fileName);
+    const destPath = resolve(resolution.root, config.sourceDir, fileName);
 
     try {
       await stat(destPath);

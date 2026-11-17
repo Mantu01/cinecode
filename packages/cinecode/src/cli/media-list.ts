@@ -1,14 +1,8 @@
 import { Command } from "commander";
 import { writeFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { stat as fsStat } from "node:fs/promises";
-import type { CinecodeConfig } from "../core/types/index.js";
-import { loadConfig } from "../config/schema.js";
-import { resolveProjectLocation } from "../config/project.js";
-import { createMediaCache } from "../media/cache.js";
-import { createMediaResolver } from "../media/resolver.js";
 import { runReport } from "./run-report.js";
-import { mediaIgnore } from "./shared.js";
+import { createProjectResolver, reportResolution } from "./project-resolver.js";
 
 export interface MediaListOptions {
   json?: boolean;
@@ -28,21 +22,13 @@ export interface MediaListOutput {
 }
 
 export async function mediaListCommand(options: MediaListOptions): Promise<void> {
-  const location = resolveProjectLocation({ root: options.root, config: options.config });
-  const config = await loadConfig(location.configPath);
-  const cache = createMediaCache(resolve(location.root, config.cacheDir));
-  await cache.initialize();
+  const resolver = createProjectResolver({ root: options.root, config: options.config });
+  const resolution = await resolver.resolve();
+  reportResolution(resolution, (options as { verbose?: boolean }).verbose === true);
+  const access = await resolution.media();
 
-  const resolver = createMediaResolver({
-    sourceDir: resolve(location.root, config.sourceDir),
-    cache,
-    cloudMedia: config.cloudMedia,
-    ignore: mediaIgnore(config),
-  });
-  await resolver.initialize();
-
-  const media = await resolver.listMedia();
-  const cloudMedia = resolver.getCloudMedia();
+  const media = await access.catalog.listMedia();
+  const cloudMedia = access.catalog.getCloudMedia();
 
   const output: MediaListOutput[] = [];
 

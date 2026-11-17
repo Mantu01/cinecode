@@ -1,4 +1,5 @@
-import { loadComposition, selectComposition, parseTimeInput } from "../cli/still.js";
+import { loadComposition, selectComposition } from "../cli/composition-loader.js";
+import { parseTimeInput } from "../cli/shared.js";
 import { createRenderJob, type RenderOptions, type RenderJob } from "../pipeline/index.js";
 import { getDefaultCacheDir } from "../cli/render.js";
 import { mkdir } from "node:fs/promises";
@@ -56,7 +57,7 @@ export async function render(options: RenderApiOptions): Promise<RenderJob> {
   await mkdir(cacheDir, { recursive: true });
   await mkdir(resolve("output"), { recursive: true });
 
-  const compositions = await loadComposition(entry, compositionName);
+  const compositions = await loadComposition(entry);
   const composition = selectComposition(compositions, compositionName);
 
   const effectiveFps = fps ?? composition.fps;

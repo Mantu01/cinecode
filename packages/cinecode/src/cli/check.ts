@@ -3,47 +3,15 @@ import { recordDegradation } from "../errors/degradations.js";
 import { runReport } from "./run-report.js";
 import { resolve } from "node:path";
 import { readFile, stat } from "node:fs/promises";
-import type { CinecodeConfig, Composition } from "../core/types/index.js";
-import { loadConfig } from "../config/schema.js";
-import { resolveProjectLocation } from "../config/project.js";
+import type { Composition } from "../core/types/index.js";
 import { validateConfig as validateConfigShape } from "../config/validator.js";
 import { createConversion, type FrameConversion } from "../core/time/index.js";
 import { validateTimeline, scanSourceForNonDeterminism } from "../core/validation/index.js";
 import { validateKeyframes } from "../core/keyframes/index.js";
 import { allClips } from "../core/types/tracks.js";
 import { checkMissingGlyphs } from "../renderer/text/engine.js";
-import { createMediaResolver } from "../media/resolver.js";
-import { mediaIgnore, printProjectContext } from "./shared.js";
-import { createMediaCache } from "../media/cache.js";
-import { createError, ErrorCode, isCinecodeError, type CinecodeError } from "../errors/index.js";
-import { loadComposition } from "./still.js";
-import { assembleTimelineComposition, loadManifestProject } from "../manifest/index.js";
-
-/** Load renderable compositions the same way `render` does: manifest-aware,
- * with a fallback to direct composition modules. */
-async function loadCheckCompositions(config: CinecodeConfig): Promise<Composition[]> {
-  try {
-    const project = await loadManifestProject(config, process.cwd());
-    const timelineEntries = project.manifest.timelines;
-    if (project.hasManifest && (timelineEntries?.length ?? 0) > 0) {
-      const compositions: Composition[] = [];
-      for (const entry of timelineEntries ?? []) {
-        compositions.push(await assembleTimelineComposition(project, entry.id));
-      }
-      return compositions;
-    }
-  } catch (error) {
-    recordDegradation({
-      code: ErrorCode.CC1010,
-      what: "manifest composition assembly skipped",
-      reason: error instanceof Error ? error.message : String(error),
-      input: config.project?.entry,
-      instead: "direct composition loading from the configured entry",
-    });
-  }
-  const entry = config.project?.entry ?? "cinecode.config.js";
-  return await loadComposition(entry);
-}
+import { createError, ErrorCode, type CinecodeError } from "../errors/index.js";
+import { createProjectResolver, reportResolution, type ProjectResolution } from "./project-resolver.js";
 
 /**
  * `cinecode check` — the canonical code-first pre-render gate.
@@ -125,41 +93,30 @@ function issueFromValidation(issue: { code: string; message: string; severity: "
  * entry point used by the CLI command and (later) HMR, so results stay
  * consistent between `check` and the dev server.
  */
-export async function runCheck(configPath: string): Promise<CheckReport> {
+export async function runCheck(project: ProjectResolution): Promise<CheckReport> {
   const errors: CheckIssue[] = [];
   const warnings: CheckIssue[] = [];
+  const configPath = project.configPath;
+  const config = project.config;
 
   // --- config ---
-  let config: CinecodeConfig | null = null;
-  try {
-    config = await loadConfig(configPath);
-    const shape = validateConfigShape(config, configPath);
-    for (const e of shape.errors) errors.push(toIssue(e, "config"));
-    for (const w of shape.warnings) warnings.push(toIssue(w, "config"));
-  } catch (error) {
-    if (isCinecodeError(error)) throw error;
-    throw createError(
-      ErrorCode.CC1005,
-      { path: configPath, reason: error instanceof Error ? error.message : String(error) },
-      { location: { file: configPath }, cause: error },
-    );
-  }
+  const shape = validateConfigShape(config, configPath);
+  for (const error of shape.errors) errors.push(toIssue(error, "config"));
+  for (const warning of shape.warnings) warnings.push(toIssue(warning, "config"));
 
   // --- authoring (compositions, timelines, keyframes, props, glyphs) ---
-  let compositions: Composition[] = [];
-  if (config) {
-    try {
-      compositions = await loadCheckCompositions(config);
-    } catch (error) {
-      errors.push({
-        code: ErrorCode.CC3001,
-        severity: "error",
-        message: `Composition could not be loaded: ${error instanceof Error ? error.message : String(error)}`,
-        category: "authoring",
-        file: configPath,
-        fixHint: "Ensure the entry exports a composition or array of compositions",
-      });
-    }
+  let compositions: readonly Composition[] = [];
+  try {
+    compositions = await project.all();
+  } catch (error) {
+    errors.push({
+      code: ErrorCode.CC3001,
+      severity: "error",
+      message: `Composition could not be loaded: ${error instanceof Error ? error.message : String(error)}`,
+      category: "authoring",
+      file: configPath,
+      fixHint: "Fix the manifest entry that failed to assemble, then rerun check",
+    });
   }
 
   for (const composition of compositions) {
@@ -222,29 +179,17 @@ export async function runCheck(configPath: string): Promise<CheckReport> {
 
   // --- determinism (scan authored source: config + manifest entry + asset modules) ---
   const scanTargets = new Set<string>([configPath]);
-  if (config) {
-    try {
-      const project = await loadManifestProject(config, process.cwd());
-      if (project.hasManifest) scanTargets.add(project.entryPath);
-      // Scan every referenced asset module so a non-deterministic image,
-      // audio, scene, or timeline file is caught here, not at render time.
-      const entries = [
-        ...(project.manifest.images ?? []),
-        ...(project.manifest.audio ?? []),
-        ...(project.manifest.scenes ?? []),
-        ...(project.manifest.timelines ?? []),
-      ];
-      for (const entry of entries) {
-        if (entry.file) scanTargets.add(resolve(process.cwd(), entry.file));
-      }
-    } catch (error) {
-      recordDegradation({
-        code: ErrorCode.CC1010,
-        what: "manifest determinism scan skipped",
-        reason: error instanceof Error ? error.message : String(error),
-        input: configPath,
-        instead: "only the config file is scanned for non-deterministic APIs",
-      });
+  const manifest = project.manifest;
+  if (manifest) {
+    scanTargets.add(manifest.entryPath);
+    const entries = [
+      ...(manifest.manifest.images ?? []),
+      ...(manifest.manifest.audio ?? []),
+      ...(manifest.manifest.scenes ?? []),
+      ...(manifest.manifest.timelines ?? []),
+    ];
+    for (const entry of entries) {
+      if (entry.file) scanTargets.add(resolve(manifest.rootDir, entry.file));
     }
   }
   for (const target of scanTargets) {
@@ -265,42 +210,37 @@ export async function runCheck(configPath: string): Promise<CheckReport> {
   }
 
   // --- media (references resolve) ---
-  if (config) {
-    try {
-      const cache = createMediaCache(config.cacheDir ?? ".cinecode/cache");
-      await cache.initialize();
-      const resolver = createMediaResolver({ sourceDir: resolve(configPath, "..", config.sourceDir), cache, cloudMedia: config.cloudMedia ?? [], ignore: mediaIgnore(config) });
-      await resolver.initialize();
-      for (const m of await resolver.listMedia()) {
-        try {
-          await resolver.resolve(m.name);
-        } catch (error) {
-          errors.push(toIssue(createError(ErrorCode.CC2003, { path: m.path, reason: error instanceof Error ? error.message : "unknown" }, { location: { file: m.path } }), "media"));
-        }
-      }
-    } catch (error) {
-      warnings.push({
-        code: ErrorCode.CC2003,
-        severity: "warning",
-        message: `Media resolution skipped: ${error instanceof Error ? error.message : String(error)}`,
-        category: "media",
-      });
-    }
-
-    // --- fonts (loadable) ---
-    for (const font of config.fonts ?? []) {
+  try {
+    const media = await project.media();
+    for (const item of await media.catalog.listMedia()) {
       try {
-        await stat(font.src);
-      } catch {
-        warnings.push({
-          code: ErrorCode.CC3006,
-          severity: "warning",
-          message: `Font file not found: ${font.src} (family "${font.family}")`,
-          category: "fonts",
-          file: font.src,
-          fixHint: "Verify the font path in your config",
-        });
+        await media.catalog.resolve(item.name);
+      } catch (error) {
+        errors.push(toIssue(createError(ErrorCode.CC2003, { path: item.path, reason: error instanceof Error ? error.message : "unknown" }, { location: { file: item.path } }), "media"));
       }
+    }
+  } catch (error) {
+    warnings.push({
+      code: ErrorCode.CC2003,
+      severity: "warning",
+      message: `Media resolution skipped: ${error instanceof Error ? error.message : String(error)}`,
+      category: "media",
+    });
+  }
+
+  // --- fonts (loadable) ---
+  for (const font of config.fonts ?? []) {
+    try {
+      await stat(font.src);
+    } catch {
+      warnings.push({
+        code: ErrorCode.CC3006,
+        severity: "warning",
+        message: `Font file not found: ${font.src} (family "${font.family}")`,
+        category: "fonts",
+        file: font.src,
+        fixHint: "Verify the font path in your config",
+      });
     }
   }
 
@@ -312,10 +252,10 @@ export async function runCheck(configPath: string): Promise<CheckReport> {
 }
 
 export async function checkCommand(options: CheckOptions): Promise<void> {
-  const location = resolveProjectLocation({ root: options.root, config: options.config });
-  printProjectContext(location, (options as { verbose?: boolean }).verbose === true);
-  runReport.setProject({ root: location.root, config: location.configPath, source: location.source });
-  const report = await runCheck(location.configPath);
+  const resolver = createProjectResolver({ root: options.root, config: options.config });
+  const project = await resolver.resolve();
+  reportResolution(project, (options as { verbose?: boolean }).verbose === true);
+  const report = await runCheck(project);
   runReport.result({ ...report });
   for (const issue of report.warnings) runReport.warn(issue.code, issue.message, issue.file);
 
@@ -349,7 +289,7 @@ export async function checkCommand(options: CheckOptions): Promise<void> {
   const failed = !report.ok || (options.strict && report.warnings.length > 0);
   if (failed) {
     const count = report.errors.length + (options.strict ? report.warnings.length : 0);
-    throw createError(ErrorCode.CC1013, { count }, { location: { file: location.configPath } });
+    throw createError(ErrorCode.CC1013, { count }, { location: { file: project.configPath } });
   }
 }
 

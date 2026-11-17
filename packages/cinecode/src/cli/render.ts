@@ -4,18 +4,17 @@ import type { CinecodeConfig, Composition, QualitySetting, VideoCodec, RenderFor
 import { clampCrf, resolveVideoEncoding, type VideoEncoding } from "../core/quality.js";
 import { fitToPreset, resolvePlatformPreset } from "../encoder/presets.js";
 import { getPreset, listPresets, listPresetIds, validatePreset } from "../encoder/platform-presets.js";
-import { loadConfig } from "../config/schema.js";
-import { resolveProjectLocation } from "../config/project.js";
 import { QUALITY_SETTINGS, RENDER_FORMATS, VIDEO_CODECS } from "../config/zod-schema.js";
-import { assembleTimelineComposition, findEntry, loadManifestProject, type ManifestProject } from "../manifest/index.js";
-import { loadComposition, selectComposition, parseTimeInput } from "./still.js";
+import { assembleTimelineComposition, findEntry, type ManifestProject } from "../manifest/index.js";
+import { selectComposition } from "./composition-loader.js";
+import { createProjectResolver, reportResolution } from "./project-resolver.js";
 import {
   ensureDir,
+  parseTimeInput,
   resolveCacheDir,
   resolveOutputDir,
   resolveOutputPath,
   startCompositionRender,
-  printProjectContext,
   OUTPUT_SUBDIRS,
 } from "./shared.js";
 import { formatTime, type ProgressEvent } from "../pipeline/progress.js";
@@ -25,8 +24,10 @@ import { assertAlphaFormat } from "./usage-error.js";
 import { runReport } from "./run-report.js";
 
 export interface RenderCliOptions {
+  file?: string;
   composition?: string;
   timeline?: string;
+  scene?: string;
   all: boolean;
   preview: boolean;
   fps?: number;
@@ -195,17 +196,11 @@ function attachProgress(job: RenderJob): void {
 async function renderTimelines(
   config: CinecodeConfig,
   project: ManifestProject,
+  timelineIds: readonly string[],
   options: RenderCliOptions,
 ): Promise<void> {
   const timelines = project.manifest.timelines ?? [];
-  const selected = options.timeline
-    ? [findEntry(timelines, options.timeline, "timeline")]
-    : timelines;
-
-  if (selected.length === 0) {
-    console.log("No timelines registered in main.ts");
-    return;
-  }
+  const selected = timelineIds.map((id) => findEntry(timelines, id, "timeline"));
 
   const cacheDir = resolveCacheDir(config);
   const outputDir = resolveOutputDir(config);
@@ -264,15 +259,13 @@ async function renderTimelines(
   }
 }
 
-async function renderLegacyCompositions(
+async function renderCompositions(
   config: CinecodeConfig,
+  compositions: readonly Composition[],
   options: RenderCliOptions,
 ): Promise<void> {
-  const configPath = options.config ?? options.props ?? "cinecode.config.js";
-  const compositions = await loadComposition(configPath, options.composition);
-
   if (options.dryRun) {
-    const composition = selectComposition(compositions, options.composition);
+    const composition = selectComposition([...compositions], options.composition);
     const fps = options.fps ?? composition.fps;
     const resolution = options.resolution ? parseResolution(options.resolution) : { width: composition.width, height: composition.height };
     console.log(`Composition: ${composition.name}`);
@@ -287,11 +280,7 @@ async function renderLegacyCompositions(
   await ensureDir(cacheDir);
   await ensureDir(outputDir);
 
-  const compositionsToRender = options.composition
-    ? [selectComposition(compositions, options.composition)]
-    : compositions;
-
-  for (const composition of compositionsToRender) {
+  for (const composition of compositions) {
     const fps = options.fps ?? (config.render?.fps ?? composition.fps);
     const platformPreset = resolvePlatformPreset(config.render?.platformPreset);
     const resolution = options.resolution
@@ -350,23 +339,30 @@ export async function renderCommand(options: RenderCliOptions): Promise<void> {
     }
     return;
   }
-  const location = resolveProjectLocation({ root: options.root, config: options.config ?? options.props });
-  printProjectContext(location, options.dryRun || (options as { verbose?: boolean }).verbose === true);
-  const config = await loadConfig(location.configPath);
-
-  const projectRoot = location.root;
-  const project = await loadManifestProject(config, projectRoot);
-  runReport.setProject({ root: projectRoot, config: location.configPath, manifest: project.entryPath, source: location.source });
+  const resolver = createProjectResolver({
+    root: options.root,
+    config: options.config ?? options.props,
+    file: options.file,
+    composition: options.composition,
+    timeline: options.timeline,
+    scene: options.scene,
+    all: options.all,
+    requireSelection: true,
+    allowAll: true,
+  });
+  const resolved = await resolver.resolve();
+  reportResolution(resolved, options.dryRun || (options as { verbose?: boolean }).verbose === true);
   options = applyPlatformPreset(options);
-  const useManifest = project.hasManifest && (project.manifest.timelines?.length ?? 0) > 0 && !options.composition;
 
   if (!options.dryRun) runReport.expectArtifact("video");
 
   try {
-    if (useManifest) {
-      await renderTimelines(config, project, options);
+    if (resolved.mode === "project" && resolved.selection.kind === "scene") {
+      await renderCompositions(resolved.config, await resolver.selected(), options);
+    } else if (resolved.mode === "project") {
+      await renderTimelines(resolved.config, resolved.manifest!, resolved.selection.ids, options);
     } else {
-      await renderLegacyCompositions(config, options);
+      await renderCompositions(resolved.config, await resolver.selected(), options);
     }
   } catch (error) {
     if (error instanceof Error && error.message === "Render cancelled") {
@@ -387,9 +383,11 @@ function noEffectsOption(): Option {
 
 export function createRenderCommand(): Command {
   const cmd = new Command("render")
-    .description("Render timelines (main.ts) or a composition to MP4")
-    .option("-c, --composition <name>", "Legacy composition name")
+    .description("Render timelines (main.ts) or a standalone composition file to MP4")
+    .option("--file <path>", "Standalone composition file (file mode)")
+    .option("-c, --composition <name>", "Composition name (requires --file)")
     .option("-t, --timeline <id>", "Render a single timeline from main.ts")
+    .option("-s, --scene <id>", "Render a single scene from main.ts")
     .option("--all", "Render every timeline", false)
     .option("-p, --preview", "Render preview quality (faster)", false)
     .option("--quality <level>", `Quality: ${QUALITY_SETTINGS.join(" | ")}`, undefined)

@@ -9,6 +9,20 @@ import type { ProgressHandler } from "../pipeline/progress.js";
 import { CinecodeIgnore } from "../config/ignore.js";
 import type { ProjectLocation } from "../config/project.js";
 
+/** Parses HH:MM:SS:FF, HH:MM:SS or seconds into a frame number. */
+export function parseTimeInput(input: string, fps: number): number {
+  if (input.includes(":")) {
+    const parts = input.split(":").map(Number);
+    if (parts.length === 4) {
+      return ((parts[0] ?? 0) * 3600 + (parts[1] ?? 0) * 60 + (parts[2] ?? 0)) * fps + (parts[3] ?? 0);
+    }
+    if (parts.length === 3) {
+      return ((parts[0] ?? 0) * 3600 + (parts[1] ?? 0) * 60 + (parts[2] ?? 0)) * fps;
+    }
+  }
+  return Math.round(parseFloat(input) * fps);
+}
+
 export const OUTPUT_SUBDIRS = {
   videos: "videos",
   audio: "audio",
@@ -25,7 +39,10 @@ export function resolveOutputDir(config: CinecodeConfig): string {
 }
 
 /** Prints which root and config the command resolved, and how it was found. */
-export function printProjectContext(location: ProjectLocation, always = false): void {
+export function printProjectContext(
+  location: { readonly root: string; readonly configPath: string; readonly source: string },
+  always = false,
+): void {
   if (!always) return;
   console.log(`Project: ${location.root}`);
   console.log(`Config: ${location.configPath} (${location.source})`);

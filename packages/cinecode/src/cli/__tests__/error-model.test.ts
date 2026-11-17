@@ -138,8 +138,11 @@ test("a command that requests an artifact cannot finish without one", () => {
     (error: unknown) => (error as { code?: string }).code === ErrorCode.CC4004,
   );
 
-  const dir = project({ "cinecode.config.json": CONFIG, "main.ts": "export default {};\n" });
-  const result = run(dir, ["generate", "--config", "cinecode.config.json", "--all"]);
+  const dir = project({
+    "cinecode.config.json": CONFIG,
+    "main.ts": "export default { audio: [{ id: 'a', src: './a.wav' }] };\n",
+  });
+  const result = run(dir, ["generate", "image", "--config", "cinecode.config.json", "--all"]);
   assert.notEqual(result.status, EXIT_CODES.success);
   assert.match(result.err, /\[CC4004\]/);
 });

@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { join, resolve } from "node:path";
 import { mkdir } from "node:fs/promises";
-import { loadComposition, selectComposition } from "./still.js";
+import { loadComposition, selectComposition } from "./composition-loader.js";
 import { generateThumbnail } from "../encoder/thumbnail/index.js";
 import { createError, ErrorCode } from "../errors/index.js";
 import { runReport } from "./run-report.js";
@@ -16,7 +16,7 @@ interface ThumbnailCliOptions {
 }
 
 export async function thumbnailCommand(file: string, options: ThumbnailCliOptions): Promise<void> {
-  const compositions = await loadComposition(file, options.composition);
+  const compositions = await loadComposition(file);
   const composition = selectComposition(compositions, options.composition);
   const outputDir = resolve(options.outputDir);
   await mkdir(outputDir, { recursive: true });

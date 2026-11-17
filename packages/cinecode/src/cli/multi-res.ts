@@ -2,14 +2,14 @@ import { Command } from "commander";
 import { createError, ErrorCode } from "../errors/codes.js";
 import { runReport } from "./run-report.js";
 import { resolve } from "node:path";
-import { loadComposition, selectComposition } from "./still.js";
+import { selectComposition } from "./composition-loader.js";
 import { resolveCacheDir, resolveOutputDir } from "./shared.js";
-import { loadConfig } from "../config/schema.js";
-import { resolveProjectLocation } from "../config/project.js";
+import { createProjectResolver, reportResolution } from "./project-resolver.js";
 import { parseVariantLabel, renderMultiResolution } from "../pipeline/multiResolution.js";
 
 interface MultiResOptions {
   composition?: string;
+  dryRun?: boolean;
   config?: string;
   root?: string;
   variants: string;
@@ -29,10 +29,11 @@ export function createMultiResCommand(): Command {
     .option("--concurrency <number>", "Worker count")
     .action(async (file: string, options: MultiResOptions, command: Command) => {
       const merged = { ...command.optsWithGlobals(), ...options } as MultiResOptions;
-      const location = resolveProjectLocation({ root: merged.root, config: merged.config });
-      const config = await loadConfig(location.configPath);
-      const compositions = await loadComposition(file, options.composition);
-      const composition = selectComposition(compositions, options.composition);
+      const resolver = createProjectResolver({ root: merged.root, config: merged.config, file, composition: options.composition });
+      const resolution = await resolver.resolve();
+      reportResolution(resolution, merged.dryRun === true);
+      const config = resolution.config;
+      const composition = selectComposition([...resolution.compositions], options.composition);
       const variants = options.variants.split(",").map((label) => parseVariantLabel(label.trim())).filter(Boolean);
       const outputDir = options.out ? resolve(options.out) : resolveOutputDir(config);
       const concurrency = options.concurrency ? Number.parseInt(options.concurrency, 10) : 4;
