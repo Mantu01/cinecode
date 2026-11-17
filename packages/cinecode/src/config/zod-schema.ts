@@ -9,9 +9,9 @@ export const RESOLUTION_DIMENSIONS = {
   "square-1080": { width: 1080, height: 1080 },
 } as const;
 export const RESOLUTION_PRESETS = Object.keys(RESOLUTION_DIMENSIONS) as Array<keyof typeof RESOLUTION_DIMENSIONS>;
-export const SCHEMA_VERSIONS = [1, 2] as const;
+export const SCHEMA_VERSION = 2 as const;
+export const SCHEMA_VERSIONS = [1, SCHEMA_VERSION] as const;
 export const ASPECT_RATIOS = ["16:9", "9:16", "1:1", "4:3", "21:9"] as const;
-export const COLOR_SPACES = ["srgb", "rec709", "display-p3"] as const;
 export const VIDEO_CODECS = ["h264", "h265", "av1", "prores", "vp9", "ffv1", "utvideo"] as const;
 export const RENDER_FORMATS = [
   "mp4", "webm", "prores", "mkv", "avi", "gif", "apng", "png", "jpg", "webp", "avif", "pdf", "webm-alpha", "prores-alpha",
@@ -23,17 +23,14 @@ export const PLATFORM_PRESETS = ["youtube-1080p", "youtube-4k", "tiktok", "insta
 export const AUDIO_CHANNELS = [1, 2, 6] as const;
 export const SAMPLE_RATES = [22050, 44100, 48000, 96000] as const;
 export const IMAGE_FORMATS = ["png", "jpg", "webp", "svg"] as const;
-export const LOG_LEVELS = ["silent", "error", "warn", "info", "debug"] as const;
-export const PLUGIN_VERIFICATION = ["strict", "warn", "off"] as const;
 
-export const SchemaVersionSchema = z.union([z.literal(1), z.literal(2)]);
+export const SchemaVersionSchema = z.union([z.literal(1), z.literal(SCHEMA_VERSION)]);
 export const ResolutionSchema = z.string().regex(
   new RegExp(`^(\\d+x\\d+|${RESOLUTION_PRESETS.join("|")})$`),
   "Resolution must be WIDTHxHEIGHT or one of: " + RESOLUTION_PRESETS.join(", "),
 );
 export const AspectRatioSchema = z.enum(ASPECT_RATIOS);
 export const HexColorSchema = z.string().regex(/^#([A-Fa-f0-9]{3}|[A-Fa-f0-9]{6}|[A-Fa-f0-9]{8})$/, "Must be a hex color such as #ffffff");
-export const ColorSpaceSchema = z.enum(COLOR_SPACES);
 export const VideoCodecSchema = z.enum(VIDEO_CODECS);
 export const RenderFormatSchema = z.enum(RENDER_FORMATS);
 export const QualitySettingSchema = z.enum(QUALITY_SETTINGS);
@@ -43,11 +40,9 @@ export const PlatformPresetSchema = z.enum(PLATFORM_PRESETS);
 export const AudioChannelsSchema = z.union([z.literal(1), z.literal(2), z.literal(6)]);
 export const SampleRateSchema = z.union([z.literal(22050), z.literal(44100), z.literal(48000), z.literal(96000)]);
 export const ImageFormatSchema = z.enum(IMAGE_FORMATS);
-export const LogLevelSchema = z.enum(LOG_LEVELS);
 export const ConcurrencySchema = z.union([z.number().int().positive(), z.literal("auto")]);
 
 export const ProjectInputSchema = z.object({
-  name: z.string().min(1).optional(),
   entry: z.string().min(1).optional(),
   sourceDir: z.string().min(1).optional(),
   outputDir: z.string().min(1).optional(),
@@ -55,33 +50,24 @@ export const ProjectInputSchema = z.object({
 }).strict();
 
 export const VideoInputSchema = z.object({
-  title: z.string().optional(),
-  description: z.string().optional(),
-  author: z.string().optional(),
-  version: z.string().optional(),
-  tags: z.array(z.string()).optional(),
-  license: z.string().optional(),
   width: z.number().int().positive().optional(),
   height: z.number().int().positive().optional(),
-  aspectRatio: AspectRatioSchema.optional(),
   fps: z.number().positive().max(120).optional(),
   defaultDuration: z.union([z.number().positive(), z.string()]).optional(),
   background: HexColorSchema.optional(),
-  colorSpace: ColorSpaceSchema.optional(),
-  pixelAspectRatio: z.number().positive().optional(),
 }).strict();
 
 export const ImageInputSchema = z.object({
   defaultFormat: ImageFormatSchema.optional(),
   quality: z.number().int().min(1).max(100).optional(),
   scaleFactor: z.number().positive().optional(),
-}).strict();export const DevInputSchema = z.object({
-  port: z.number().int().min(1).max(65535).optional(),
+}).strict();
 
+export const DevInputSchema = z.object({
+  port: z.number().int().min(1).max(65535).optional(),
   host: z.string().optional(),
   open: z.boolean().optional(),
   hmr: z.boolean().optional(),
-  historyDepth: z.number().int().min(1).max(500).optional(),
   metricsPort: z.number().int().min(0).max(65535).optional(),
 }).strict();
 
@@ -104,7 +90,6 @@ export const RenderInputSchema = z.object({
   fps: z.number().positive().max(120).optional(),
   resolution: ResolutionSchema.optional(),
   format: RenderFormatSchema.optional(),
-  background: z.string().optional(),
   quality: QualitySettingSchema.optional(),
   codec: VideoCodecSchema.optional(),
   crf: z.number().int().min(0).max(63).optional(),
@@ -115,27 +100,14 @@ export const RenderInputSchema = z.object({
   alpha: z.boolean().optional(),
   twoPass: z.boolean().optional(),
   platformPreset: PlatformPresetSchema.optional(),
-  enforceAspectRatio: z.boolean().optional(),
-  variants: z.array(ResolutionVariantInputSchema).optional(),
+  bitrate: z.number().int().positive().optional(),
   colorManagement: ColorManagementInputSchema.optional(),
-}).strict();
-
-export const AudioSidechainInputSchema = z.object({
-  targetTrackName: z.string(),
-  sidechainTrackName: z.string(),
-  threshold: z.number().optional(),
-  ratio: z.number().optional(),
-  attackMs: z.number().optional(),
-  releaseMs: z.number().optional(),
 }).strict();
 
 export const AudioInputSchema = z.object({
   sampleRate: SampleRateSchema.optional(),
   channels: AudioChannelsSchema.optional(),
   masterVolume: z.number().min(0).max(1).optional(),
-  normalize: z.boolean().optional(),
-  limiter: z.object({ enabled: z.boolean(), thresholdDb: z.number() }).strict().optional(),
-  sidechains: z.array(AudioSidechainInputSchema).optional(),
 }).strict();
 
 export const FontEntrySchema = z.object({
@@ -157,21 +129,10 @@ export const PluginEntrySchema = z.object({
   enabled: z.boolean().optional(),
 }).strict();
 
-export const SecuritySchema = z.object({
-  pluginVerification: z.enum(PLUGIN_VERIFICATION).optional(),
-  trustedKeys: z.array(z.string()).optional(),
-}).strict();
-
-export const TelemetrySchema = z.object({
-  enabled: z.boolean().optional(),
-  endpoint: z.string().optional(),
-}).strict();
-
 export const CinecodeConfigInputSchema = z.object({
   $schema: z.string().optional(),
   extends: z.string().optional(),
   schemaVersion: SchemaVersionSchema.optional(),
-  name: z.string().optional(),
   project: ProjectInputSchema.optional(),
   video: VideoInputSchema.optional(),
   images: ImageInputSchema.optional(),
@@ -184,21 +145,16 @@ export const CinecodeConfigInputSchema = z.object({
   audio: AudioInputSchema.optional(),
   fonts: z.array(FontEntrySchema).optional(),
   concurrency: ConcurrencySchema.optional(),
-  logLevel: LogLevelSchema.optional(),
   overwrite: z.boolean().optional(),
   gitignore: z.boolean().optional(),
   plugins: z.array(z.union([z.string().min(1), PluginEntrySchema])).optional(),
   pluginPrecedence: z.array(z.string()).optional(),
-  pluginPermissions: z.record(z.string(), z.array(z.string())).optional(),
-  security: SecuritySchema.optional(),
-  telemetry: TelemetrySchema.optional(),
   autoDiscoverPlugins: z.boolean().optional(),
   ignorePatterns: z.array(z.string()).optional(),
   composition: z.unknown().optional(),
 }).strict();
 
 export const ProjectConfigSchema = z.object({
-  name: z.string().min(1),
   entry: z.string().min(1),
   sourceDir: z.string().min(1),
   outputDir: z.string().min(1),
@@ -206,20 +162,11 @@ export const ProjectConfigSchema = z.object({
 }).strict();
 
 export const VideoConfigSchema = z.object({
-  title: z.string().min(1),
-  description: z.string().optional(),
-  author: z.string().optional(),
-  version: z.string().optional(),
-  tags: z.array(z.string()).optional(),
-  license: z.string().optional(),
   width: z.number().int().positive(),
   height: z.number().int().positive(),
-  aspectRatio: AspectRatioSchema.optional(),
   fps: z.number().positive().max(120),
   defaultDuration: z.union([z.number(), z.string()]).optional(),
   background: z.string().min(1),
-  colorSpace: ColorSpaceSchema.optional(),
-  pixelAspectRatio: z.number().positive().optional(),
 }).strict();
 
 export const ImageConfigSchema = z.object({
@@ -233,7 +180,6 @@ export const DevConfigSchema = z.object({
   host: z.string().optional(),
   open: z.boolean().optional(),
   hmr: z.boolean(),
-  historyDepth: z.number().int().min(1).max(500).optional(),
   metricsPort: z.number().int().min(0).max(65535).optional(),
 }).strict();
 
@@ -241,7 +187,6 @@ export const RenderConfigSchema = RenderInputSchema.extend({
   fps: z.number().positive().max(120),
   resolution: ResolutionSchema,
   format: RenderFormatSchema,
-  background: z.string().min(1),
   quality: QualitySettingSchema,
   codec: VideoCodecSchema,
   preset: EncoderPresetSchema,
@@ -252,15 +197,12 @@ export const AudioConfigSchema = AudioInputSchema;
 
 export const PluginConfigEntrySchema = PluginEntrySchema;
 
-export const SecurityConfigSchema = SecuritySchema;
-
 export const NormalizedConfigSchema = CinecodeConfigInputSchema.extend({
   schemaVersion: SchemaVersionSchema,
   project: ProjectConfigSchema,
   video: VideoConfigSchema,
   images: ImageConfigSchema,
   dev: DevConfigSchema,
-  name: z.string().min(1),
   sourceDir: z.string().min(1),
   outputDir: z.string().min(1),
   cacheDir: z.string().min(1),
@@ -269,20 +211,10 @@ export const NormalizedConfigSchema = CinecodeConfigInputSchema.extend({
   audio: AudioConfigSchema,
   fonts: z.array(FontEntrySchema),
   concurrency: ConcurrencySchema,
-  logLevel: LogLevelSchema,
   overwrite: z.boolean(),
   gitignore: z.boolean(),
   plugins: z.array(PluginEntrySchema),
   pluginPrecedence: z.array(z.string()),
-  pluginPermissions: z.record(z.string(), z.array(z.string())),
-  security: z.object({
-    pluginVerification: z.enum(PLUGIN_VERIFICATION),
-    trustedKeys: z.array(z.string()),
-  }).strict(),
-  telemetry: z.object({
-    enabled: z.boolean(),
-    endpoint: z.string(),
-  }).strict(),
   autoDiscoverPlugins: z.boolean(),
   ignorePatterns: z.array(z.string()),
 }).strict();

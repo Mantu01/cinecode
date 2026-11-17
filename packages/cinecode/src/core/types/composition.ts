@@ -1,9 +1,14 @@
 import type { Timeline } from "./tracks.js";
 import type { Paint } from "./visual.js";
 import type { AudioConfig } from "./config.js";
+import type { SidechainConfig } from "../../audio/mixer.js";
 
 import type { SplitRegion } from "../../renderer/pip.js";
 import type { TempoRegion } from "../time/tempoMap.js";
+
+export interface CompositionAudio extends AudioConfig {
+  readonly sidechains?: readonly SidechainConfig[];
+}
 
 export interface CompositionProps {
   readonly name: string;
@@ -13,7 +18,7 @@ export interface CompositionProps {
   readonly background?: ColorSpec;
   readonly duration?: number | string;
   readonly tempo?: readonly TempoRegion[];
-  readonly audio?: AudioConfig;
+  readonly audio?: CompositionAudio;
   readonly rootTimeline: Timeline;
   readonly splitScreen?: SplitScreenConfig;
   readonly skybox?: SkyboxConfig;
@@ -73,7 +78,7 @@ export interface Composition {
   readonly background: ColorSpec;
   readonly duration?: number | string;
   readonly tempo?: readonly TempoRegion[];
-  readonly audio: AudioConfig;
+  readonly audio: CompositionAudio;
   readonly rootTimeline: Timeline;
   readonly splitScreen?: SplitScreenConfig;
   readonly skybox?: SkyboxConfig;

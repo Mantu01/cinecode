@@ -6,7 +6,7 @@ export {
   findConfigFile,
   resolveConfigPath,
   parseResolutionString,
-  guessAspectRatio,
+  explicitConfigPaths,
   DEFAULT_PROJECT,
   DEFAULT_VIDEO,
   DEFAULT_RENDER,

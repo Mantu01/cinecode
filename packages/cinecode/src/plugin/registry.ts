@@ -34,6 +34,7 @@ export class PluginRegistry {
   private readonly plugins = new Map<string, RegisteredPlugin>();
   private readonly optionsByPlugin = new Map<string, Record<string, unknown>>();
   private readonly options: PluginRegistryOptions;
+  private precedence: readonly string[];
   private autoDiscovered = false;
   private autoDiscoveryEnabled = true;
   private readonly inlineHooks = new Map<HookName, InlineHook[]>();
@@ -42,6 +43,11 @@ export class PluginRegistry {
 
   constructor(options: PluginRegistryOptions = {}) {
     this.options = options;
+    this.precedence = options.precedence ?? [];
+  }
+
+  setPrecedence(precedence: readonly string[]): void {
+    this.precedence = precedence;
   }
 
   registerFeature(name: string, pluginName: string, handler: unknown): void {
@@ -61,7 +67,7 @@ export class PluginRegistry {
       return;
     }
 
-    const precedence = this.options.precedence || [];
+    const precedence = this.precedence;
     const existingIdx = precedence.indexOf(existing.pluginName);
     const newIdx = precedence.indexOf(pluginName);
 

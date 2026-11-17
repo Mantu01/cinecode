@@ -15,6 +15,34 @@ const INVALID_CHARS = /[<>:"|?*]/;
 const TRAILING_DOT_OR_SPACE = /[. ]+$/;
 const CINEMATIC_FPS = new Set([23.976, 29.97, 59.94]);
 
+/** Keys removed because they had no implemented effect, with the replacement. */
+export const REMOVED_CONFIG_KEYS: Readonly<Record<string, string>> = {
+  name: "Removed; project identity is not configurable.",
+  "project.name": "Removed; project identity is not configurable.",
+  "video.title": "Removed; composition names come from timeline and scene entries.",
+  "video.description": "Removed; output metadata is not configurable in this release.",
+  "video.author": "Removed; output metadata is not configurable in this release.",
+  "video.version": "Removed; output metadata is not configurable in this release.",
+  "video.tags": "Removed; output metadata is not configurable in this release.",
+  "video.license": "Removed; output metadata is not configurable in this release.",
+  "video.aspectRatio": "Removed; aspect comes from video.width/video.height or render.platformPreset.",
+  "video.pixelAspectRatio": "Removed; pixel aspect is always 1.",
+  "video.colorSpace": "Removed; use render.colorManagement.",
+  "render.background": "Removed; use video.background.",
+  "render.enforceAspectRatio": "Removed; use render.platformPreset or explicit video.width/video.height.",
+  "render.variants": "Removed; run `cinecode multi-res` for per-variant renders.",
+  "dev.historyDepth": "Removed; the canvas editor owns its history depth.",
+  logLevel: "Removed; use the CLI --verbose flag.",
+  "audio.normalize": "Removed; apply audio processing in the timeline mixer.",
+  "audio.limiter": "Removed; apply audio processing in the timeline mixer.",
+  "audio.sidechains": "Removed; apply audio processing in the timeline mixer.",
+  security: "Removed; plugin verification is controlled by the marketplace client.",
+  telemetry: "Removed; use `cinecode telemetry`.",
+  pluginPermissions: "Removed; sandbox permissions are configured per plugin.",
+};
+
+const SUPPORTED_KEYS_HINT = "Supported keys are listed in docs/config-reference.md.";
+
 export interface ValidationResult {
   readonly errors: CinecodeError[];
   readonly warnings: CinecodeError[];
@@ -25,7 +53,7 @@ function schemaError(issue: ZodValidationIssue, configPath: string | undefined):
     const key = issue.path ? `${issue.path}.${issue.keys?.[0]}` : issue.keys?.[0];
     return createError(
       ErrorCode.CC1002,
-      { key: key ?? "config", suggestion: "none" },
+      { key: key ?? "config", suggestion: REMOVED_CONFIG_KEYS[key ?? ""] ?? SUPPORTED_KEYS_HINT },
       { location: { file: configPath }, cause: issue },
     );
   }

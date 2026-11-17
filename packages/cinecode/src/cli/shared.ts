@@ -6,6 +6,7 @@ import { resolveVideoEncoding } from "../core/quality.js";
 import { checkFileSizeCompliance, resolvePlatformPreset } from "../encoder/presets.js";
 import { createRenderJob, type RenderJob } from "../pipeline/index.js";
 import type { ProgressHandler } from "../pipeline/progress.js";
+import { CinecodeIgnore } from "../config/ignore.js";
 
 export const OUTPUT_SUBDIRS = {
   videos: "videos",
@@ -20,6 +21,13 @@ export function resolveCacheDir(config: CinecodeConfig): string {
 
 export function resolveOutputDir(config: CinecodeConfig): string {
   return resolve(config.outputDir ?? "output");
+}
+
+/** Media-index ignore predicate built from `ignorePatterns`; undefined when empty. */
+export function mediaIgnore(config: CinecodeConfig): ((relativePath: string) => boolean) | undefined {
+  if (!config.ignorePatterns || config.ignorePatterns.length === 0) return undefined;
+  const ignore = new CinecodeIgnore({ patterns: config.ignorePatterns, useDefaults: false });
+  return (relativePath) => ignore.shouldIgnore(relativePath);
 }
 
 export async function ensureDir(dir: string): Promise<void> {
@@ -112,6 +120,8 @@ export function startCompositionRender(options: StartRenderOptions): RenderJob {
     silent: options.silent ?? false,
     onProgress: options.onProgress,
     twoPass: options.config.render?.twoPass === true,
+    alpha: options.config.render?.alpha === true,
+    bitrateKbps: options.config.render?.bitrate,
     colorManagement: options.config.render?.colorManagement,
   });
 

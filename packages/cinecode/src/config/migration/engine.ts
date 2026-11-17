@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createError, ErrorCode } from "../../errors/index.js";
+import { SCHEMA_VERSION } from "../zod-schema.js";
 
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = SCHEMA_VERSION;
 export const OLDEST_SUPPORTED_VERSION = 1;
 
 type ConfigObject = Record<string, any>;
@@ -58,29 +59,12 @@ function migrateV1ToV2Transform(config: ConfigObject): string[] {
   return changes;
 }
 
-function migrateV2ToV3Transform(config: ConfigObject): string[] {
-  const changes: string[] = [];
-  if (config.video?.resolution !== undefined && config.render?.resolution === undefined) {
-    moveField(config, "video.resolution", "render.resolution", "Normalized 'video.resolution' into 'render.resolution'", changes);
-  }
-  if (config.entry !== undefined && config.project?.entry === undefined) {
-    moveField(config, "entry", "project.entry", "Moved top-level 'entry' to 'project.entry'", changes);
-  }
-  return changes;
-}
-
 export const MIGRATION_RULES: readonly MigrationRule[] = [
   {
     fromVersion: 1,
-    toVersion: 2,
+    toVersion: SCHEMA_VERSION,
     description: "Move legacy video fields into the video section",
     transform: migrateV1ToV2Transform,
-  },
-  {
-    fromVersion: 2,
-    toVersion: 3,
-    description: "Normalize render/project structure",
-    transform: migrateV2ToV3Transform,
   },
 ];
 
@@ -103,6 +87,9 @@ export class ConfigMigrationEngine {
     const originalVersion = Number(parsed.schemaVersion || 1);
     if (originalVersion < OLDEST_SUPPORTED_VERSION) {
       throw new Error(`Configuration schema version ${originalVersion} is no longer supported (oldest: ${OLDEST_SUPPORTED_VERSION})`);
+    }
+    if (originalVersion > CURRENT_SCHEMA_VERSION) {
+      throw new Error(`Configuration schema version ${originalVersion} is newer than this release supports (current: ${CURRENT_SCHEMA_VERSION})`);
     }
 
     let currentVersion = originalVersion;

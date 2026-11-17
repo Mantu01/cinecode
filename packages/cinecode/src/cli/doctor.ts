@@ -12,6 +12,7 @@ import { loadConfig } from "../config/schema.js";
 import { validateConfig } from "../config/validator.js";
 import { checkGitignoreEntries, ensureGitignoreEntries } from "../config/gitignore.js";
 import { createMediaResolver } from "../media/resolver.js";
+import { mediaIgnore } from "./shared.js";
 import { createMediaCache } from "../media/cache.js";
 import { renderVideo, type RenderOptions } from "../pipeline/index.js";
 import { checkRuntime } from "../loader/index.js";
@@ -156,7 +157,7 @@ async function checkMedia(config: CinecodeConfig): Promise<DoctorCheck> {
   try {
     const cache = createMediaCache(config.cacheDir ?? ".cinecode/cache");
     await cache.initialize();
-    const resolver = createMediaResolver({ sourceDir: config.sourceDir, cache, cloudMedia: config.cloudMedia ?? [] });
+    const resolver = createMediaResolver({ sourceDir: config.sourceDir, cache, cloudMedia: config.cloudMedia ?? [], ignore: mediaIgnore(config) });
     await resolver.initialize();
     const media = await resolver.listMedia();
     return { name: "Media", status: "PASS", message: `${media.length} local media file(s) present` };

@@ -17,7 +17,6 @@ export default defineConfig({
   schemaVersion: 2,
 
   project: {
-    name: "{{PROJECT_NAME}}",
     entry: "./main.js",
     sourceDir: "./src",
     outputDir: "./output",
@@ -25,15 +24,10 @@ export default defineConfig({
   },
 
   video: {
-    title: "{{PROJECT_NAME}}",
-    author: "",
-    tags: [],
     width: WIDTH,
     height: HEIGHT,
     fps: FPS,
     background: BACKGROUND,
-    colorSpace: "srgb",
-    pixelAspectRatio: 1,
   },
 
   render: {

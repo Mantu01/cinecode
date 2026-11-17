@@ -261,6 +261,7 @@ export async function loadProjectPlugins(
   rootDir = process.cwd(),
 ): Promise<readonly CinecodePlugin[]> {
   registry.setAutoDiscovery(config.autoDiscoverPlugins !== false);
+  registry.setPrecedence(config.pluginPrecedence ?? []);
   return loadPluginsFromConfig(config.plugins, registry, {
     rootDir,
     autoDiscover: config.autoDiscoverPlugins !== false,

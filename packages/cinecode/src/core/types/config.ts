@@ -4,14 +4,12 @@ import type {
   AudioConfigSchema,
   AudioChannelsSchema,
   CloudMediaEntrySchema,
-  ColorSpaceSchema,
   DevConfigSchema,
   EncoderPresetSchema,
   FontEntrySchema,
   HardwareAccelerationSchema,
   ImageConfigSchema,
   ImageFormatSchema,
-  LogLevelSchema,
   NormalizedCinecodeConfigSchema,
   PlatformPresetSchema,
   PluginConfigEntrySchema,
@@ -25,7 +23,6 @@ import type {
 } from "../../config/zod-schema.js";
 
 export type AspectRatio = z.infer<typeof AspectRatioSchema>;
-export type ColorSpace = z.infer<typeof ColorSpaceSchema>;
 export type RenderFormat = z.infer<typeof RenderFormatSchema>;
 export type AlphaRenderFormat = Extract<RenderFormat, "webm-alpha" | "prores-alpha">;
 export type PlatformPresetName = z.infer<typeof PlatformPresetSchema>;
@@ -47,5 +44,4 @@ export type FontEntry = z.infer<typeof FontEntrySchema>;
 export type CloudMediaEntry = z.infer<typeof CloudMediaEntrySchema>;
 export type PluginConfigEntry = z.infer<typeof PluginConfigEntrySchema>;
 export type ImageFormat = z.infer<typeof ImageFormatSchema>;
-export type ConfigLogLevel = z.infer<typeof LogLevelSchema>;
 export type CinecodeConfig = z.infer<typeof NormalizedCinecodeConfigSchema>;

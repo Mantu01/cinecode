@@ -1,7 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve, extname, isAbsolute, dirname } from "node:path";
 import type {
-  AspectRatio,
   CinecodeConfig,
   DevConfig,
   ImageConfig,
@@ -19,7 +18,9 @@ import {
 import { mergeConfigInheritance } from "./inherit.js";
 import { isUserModuleFile, loadUserModule } from "../loader/index.js";
 import { createError, ErrorCode, isCinecodeError } from "../errors/index.js";
-import { RESOLUTION_DIMENSIONS } from "./zod-schema.js";
+import { RESOLUTION_DIMENSIONS, SCHEMA_VERSION } from "./zod-schema.js";
+
+export { SCHEMA_VERSION };
 import { validateAuthoringConfig, validateNormalizedConfig } from "./validator.js";
 
 export interface LoadConfigOptions {
@@ -28,7 +29,6 @@ export interface LoadConfigOptions {
 }
 
 export const DEFAULT_PROJECT: ProjectConfig = {
-  name: "cinecode-video",
   entry: "./main.ts",
   sourceDir: "./src",
   outputDir: "./output",
@@ -36,20 +36,16 @@ export const DEFAULT_PROJECT: ProjectConfig = {
 };
 
 export const DEFAULT_VIDEO: VideoConfig = {
-  title: "Cinecode Video",
   width: 1920,
   height: 1080,
   fps: 30,
   background: "#000000",
-  colorSpace: "srgb",
-  pixelAspectRatio: 1,
 };
 
 export const DEFAULT_RENDER: RenderConfig = {
   fps: 30,
   resolution: "1920x1080",
   format: "mp4",
-  background: "#000000",
   quality: "final",
   codec: "h264",
   preset: "slow",
@@ -67,17 +63,15 @@ export const DEFAULT_DEV: DevConfig = {
   host: "localhost",
   open: false,
   hmr: true,
-  historyDepth: 50,
   metricsPort: undefined,
 };
 
 const DEFAULT_CONFIG: CinecodeConfig = {
-  schemaVersion: 2,
+  schemaVersion: SCHEMA_VERSION,
   project: DEFAULT_PROJECT,
   video: DEFAULT_VIDEO,
   images: DEFAULT_IMAGES,
   dev: DEFAULT_DEV,
-  name: DEFAULT_PROJECT.name,
   sourceDir: DEFAULT_PROJECT.sourceDir,
   outputDir: DEFAULT_PROJECT.outputDir,
   cacheDir: DEFAULT_PROJECT.cacheDir,
@@ -90,25 +84,30 @@ const DEFAULT_CONFIG: CinecodeConfig = {
   },
   fonts: [],
   concurrency: "auto",
-  logLevel: "info",
   overwrite: false,
   gitignore: true,
   plugins: [],
   pluginPrecedence: [],
-  pluginPermissions: {},
-  security: {
-    pluginVerification: "warn",
-    trustedKeys: [],
-  },
-  telemetry: {
-    enabled: false,
-    endpoint: "https://telemetry.cinecode.dev/v1/events",
-  },
   autoDiscoverPlugins: true,
   ignorePatterns: [],
 };
 
-export const SCHEMA_VERSION = 2;
+const EXPLICIT_PATHS = Symbol("cinecode.config.explicitPaths");
+
+/** Authoring paths that were present in the source config, for precedence. */
+export function explicitConfigPaths(config: CinecodeConfig): ReadonlySet<string> {
+  return (config as CinecodeConfig & { [EXPLICIT_PATHS]?: ReadonlySet<string> })[EXPLICIT_PATHS] ?? new Set();
+}
+
+function collectExplicitPaths(value: unknown, prefix = ""): string[] {
+  if (value === null || typeof value !== "object") return prefix ? [prefix] : [];
+  if (Array.isArray(value)) {
+    return value.flatMap((entry, index) => collectExplicitPaths(entry, `${prefix}[${index}]`));
+  }
+  return Object.entries(value as Record<string, unknown>).flatMap(([key, child]) =>
+    collectExplicitPaths(child, prefix ? `${prefix}.${key}` : key),
+  );
+}
 
 export async function loadConfig(configPath: string, options: LoadConfigOptions = {}): Promise<CinecodeConfig> {
   const resolvedPath = resolve(configPath);
@@ -148,6 +147,14 @@ export async function loadConfig(configPath: string, options: LoadConfigOptions 
     assertEnvVarsPresent(findMissingEnvVarsDeep(rawConfig), resolvedPath);
     const withEnv = substituteEnvVarsDeep(rawConfig);
     const merged = await mergeConfigInheritance(resolvedPath, withEnv);
+    const declaredVersion = merged.schemaVersion;
+    if (typeof declaredVersion === "number" && declaredVersion > SCHEMA_VERSION) {
+      throw createError(
+        ErrorCode.CC1004,
+        { version: String(declaredVersion), expected: String(SCHEMA_VERSION) },
+        { location: { file: resolvedPath }, fixHint: `This Cinecode release supports schema version ${SCHEMA_VERSION}; upgrade cinecode or lower schemaVersion.` },
+      );
+    }
     assertAuthoringSchema(merged, resolvedPath);
     const config = normalizeConfig(merged);
     const normalized = validateNormalizedConfig(config, resolvedPath);
@@ -195,12 +202,6 @@ export function normalizeConfig(raw: Record<string, unknown>): CinecodeConfig {
   const rawRender = (raw.render as Partial<RenderConfig> | undefined) ?? {};
   const rawAudio = (raw.audio as CinecodeConfig["audio"]) ?? {};
 
-  const name =
-    (raw.name as string | undefined) ??
-    rawProject.name ??
-    rawVideo.title ??
-    DEFAULT_PROJECT.name;
-
   const entry =
     rawProject.entry ??
     (raw.entry as string | undefined) ??
@@ -243,36 +244,26 @@ export function normalizeConfig(raw: Record<string, unknown>): CinecodeConfig {
   const background =
     rawVideo.background ??
     (raw.background as string | undefined) ??
-    rawRender.background ??
+    (rawRender as { background?: string }).background ??
     DEFAULT_VIDEO.background;
   const duration =
     rawVideo.defaultDuration ??
     (raw.duration as number | string | undefined);
 
-  const project: ProjectConfig = { name, entry, sourceDir, outputDir, cacheDir };
+  const project: ProjectConfig = { entry, sourceDir, outputDir, cacheDir };
 
   const video: VideoConfig = {
-    title: rawVideo.title ?? name,
-    description: rawVideo.description,
-    author: rawVideo.author,
-    version: rawVideo.version,
-    tags: rawVideo.tags,
-    license: rawVideo.license,
     width,
     height,
-    aspectRatio: rawVideo.aspectRatio ?? guessAspectRatio(width, height),
     fps,
     defaultDuration: duration,
     background,
-    colorSpace: rawVideo.colorSpace ?? DEFAULT_VIDEO.colorSpace,
-    pixelAspectRatio: rawVideo.pixelAspectRatio ?? DEFAULT_VIDEO.pixelAspectRatio,
   };
 
   const render: RenderConfig = {
     fps,
     resolution: `${width}x${height}`,
     format: rawRender.format ?? DEFAULT_RENDER.format!,
-    background,
     quality: rawRender.quality ?? DEFAULT_RENDER.quality!,
     codec: rawRender.codec ?? DEFAULT_RENDER.codec!,
     crf: rawRender.crf,
@@ -283,12 +274,11 @@ export function normalizeConfig(raw: Record<string, unknown>): CinecodeConfig {
     alpha: rawRender.alpha,
     twoPass: rawRender.twoPass,
     platformPreset: rawRender.platformPreset,
-    enforceAspectRatio: rawRender.enforceAspectRatio,
-    variants: rawRender.variants,
+    bitrate: rawRender.bitrate,
     colorManagement: rawRender.colorManagement,
   };
 
-  return {
+  const config: CinecodeConfig = {
     schemaVersion: (raw.schemaVersion as CinecodeConfig["schemaVersion"] | undefined) ?? SCHEMA_VERSION,
     project,
     video,
@@ -302,10 +292,8 @@ export function normalizeConfig(raw: Record<string, unknown>): CinecodeConfig {
       host: rawDev.host ?? DEFAULT_DEV.host,
       open: rawDev.open ?? DEFAULT_DEV.open,
       hmr: rawDev.hmr ?? DEFAULT_DEV.hmr,
-      historyDepth: rawDev.historyDepth ?? DEFAULT_DEV.historyDepth,
       metricsPort: rawDev.metricsPort ?? DEFAULT_DEV.metricsPort,
     },
-    name,
     sourceDir,
     outputDir,
     cacheDir,
@@ -315,31 +303,20 @@ export function normalizeConfig(raw: Record<string, unknown>): CinecodeConfig {
       sampleRate: rawAudio?.sampleRate ?? DEFAULT_CONFIG.audio?.sampleRate,
       channels: rawAudio?.channels ?? DEFAULT_CONFIG.audio?.channels,
       masterVolume: rawAudio?.masterVolume ?? DEFAULT_CONFIG.audio?.masterVolume,
-      normalize: rawAudio?.normalize,
-      limiter: rawAudio?.limiter,
-      sidechains: rawAudio?.sidechains,
     },
     fonts: (raw.fonts as CinecodeConfig["fonts"]) ?? DEFAULT_CONFIG.fonts,
     concurrency: (raw.concurrency as CinecodeConfig["concurrency"]) ?? DEFAULT_CONFIG.concurrency,
-    logLevel: (raw.logLevel as CinecodeConfig["logLevel"]) ?? DEFAULT_CONFIG.logLevel,
     overwrite: (raw.overwrite as boolean | undefined) ?? DEFAULT_CONFIG.overwrite,
     gitignore: (raw.gitignore as boolean | undefined) ?? DEFAULT_CONFIG.gitignore,
     plugins: normalizePluginEntries(raw.plugins),
     pluginPrecedence: (raw.pluginPrecedence as string[] | undefined) ?? DEFAULT_CONFIG.pluginPrecedence,
-    pluginPermissions:
-      (raw.pluginPermissions as Record<string, string[]> | undefined) ?? DEFAULT_CONFIG.pluginPermissions,
-    security: {
-      ...DEFAULT_CONFIG.security,
-      ...(raw.security as CinecodeConfig["security"] | undefined),
-    },
-    telemetry: {
-      ...DEFAULT_CONFIG.telemetry,
-      ...(raw.telemetry as CinecodeConfig["telemetry"] | undefined),
-    },
     autoDiscoverPlugins:
       (raw.autoDiscoverPlugins as boolean | undefined) ?? DEFAULT_CONFIG.autoDiscoverPlugins,
     ignorePatterns: (raw.ignorePatterns as string[] | undefined) ?? DEFAULT_CONFIG.ignorePatterns,
   };
+
+  Object.defineProperty(config, EXPLICIT_PATHS, { value: new Set(collectExplicitPaths(raw)), enumerable: false });
+  return config;
 }
 
 export function parseResolutionString(
@@ -351,27 +328,6 @@ export function parseResolutionString(
   const match = value.match(/^(\d+)x(\d+)$/i);
   if (!match) return null;
   return { width: parseInt(match[1]!, 10), height: parseInt(match[2]!, 10) };
-}
-
-export function guessAspectRatio(width: number, height: number): AspectRatio {
-  const ratio = width / height;
-  const candidates: Array<[AspectRatio, number]> = [
-    ["16:9", 16 / 9],
-    ["9:16", 9 / 16],
-    ["1:1", 1],
-    ["4:3", 4 / 3],
-    ["21:9", 21 / 9],
-  ];
-  let best: AspectRatio = "16:9";
-  let bestDiff = Infinity;
-  for (const [label, value] of candidates) {
-    const diff = Math.abs(ratio - value);
-    if (diff < bestDiff) {
-      bestDiff = diff;
-      best = label;
-    }
-  }
-  return best;
 }
 
 export function resolveConfigPath(configPath: string | undefined, cwd = process.cwd()): string {

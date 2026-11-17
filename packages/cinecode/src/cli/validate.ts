@@ -6,6 +6,7 @@ import { validateConfig } from "../config/validator.js";
 import { ensureGitignoreEntries } from "../config/gitignore.js";
 import { createError, ErrorCode, type CinecodeError, formatError } from "../errors/index.js";
 import { createMediaResolver } from "../media/resolver.js";
+import { mediaIgnore } from "./shared.js";
 import { createMediaCache } from "../media/cache.js";
 import { loadComposition } from "./still.js";
 import { allClips } from "../core/types/tracks.js";
@@ -52,7 +53,7 @@ async function checkMediaFiles(config: CinecodeConfig): Promise<CinecodeError[]>
   const errors: CinecodeError[] = [];
   const cache = createMediaCache(config.cacheDir ?? ".cinecode/cache");
   await cache.initialize();
-  const resolver = createMediaResolver({ sourceDir: config.sourceDir, cache, cloudMedia: config.cloudMedia ?? [] });
+  const resolver = createMediaResolver({ sourceDir: config.sourceDir, cache, cloudMedia: config.cloudMedia ?? [], ignore: mediaIgnore(config) });
   await resolver.initialize();
 
   const media = await resolver.listMedia();

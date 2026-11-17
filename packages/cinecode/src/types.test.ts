@@ -35,11 +35,11 @@ const blurEffect = defineEffect({
 import type { InferredCinecodeConfig } from "./config/zod-schema.js";
 const config: InferredCinecodeConfig = {
   schemaVersion: 2,
-  project: { name: "test", entry: "./main.ts", sourceDir: "./src", outputDir: "./output", cacheDir: ".cinecode/cache" },
+  project: { entry: "./main.ts", sourceDir: "./src", outputDir: "./output", cacheDir: ".cinecode/cache" },
   sourceDir: "./src",
   outputDir: "./output",
   cacheDir: ".cinecode/cache",
-  video: { width: 1920, height: 1080, fps: 30, title: "test", background: "#000000" },
+  video: { width: 1920, height: 1080, fps: 30, background: "#000000" },
   render: { quality: "final" },
 };
 

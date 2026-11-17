@@ -12,6 +12,7 @@ import { validateKeyframes } from "../core/keyframes/index.js";
 import { allClips } from "../core/types/tracks.js";
 import { checkMissingGlyphs } from "../renderer/text/engine.js";
 import { createMediaResolver } from "../media/resolver.js";
+import { mediaIgnore } from "./shared.js";
 import { createMediaCache } from "../media/cache.js";
 import { createError, ErrorCode, isCinecodeError, type CinecodeError } from "../errors/index.js";
 import { loadComposition } from "./still.js";
@@ -266,7 +267,7 @@ export async function runCheck(configPath: string): Promise<CheckReport> {
     try {
       const cache = createMediaCache(config.cacheDir ?? ".cinecode/cache");
       await cache.initialize();
-      const resolver = createMediaResolver({ sourceDir: config.sourceDir, cache, cloudMedia: config.cloudMedia ?? [] });
+      const resolver = createMediaResolver({ sourceDir: config.sourceDir, cache, cloudMedia: config.cloudMedia ?? [], ignore: mediaIgnore(config) });
       await resolver.initialize();
       for (const m of await resolver.listMedia()) {
         try {

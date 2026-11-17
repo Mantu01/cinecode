@@ -56,7 +56,7 @@ export enum ErrorCode {
 export const ErrorMessages: Record<ErrorCode, string> = {
   [ErrorCode.CC0001]: "Invalid command usage: {reason}",
   [ErrorCode.CC1001]: "Configuration missing required key: sourceDir",
-  [ErrorCode.CC1002]: "Unknown configuration key: {key}. Did you mean: {suggestion}?",
+  [ErrorCode.CC1002]: "Unknown configuration key: {key}. {suggestion}",
   [ErrorCode.CC1003]: "Invalid path for {key}: {path}. {reason}",
   [ErrorCode.CC1004]: "Unsupported schema version: {version}. Expected: {expected}",
   [ErrorCode.CC1005]: "Configuration could not be loaded: {path}. {reason}",

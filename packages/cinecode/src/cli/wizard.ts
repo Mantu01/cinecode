@@ -79,15 +79,14 @@ export async function runInitWizard(options: WizardOptions = {}): Promise<void> 
   const configContent = `import { defineConfig } from "cinecode";
 
 export default defineConfig({
+  schemaVersion: 2,
   project: {
-    name: "${projectName}",
     entry: "./src/main.${useTs ? "ts" : "js"}",
     sourceDir: "./src",
     outputDir: "./output",
     cacheDir: "./.cinecode/cache",
   },
   video: {
-    title: "${projectName}",
     width: ${width},
     height: ${height},
     fps: ${fps},
@@ -97,7 +96,6 @@ export default defineConfig({
   audio: {
     sampleRate: 48000,
     channels: 2,
-    normalize: true,
   },
   plugins: [],
 });

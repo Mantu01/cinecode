@@ -7,6 +7,7 @@ import { loadConfig } from "../config/schema.js";
 import { createMediaCache } from "../media/cache.js";
 import { createMediaResolver } from "../media/resolver.js";
 import { runReport } from "./run-report.js";
+import { mediaIgnore } from "./shared.js";
 
 export interface MediaListOptions {
   json?: boolean;
@@ -38,6 +39,7 @@ export async function mediaListCommand(options: MediaListOptions): Promise<void>
     sourceDir: config.sourceDir,
     cache,
     cloudMedia: config.cloudMedia,
+    ignore: mediaIgnore(config),
   });
   await resolver.initialize();
 

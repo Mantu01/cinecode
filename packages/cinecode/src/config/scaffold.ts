@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { InferredCinecodeConfig } from "./zod-schema.js";
 import { defineConfig as coreDefineConfig } from "../core/define/definitions.js";
+import { SCHEMA_VERSION } from "./zod-schema.js";
 
 export function defineConfig(config: InferredCinecodeConfig): InferredCinecodeConfig {
   return coreDefineConfig(config);
@@ -36,19 +37,15 @@ export function scaffoldConfigFile(targetDir: string, options: ScaffoldConfigOpt
     height = 1080;
   }
 
-  const name = options.name ?? "my-cinecode-video";
-
   const content = isTs
     ? `import { defineConfig } from "cinecode";
 
 export default defineConfig({
-  schemaVersion: 1,
+  schemaVersion: ${SCHEMA_VERSION},
   project: {
-    name: "${name}",
     entry: "./src/main.ts",
   },
   video: {
-    title: "${name}",
     width: ${width},
     height: ${height},
     fps: ${fps},
@@ -65,13 +62,11 @@ export default defineConfig({
 import { defineConfig } from "cinecode";
 
 export default defineConfig({
-  schemaVersion: 1,
+  schemaVersion: ${SCHEMA_VERSION},
   project: {
-    name: "${name}",
     entry: "./src/main.js",
   },
   video: {
-    title: "${name}",
     width: ${width},
     height: ${height},
     fps: ${fps},
