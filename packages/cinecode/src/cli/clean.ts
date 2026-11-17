@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { rm, readdir, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { loadConfig } from "../config/schema.js";
+import { resolveProjectLocation } from "../config/project.js";
 import { formatCacheGcResult, pruneStaleEntries } from "../pipeline/cache-gc.js";
 
 interface CleanOptions {
@@ -10,6 +11,7 @@ interface CleanOptions {
   force?: boolean;
   dryRun?: boolean;
   config?: string;
+  root?: string;
   pruneStaleDays?: number;
 }
 
@@ -53,11 +55,11 @@ function formatSize(bytes: number): string {
 }
 
 export async function cleanCommand(options: CleanOptions): Promise<void> {
-  const configPath = options.config ?? "cinecode.config.js";
-  const config = await loadConfig(resolve(configPath));
+  const location = resolveProjectLocation({ root: options.root, config: options.config });
+  const config = await loadConfig(location.configPath);
 
-  const cacheDir = resolve(config.cacheDir ?? ".cinecode/cache");
-  const outputDir = resolve(config.outputDir ?? "output");
+  const cacheDir = resolve(location.root, config.cacheDir);
+  const outputDir = resolve(location.root, config.outputDir);
 
   if (options.pruneStaleDays !== undefined) {
     const result = await pruneStaleEntries(cacheDir, options.pruneStaleDays, { dryRun: options.dryRun === true });

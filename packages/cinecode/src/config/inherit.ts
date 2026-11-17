@@ -2,8 +2,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve, isAbsolute } from "node:path";
 import type { CinecodeConfig, Composition } from "../core/types/index.js";
 import { normalizeConfig } from "./schema.js";
-import { substituteEnvVars, substituteEnvVarsDeep } from "./envsubst.js";
+import { findMissingEnvVarsWithPaths, substituteEnvVarsDeep } from "./envsubst.js";
 import { hotReloadEnabled, isUserModuleFile, loadUserModule } from "../loader/index.js";
+import { createError, ErrorCode } from "../errors/index.js";
 
 const BASE_CONFIG_FILES = ["cinecode.base.json", "cinecode.base.ts", "cinecode.base.js", "cinecode.base.mjs", ".cinecode.base.json"];
 
@@ -36,8 +37,21 @@ async function readRawConfig(configPath: string): Promise<RawRecord> {
     const module = await loadUserModule<RawRecord>(configPath, dirname(configPath), { fresh: hotReloadEnabled() });
     return module ?? {};
   }
-  const text = substituteEnvVars(readFileSync(configPath, "utf-8"));
-  return JSON.parse(text) as RawRecord;
+  return JSON.parse(readFileSync(configPath, "utf-8")) as RawRecord;
+}
+
+async function readConfigDocument(configPath: string): Promise<RawRecord> {
+  const raw = await readRawConfig(configPath);
+  const missing = findMissingEnvVarsWithPaths(raw);
+  if (missing.length > 0) {
+    const entry = missing[0]!;
+    throw createError(
+      ErrorCode.CC1005,
+      { path: configPath, reason: `Missing required environment variable '${entry.name}' referenced at ${entry.path}` },
+      { location: { file: configPath }, fixHint: `export ${entry.name}=... and rerun.` },
+    );
+  }
+  return substituteEnvVarsDeep(raw);
 }
 
 function findBaseConfig(startDir: string): string | null {
@@ -58,15 +72,23 @@ async function resolveExtendsField(configPath: string, raw: RawRecord, chain: st
   if (typeof extendsPath !== "string" || extendsPath.length === 0) return raw;
   const target = isAbsolute(extendsPath) ? extendsPath : resolve(dirname(configPath), extendsPath);
   if (!existsSync(target)) {
-    throw new Error(`Config extends target not found: ${target}`);
+    throw createError(
+      ErrorCode.CC1005,
+      { path: target, reason: `Config extends target not found (${[...chain, target].join(" -> ")})` },
+      { location: { file: target } },
+    );
   }
   if (visited.has(target)) {
-    throw new Error(`Circular config inheritance detected: ${target}`);
+    throw createError(
+      ErrorCode.CC1005,
+      { path: target, reason: `Circular config inheritance: ${[...chain, target].join(" -> ")}` },
+      { location: { file: target }, fixHint: "Remove the extends cycle; configs merge base then override." },
+    );
   }
   visited.add(target);
-  const parentRaw = substituteEnvVarsDeep(await readRawConfig(target));
-  const resolvedParent = await resolveExtendsField(target, parentRaw, chain, visited);
   chain.push(target);
+  const parentRaw = await readConfigDocument(target);
+  const resolvedParent = await resolveExtendsField(target, parentRaw, chain, visited);
   return deepMergeConfig(resolvedParent, raw);
 }
 
@@ -93,7 +115,7 @@ export async function mergeConfigInheritance(
       if (baseFile && !visited.has(baseFile)) {
         visited.add(baseFile);
         chain.push(baseFile);
-        merged = deepMergeConfig(substituteEnvVarsDeep(await readRawConfig(baseFile)), merged);
+        merged = deepMergeConfig(await readConfigDocument(baseFile), merged);
       }
     }
     let currentDir = dirname(resolve(configPath));
@@ -103,7 +125,7 @@ export async function mergeConfigInheritance(
       if (baseFile && !visited.has(baseFile)) {
         visited.add(baseFile);
         chain.push(baseFile);
-        merged = deepMergeConfig(substituteEnvVarsDeep(await readRawConfig(baseFile)), merged);
+        merged = deepMergeConfig(await readConfigDocument(baseFile), merged);
       }
     }
   }

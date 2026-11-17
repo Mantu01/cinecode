@@ -9,12 +9,7 @@ import type {
   RenderConfig,
   VideoConfig,
 } from "../core/types/index.js";
-import {
-  findMissingEnvVars,
-  findMissingEnvVarsDeep,
-  substituteEnvVars,
-  substituteEnvVarsDeep,
-} from "./envsubst.js";
+import { findMissingEnvVarsWithPaths, substituteEnvVarsDeep, type MissingEnvVar } from "./envsubst.js";
 import { mergeConfigInheritance } from "./inherit.js";
 import { isUserModuleFile, loadUserModule } from "../loader/index.js";
 import { createError, ErrorCode, isCinecodeError } from "../errors/index.js";
@@ -120,9 +115,8 @@ export async function loadConfig(configPath: string, options: LoadConfigOptions 
       rawConfig = await loadUserModule<Record<string, unknown>>(resolvedPath, dirname(resolvedPath), { fresh: options.fresh });
     } else if (ext === ".json") {
       const rawText = readFileSync(resolvedPath, "utf-8");
-      assertEnvVarsPresent(findMissingEnvVars(rawText), resolvedPath);
       try {
-        rawConfig = JSON.parse(substituteEnvVars(rawText));
+        rawConfig = JSON.parse(rawText);
       } catch (parseError) {
         throw createError(
           ErrorCode.CC1006,
@@ -144,7 +138,7 @@ export async function loadConfig(configPath: string, options: LoadConfigOptions 
   }
 
   try {
-    assertEnvVarsPresent(findMissingEnvVarsDeep(rawConfig), resolvedPath);
+    assertEnvVarsPresent(findMissingEnvVarsWithPaths(rawConfig), resolvedPath);
     const withEnv = substituteEnvVarsDeep(rawConfig);
     const merged = await mergeConfigInheritance(resolvedPath, withEnv);
     const declaredVersion = merged.schemaVersion;
@@ -176,14 +170,14 @@ function assertAuthoringSchema(raw: Record<string, unknown>, configPath: string)
   if (errors.length > 0) throw errors[0];
 }
 
-function assertEnvVarsPresent(missing: readonly string[], configPath: string): void {
+function assertEnvVarsPresent(missing: readonly MissingEnvVar[], configPath: string): void {
   if (missing.length === 0) return;
-  const list = missing.map((name) => `'${name}'`).join(", ");
+  const list = missing.map((entry) => `'${entry.name}' (at ${entry.path})`).join(", ");
   throw createError(
     ErrorCode.CC1005,
     {
       path: configPath,
-      reason: `Missing required environment variable${missing.length > 1 ? "s" : ""} ${list}. Set ${missing.length > 1 ? "them" : "it"} before running cinecode: export ${missing[0]}=...`,
+      reason: `Missing required environment variable${missing.length > 1 ? "s" : ""} ${list}. Set ${missing.length > 1 ? "them" : "it"} before running cinecode: export ${missing[0]!.name}=...`,
     },
     { location: { file: configPath } },
   );

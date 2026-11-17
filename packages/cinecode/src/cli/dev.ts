@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { platform } from "node:os";
 import { resolve } from "node:path";
 import { loadConfig } from "../config/schema.js";
+import { resolveProjectLocation } from "../config/project.js";
 import { loadManifestProject } from "../manifest/index.js";
 import { DevServer } from "../dev/index.js";
 import { startMetricsServer, type MetricsServerHandle } from "../observability/metrics-server.js";
@@ -10,6 +11,7 @@ import { setHotReload } from "../loader/index.js";
 
 export interface DevCliOptions {
   config?: string;
+  root?: string;
   port?: number;
   host?: string;
   open?: boolean;
@@ -31,9 +33,9 @@ function openBrowser(url: string): void {
 
 export async function devCommand(options: DevCliOptions): Promise<void> {
   setHotReload(true);
-  const configPath = options.config ?? "cinecode.config.js";
-  const config = await loadConfig(resolve(configPath), { fresh: true });
-  const project = await loadManifestProject(config, process.cwd());
+  const location = resolveProjectLocation({ root: options.root, config: options.config });
+  const config = await loadConfig(location.configPath, { fresh: true });
+  const project = await loadManifestProject(config, location.root);
 
   const port = options.port ?? config.dev?.port ?? 3000;
   const host = options.host ?? config.dev?.host ?? "localhost";
@@ -42,11 +44,11 @@ export async function devCommand(options: DevCliOptions): Promise<void> {
   const server = new DevServer({
     config,
     project,
-    rootDir: process.cwd(),
+    rootDir: location.root,
     port,
     host,
     hmr,
-    configPath: resolve(configPath),
+    configPath: location.configPath,
   });
 
   await server.start();
@@ -85,7 +87,7 @@ export function createDevCommand(): Command {
     .option("--open", "Open the preview in the browser", false)
     .option("--no-hmr", "Disable the HMR socket push")
     .option("--metrics-port <number>", "Prometheus metrics port (0 disables)", (v) => parseInt(v, 10))
-    .action(async (options: DevCliOptions) => {
-      await devCommand(options);
+    .action(async (options: DevCliOptions, command: Command) => {
+      await devCommand({ ...command.optsWithGlobals(), ...options });
     });
 }

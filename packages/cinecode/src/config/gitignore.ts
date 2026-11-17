@@ -29,8 +29,8 @@ export interface GitignoreManagerOptions {
   readonly enabled: boolean;
 }
 
-export async function ensureGitignoreEntries(options: GitignoreManagerOptions): Promise<void> {
-  if (!options.enabled) return;
+export async function ensureGitignoreEntries(options: GitignoreManagerOptions): Promise<string[]> {
+  if (!options.enabled) return [];
 
   const gitignorePath = resolve(options.projectRoot, ".gitignore");
   let content = "";
@@ -49,11 +49,7 @@ export async function ensureGitignoreEntries(options: GitignoreManagerOptions): 
     existingLines = [];
   }
 
-  const requiredEntries = [
-    normalizeEntry(options.sourceDir),
-    normalizeEntry(options.outputDir),
-    normalizeEntry(options.cacheDir),
-  ].filter(Boolean);
+  const requiredEntries = [normalizeEntry(options.outputDir), normalizeEntry(options.cacheDir)].filter(Boolean);
 
   const newLines = [...existingLines];
   let blockStartIndex = -1;
@@ -76,7 +72,7 @@ export async function ensureGitignoreEntries(options: GitignoreManagerOptions): 
 
   const entriesToAdd = requiredEntries.filter(e => !existingInBlock.has(normalizeEntry(e)));
 
-  if (entriesToAdd.length === 0) return;
+  if (entriesToAdd.length === 0) return [];
 
   if (blockStartIndex === -1) {
     if (newLines.length > 0 && newLines[newLines.length - 1] !== "") {
@@ -98,6 +94,7 @@ export async function ensureGitignoreEntries(options: GitignoreManagerOptions): 
   if (finalContent !== content) {
     writeFileSync(gitignorePath, finalContent, "utf-8");
   }
+  return entriesToAdd;
 }
 
 export async function removeGitignoreEntries(options: GitignoreManagerOptions): Promise<void> {
@@ -119,11 +116,7 @@ export async function removeGitignoreEntries(options: GitignoreManagerOptions): 
   const content = readFileSync(gitignorePath, "utf-8");
   const lines = content.split(/\r?\n/);
 
-  const requiredEntries = new Set([
-    normalizeEntry(options.sourceDir),
-    normalizeEntry(options.outputDir),
-    normalizeEntry(options.cacheDir),
-  ].filter(Boolean));
+  const requiredEntries = new Set([normalizeEntry(options.outputDir), normalizeEntry(options.cacheDir)].filter(Boolean));
 
   const newLines = lines.filter((line, index) => {
     const trimmed = line.trim();
@@ -176,11 +169,7 @@ export async function checkGitignoreEntries(options: GitignoreManagerOptions): P
     existingLines = [];
   }
 
-  const requiredEntries = [
-    normalizeEntry(options.sourceDir),
-    normalizeEntry(options.outputDir),
-    normalizeEntry(options.cacheDir),
-  ].filter(Boolean);
+  const requiredEntries = [normalizeEntry(options.outputDir), normalizeEntry(options.cacheDir)].filter(Boolean);
 
   const present: string[] = [];
   const missing: string[] = [];

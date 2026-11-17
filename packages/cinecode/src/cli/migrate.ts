@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import pc from "picocolors";
 import { ConfigMigrationEngine } from "../config/migration/engine.js";
+import { resolveProjectLocation } from "../config/project.js";
 import { createError, ErrorCode, isCinecodeError } from "../errors/index.js";
 import { runReport } from "./run-report.js";
 
@@ -11,16 +12,13 @@ export function createMigrateCommand(): Command {
     .description("Automatically migrate cinecode.config schema to the latest version")
     .argument("[configFile]", "Path to config file", "cinecode.config.ts")
     .option("--dry-run", "Preview the migration without writing files", false)
-    .action(async (configFile: string, options: { dryRun?: boolean }) => {
-      let resolved = path.resolve(configFile);
-      if (!fs.existsSync(resolved)) {
-        const jsVariant = path.resolve("cinecode.config.js");
-        const jsonVariant = path.resolve("cinecode.config.json");
-        if (fs.existsSync(jsVariant)) resolved = jsVariant;
-        else if (fs.existsSync(jsonVariant)) resolved = jsonVariant;
-      }
+    .action(async (configFile: string, options: { dryRun?: boolean; root?: string; config?: string }, command: Command) => {
+      const merged = { ...command.optsWithGlobals(), ...options };
+      const explicitFile = fs.existsSync(path.resolve(configFile)) ? configFile : undefined;
+      const location = resolveProjectLocation({ root: merged.root, config: merged.config ?? explicitFile });
+      const resolved = location.configPath;
 
-      runReport.setProject({ root: process.cwd(), config: resolved });
+      runReport.setProject({ root: location.root, config: resolved });
       if (options.dryRun !== true) runReport.expectArtifact("config");
       console.log(`Migrating configuration: ${pc.cyan(resolved)}...`);
 

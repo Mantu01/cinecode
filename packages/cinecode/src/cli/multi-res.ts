@@ -5,10 +5,13 @@ import { resolve } from "node:path";
 import { loadComposition, selectComposition } from "./still.js";
 import { resolveCacheDir, resolveOutputDir } from "./shared.js";
 import { loadConfig } from "../config/schema.js";
+import { resolveProjectLocation } from "../config/project.js";
 import { parseVariantLabel, renderMultiResolution } from "../pipeline/multiResolution.js";
 
 interface MultiResOptions {
   composition?: string;
+  config?: string;
+  root?: string;
   variants: string;
   out?: string;
   seed?: number;
@@ -24,8 +27,10 @@ export function createMultiResCommand(): Command {
     .option("-o, --out <dir>", "Output directory")
     .option("--seed <number>", "Random seed", (value) => parseInt(value, 10))
     .option("--concurrency <number>", "Worker count")
-    .action(async (file: string, options: MultiResOptions) => {
-      const config = await loadConfig(resolve("cinecode.config.ts"));
+    .action(async (file: string, options: MultiResOptions, command: Command) => {
+      const merged = { ...command.optsWithGlobals(), ...options } as MultiResOptions;
+      const location = resolveProjectLocation({ root: merged.root, config: merged.config });
+      const config = await loadConfig(location.configPath);
       const compositions = await loadComposition(file, options.composition);
       const composition = selectComposition(compositions, options.composition);
       const variants = options.variants.split(",").map((label) => parseVariantLabel(label.trim())).filter(Boolean);

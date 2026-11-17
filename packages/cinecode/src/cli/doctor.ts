@@ -9,6 +9,7 @@ import { access, constants } from "node:fs/promises";
 import ffmpegStatic from "@ffmpeg-installer/ffmpeg";
 import type { CinecodeConfig } from "../core/types/index.js";
 import { loadConfig } from "../config/schema.js";
+import { resolveProjectLocation } from "../config/project.js";
 import { validateConfig } from "../config/validator.js";
 import { checkGitignoreEntries, ensureGitignoreEntries } from "../config/gitignore.js";
 import { createMediaResolver } from "../media/resolver.js";
@@ -153,11 +154,11 @@ async function checkConfig(config: CinecodeConfig, configPath: string): Promise<
   return { name: "Config", status: "FAIL", message: `${validation.errors.length} error(s)`, fixable: false };
 }
 
-async function checkMedia(config: CinecodeConfig): Promise<DoctorCheck> {
+async function checkMedia(config: CinecodeConfig, root: string): Promise<DoctorCheck> {
   try {
-    const cache = createMediaCache(config.cacheDir ?? ".cinecode/cache");
+    const cache = createMediaCache(resolve(root, config.cacheDir));
     await cache.initialize();
-    const resolver = createMediaResolver({ sourceDir: config.sourceDir, cache, cloudMedia: config.cloudMedia ?? [], ignore: mediaIgnore(config) });
+    const resolver = createMediaResolver({ sourceDir: resolve(root, config.sourceDir), cache, cloudMedia: config.cloudMedia ?? [], ignore: mediaIgnore(config) });
     await resolver.initialize();
     const media = await resolver.listMedia();
     return { name: "Media", status: "PASS", message: `${media.length} local media file(s) present` };
@@ -166,12 +167,12 @@ async function checkMedia(config: CinecodeConfig): Promise<DoctorCheck> {
   }
 }
 
-async function checkGitignore(config: CinecodeConfig): Promise<DoctorCheck> {
+async function checkGitignore(config: CinecodeConfig, projectRoot: string): Promise<DoctorCheck> {
   const result = await checkGitignoreEntries({
     sourceDir: config.sourceDir,
     outputDir: config.outputDir ?? "output",
     cacheDir: config.cacheDir ?? ".cinecode/cache",
-    projectRoot: process.cwd(),
+    projectRoot,
     enabled: config.gitignore ?? true,
   });
   if (result.missing.length === 0) {
@@ -243,9 +244,9 @@ async function checkCache(config: CinecodeConfig): Promise<DoctorCheck> {
   }
 }
 
-export async function doctorCommand(options: { config?: string; fix?: boolean; json?: boolean }): Promise<void> {
-  const configPath = options.config ?? "cinecode.config.js";
-  const config = await loadConfig(resolve(configPath));
+export async function doctorCommand(options: { config?: string; root?: string; fix?: boolean; json?: boolean }): Promise<void> {
+  const location = resolveProjectLocation({ root: options.root, config: options.config });
+  const config = await loadConfig(location.configPath);
 
   const checks = await Promise.all([
     checkNodeVersion(),
@@ -257,12 +258,12 @@ export async function doctorCommand(options: { config?: string; fix?: boolean; j
     checkFonts(config),
     checkFolders(config),
     checkDiskSpace(),
-    checkConfig(config, configPath),
-    checkMedia(config),
+    checkConfig(config, location.configPath),
+    checkMedia(config, location.root),
     checkCache(config),
-    checkGitignore(config),
+    checkGitignore(config, location.root),
     checkCloudUrls(config),
-    checkDeprecatedUsage(configPath),
+    checkDeprecatedUsage(location.configPath),
   ]);
 
   if (options.fix) {
@@ -291,7 +292,7 @@ export async function doctorCommand(options: { config?: string; fix?: boolean; j
             sourceDir: config.sourceDir,
             outputDir: config.outputDir ?? "output",
             cacheDir: config.cacheDir ?? ".cinecode/cache",
-            projectRoot: process.cwd(),
+            projectRoot: location.root,
             enabled: config.gitignore ?? true,
           });
           console.log("Fixed: .gitignore entries added");

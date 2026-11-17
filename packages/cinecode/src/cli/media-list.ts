@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { stat as fsStat } from "node:fs/promises";
 import type { CinecodeConfig } from "../core/types/index.js";
 import { loadConfig } from "../config/schema.js";
+import { resolveProjectLocation } from "../config/project.js";
 import { createMediaCache } from "../media/cache.js";
 import { createMediaResolver } from "../media/resolver.js";
 import { runReport } from "./run-report.js";
@@ -12,6 +13,7 @@ import { mediaIgnore } from "./shared.js";
 export interface MediaListOptions {
   json?: boolean;
   config?: string;
+  root?: string;
   out?: string;
 }
 
@@ -25,18 +27,14 @@ export interface MediaListOutput {
   readonly status: "ok" | "unreadable" | "referenced-but-missing";
 }
 
-async function loadConfigFile(configPath?: string): Promise<CinecodeConfig> {
-  const configFile = configPath ?? "cinecode.config.js";
-  return loadConfig(resolve(configFile));
-}
-
 export async function mediaListCommand(options: MediaListOptions): Promise<void> {
-  const config = await loadConfigFile(options.config);
-  const cache = createMediaCache(config.cacheDir ?? ".cinecode/cache");
+  const location = resolveProjectLocation({ root: options.root, config: options.config });
+  const config = await loadConfig(location.configPath);
+  const cache = createMediaCache(resolve(location.root, config.cacheDir));
   await cache.initialize();
 
   const resolver = createMediaResolver({
-    sourceDir: config.sourceDir,
+    sourceDir: resolve(location.root, config.sourceDir),
     cache,
     cloudMedia: config.cloudMedia,
     ignore: mediaIgnore(config),

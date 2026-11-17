@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import type { CinecodeConfig, Composition } from "../core/types/index.js";
 import type { AudioEntry, ImageEntry, ManifestEntryBase, SceneEntry, TimelineEntry } from "../core/types/manifest.js";
 import { loadConfig } from "../config/schema.js";
+import { resolveProjectLocation } from "../config/project.js";
 import {
   assembleTimelineComposition,
   composeSceneComposition,
@@ -34,6 +35,7 @@ export interface GenerateOptions {
   all?: boolean;
   yes?: boolean;
   config?: string;
+  root?: string;
   out?: string;
   seed?: number;
   concurrency?: number | "auto";
@@ -170,14 +172,14 @@ async function generateVideoTarget(
 }
 
 export async function generateCommand(kind: GenerateKind, options: GenerateOptions): Promise<void> {
-  const configPath = options.config ?? "cinecode.config.js";
-  const config: CinecodeConfig = await loadConfig(resolve(configPath));
-  const project = await loadManifestProject(config);
+  const location = resolveProjectLocation({ root: options.root, config: options.config });
+  const config: CinecodeConfig = await loadConfig(location.configPath);
+  const project = await loadManifestProject(config, location.root);
 
   if (!project.hasManifest) {
     throw createError(ErrorCode.CC1009, { path: project.entryPath }, { location: { file: project.entryPath }, fixHint: "Create a main.ts manifest with defineMain({...})." });
   }
-  runReport.setProject({ root: process.cwd(), config: resolve(configPath), manifest: project.entryPath });
+  runReport.setProject({ root: location.root, config: location.configPath, manifest: project.entryPath, source: location.source });
 
   const targets = await selectTargets(kind, project, options);
   if (targets.length === 0) {

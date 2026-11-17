@@ -2,11 +2,12 @@ import { Command } from "commander";
 import { resolve } from "node:path";
 import type { CinecodeConfig, Composition } from "../core/types/index.js";
 import { loadConfig } from "../config/schema.js";
+import { resolveProjectLocation } from "../config/project.js";
 import { validateConfig } from "../config/validator.js";
 import { ensureGitignoreEntries } from "../config/gitignore.js";
 import { createError, ErrorCode, type CinecodeError, formatError } from "../errors/index.js";
 import { createMediaResolver } from "../media/resolver.js";
-import { mediaIgnore } from "./shared.js";
+import { mediaIgnore, printProjectContext } from "./shared.js";
 import { createMediaCache } from "../media/cache.js";
 import { loadComposition } from "./still.js";
 import { allClips } from "../core/types/tracks.js";
@@ -14,6 +15,7 @@ import { runReport } from "./run-report.js";
 
 export interface ValidateOptions {
   config?: string;
+  root?: string;
   strict?: boolean;
   json?: boolean;
   fix?: boolean;
@@ -49,11 +51,11 @@ async function checkCompositionDeterminism(compositions: Composition[], file: st
   return errors;
 }
 
-async function checkMediaFiles(config: CinecodeConfig): Promise<CinecodeError[]> {
+async function checkMediaFiles(config: CinecodeConfig, projectRoot: string): Promise<CinecodeError[]> {
   const errors: CinecodeError[] = [];
-  const cache = createMediaCache(config.cacheDir ?? ".cinecode/cache");
+  const cache = createMediaCache(resolve(projectRoot, config.cacheDir));
   await cache.initialize();
-  const resolver = createMediaResolver({ sourceDir: config.sourceDir, cache, cloudMedia: config.cloudMedia ?? [], ignore: mediaIgnore(config) });
+  const resolver = createMediaResolver({ sourceDir: resolve(projectRoot, config.sourceDir), cache, cloudMedia: config.cloudMedia ?? [], ignore: mediaIgnore(config) });
   await resolver.initialize();
 
   const media = await resolver.listMedia();
@@ -104,18 +106,19 @@ async function checkProps(compositions: Composition[]): Promise<CinecodeError[]>
 }
 
 export async function validateCommand(options: ValidateOptions): Promise<void> {
-  const projectRoot = process.cwd();
-  const configPath = options.config ?? "cinecode.config.js";
-  const resolvedConfigPath = resolve(projectRoot, configPath);
+  const location = resolveProjectLocation({ root: options.root, config: options.config });
+  const projectRoot = location.root;
+  const resolvedConfigPath = location.configPath;
 
+  printProjectContext(location, (options as { verbose?: boolean }).verbose === true);
   const config = await loadConfig(resolvedConfigPath);
   const validation = validateConfig(config, resolvedConfigPath);
-  runReport.setProject({ root: projectRoot, config: resolvedConfigPath });
+  runReport.setProject({ root: projectRoot, config: resolvedConfigPath, source: location.source });
 
   const compositions: Composition[] = await loadComposition(resolvedConfigPath);
 
   const determinismErrors = await checkCompositionDeterminism(compositions, resolvedConfigPath);
-  const mediaErrors = await checkMediaFiles(config);
+  const mediaErrors = await checkMediaFiles(config, projectRoot);
   const fontErrors = await checkFonts(config);
   const propErrors = await checkProps(compositions);
 
@@ -123,14 +126,14 @@ export async function validateCommand(options: ValidateOptions): Promise<void> {
   const allWarnings = [...validation.warnings];
 
   if (options.fix) {
-    await ensureGitignoreEntries({
+    const added = await ensureGitignoreEntries({
       sourceDir: config.sourceDir,
       outputDir: config.outputDir ?? "output",
       cacheDir: config.cacheDir ?? ".cinecode/cache",
       projectRoot,
       enabled: config.gitignore ?? true,
     });
-    console.log("Fixed: .gitignore entries added");
+    console.log(added.length > 0 ? `Fixed: added ${added.join(", ")} to .gitignore` : "No .gitignore changes needed");
   }
 
   const output = {

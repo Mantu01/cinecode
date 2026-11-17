@@ -5,6 +5,7 @@ import { clampCrf, resolveVideoEncoding, type VideoEncoding } from "../core/qual
 import { fitToPreset, resolvePlatformPreset } from "../encoder/presets.js";
 import { getPreset, listPresets, listPresetIds, validatePreset } from "../encoder/platform-presets.js";
 import { loadConfig } from "../config/schema.js";
+import { resolveProjectLocation } from "../config/project.js";
 import { QUALITY_SETTINGS, RENDER_FORMATS, VIDEO_CODECS } from "../config/zod-schema.js";
 import { assembleTimelineComposition, findEntry, loadManifestProject, type ManifestProject } from "../manifest/index.js";
 import { loadComposition, selectComposition, parseTimeInput } from "./still.js";
@@ -14,6 +15,7 @@ import {
   resolveOutputDir,
   resolveOutputPath,
   startCompositionRender,
+  printProjectContext,
   OUTPUT_SUBDIRS,
 } from "./shared.js";
 import { formatTime, type ProgressEvent } from "../pipeline/progress.js";
@@ -33,6 +35,7 @@ export interface RenderCliOptions {
   from?: string;
   to?: string;
   config?: string;
+  root?: string;
   props?: string;
   concurrency?: number | "auto";
   noCache: boolean;
@@ -347,13 +350,13 @@ export async function renderCommand(options: RenderCliOptions): Promise<void> {
     }
     return;
   }
-  const configPath = options.config ?? options.props ?? "cinecode.config.js";
-  const configResolved = resolve(configPath);
-  const config = await loadConfig(configPath);
+  const location = resolveProjectLocation({ root: options.root, config: options.config ?? options.props });
+  printProjectContext(location, options.dryRun || (options as { verbose?: boolean }).verbose === true);
+  const config = await loadConfig(location.configPath);
 
-  const projectRoot = dirname(configResolved);
+  const projectRoot = location.root;
   const project = await loadManifestProject(config, projectRoot);
-  runReport.setProject({ root: projectRoot, config: configResolved, manifest: project.entryPath });
+  runReport.setProject({ root: projectRoot, config: location.configPath, manifest: project.entryPath, source: location.source });
   options = applyPlatformPreset(options);
   const useManifest = project.hasManifest && (project.manifest.timelines?.length ?? 0) > 0 && !options.composition;
 

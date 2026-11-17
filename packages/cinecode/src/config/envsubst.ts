@@ -90,6 +90,42 @@ export function substituteEnvVarsDeep<T>(value: T, options: EnvSubstitutionOptio
   return value;
 }
 
+export interface MissingEnvVar {
+  readonly name: string;
+  readonly path: string;
+}
+
+function findMissingWithPaths(
+  value: unknown,
+  env: Readonly<Record<string, string | undefined>>,
+  prefix: string,
+  found: MissingEnvVar[],
+): void {
+  if (typeof value === "string") {
+    for (const name of findMissingEnvVars(value, env)) found.push({ name, path: prefix || "config" });
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => findMissingWithPaths(item, env, `${prefix}[${index}]`, found));
+    return;
+  }
+  if (value !== null && typeof value === "object") {
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      findMissingWithPaths(item, env, prefix ? `${prefix}.${key}` : key, found);
+    }
+  }
+}
+
+/** Missing environment variables with the field path that references them. */
+export function findMissingEnvVarsWithPaths(
+  value: unknown,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): readonly MissingEnvVar[] {
+  const found: MissingEnvVar[] = [];
+  findMissingWithPaths(value, env, "", found);
+  return [...new Map(found.map((entry) => [`${entry.path}:${entry.name}`, entry])).values()];
+}
+
 export function findMissingEnvVarsDeep(
   value: unknown,
   env: Readonly<Record<string, string | undefined>> = process.env,

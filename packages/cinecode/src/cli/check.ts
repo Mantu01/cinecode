@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { readFile, stat } from "node:fs/promises";
 import type { CinecodeConfig, Composition } from "../core/types/index.js";
 import { loadConfig } from "../config/schema.js";
+import { resolveProjectLocation } from "../config/project.js";
 import { validateConfig as validateConfigShape } from "../config/validator.js";
 import { createConversion, type FrameConversion } from "../core/time/index.js";
 import { validateTimeline, scanSourceForNonDeterminism } from "../core/validation/index.js";
@@ -12,7 +13,7 @@ import { validateKeyframes } from "../core/keyframes/index.js";
 import { allClips } from "../core/types/tracks.js";
 import { checkMissingGlyphs } from "../renderer/text/engine.js";
 import { createMediaResolver } from "../media/resolver.js";
-import { mediaIgnore } from "./shared.js";
+import { mediaIgnore, printProjectContext } from "./shared.js";
 import { createMediaCache } from "../media/cache.js";
 import { createError, ErrorCode, isCinecodeError, type CinecodeError } from "../errors/index.js";
 import { loadComposition } from "./still.js";
@@ -80,6 +81,7 @@ export interface CheckReport {
 
 export interface CheckOptions {
   readonly config?: string;
+  readonly root?: string;
   readonly strict?: boolean;
   readonly json?: boolean;
 }
@@ -267,7 +269,7 @@ export async function runCheck(configPath: string): Promise<CheckReport> {
     try {
       const cache = createMediaCache(config.cacheDir ?? ".cinecode/cache");
       await cache.initialize();
-      const resolver = createMediaResolver({ sourceDir: config.sourceDir, cache, cloudMedia: config.cloudMedia ?? [], ignore: mediaIgnore(config) });
+      const resolver = createMediaResolver({ sourceDir: resolve(configPath, "..", config.sourceDir), cache, cloudMedia: config.cloudMedia ?? [], ignore: mediaIgnore(config) });
       await resolver.initialize();
       for (const m of await resolver.listMedia()) {
         try {
@@ -310,9 +312,10 @@ export async function runCheck(configPath: string): Promise<CheckReport> {
 }
 
 export async function checkCommand(options: CheckOptions): Promise<void> {
-  const configPath = resolve(process.cwd(), options.config ?? "cinecode.config.js");
-  runReport.setProject({ root: process.cwd(), config: configPath });
-  const report = await runCheck(configPath);
+  const location = resolveProjectLocation({ root: options.root, config: options.config });
+  printProjectContext(location, (options as { verbose?: boolean }).verbose === true);
+  runReport.setProject({ root: location.root, config: location.configPath, source: location.source });
+  const report = await runCheck(location.configPath);
   runReport.result({ ...report });
   for (const issue of report.warnings) runReport.warn(issue.code, issue.message, issue.file);
 
@@ -346,7 +349,7 @@ export async function checkCommand(options: CheckOptions): Promise<void> {
   const failed = !report.ok || (options.strict && report.warnings.length > 0);
   if (failed) {
     const count = report.errors.length + (options.strict ? report.warnings.length : 0);
-    throw createError(ErrorCode.CC1013, { count }, { location: { file: configPath } });
+    throw createError(ErrorCode.CC1013, { count }, { location: { file: location.configPath } });
   }
 }
 

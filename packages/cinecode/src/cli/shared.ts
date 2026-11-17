@@ -7,6 +7,7 @@ import { checkFileSizeCompliance, resolvePlatformPreset } from "../encoder/prese
 import { createRenderJob, type RenderJob } from "../pipeline/index.js";
 import type { ProgressHandler } from "../pipeline/progress.js";
 import { CinecodeIgnore } from "../config/ignore.js";
+import type { ProjectLocation } from "../config/project.js";
 
 export const OUTPUT_SUBDIRS = {
   videos: "videos",
@@ -21,6 +22,13 @@ export function resolveCacheDir(config: CinecodeConfig): string {
 
 export function resolveOutputDir(config: CinecodeConfig): string {
   return resolve(config.outputDir ?? "output");
+}
+
+/** Prints which root and config the command resolved, and how it was found. */
+export function printProjectContext(location: ProjectLocation, always = false): void {
+  if (!always) return;
+  console.log(`Project: ${location.root}`);
+  console.log(`Config: ${location.configPath} (${location.source})`);
 }
 
 /** Media-index ignore predicate built from `ignorePatterns`; undefined when empty. */

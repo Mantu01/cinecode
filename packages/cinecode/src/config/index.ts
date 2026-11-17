@@ -1,5 +1,13 @@
 export type { LoadConfigOptions } from "./schema.js";
 export {
+  CONFIG_FILENAMES,
+  findConfigUpward,
+  resolveProjectLocation,
+  type ConfigSource,
+  type ProjectLocation,
+  type ProjectLocationOptions,
+} from "./project.js";
+export {
   loadConfig,
   getDefaultConfig,
   normalizeConfig,

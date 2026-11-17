@@ -14,6 +14,7 @@ export interface ProjectRecord {
   readonly root: string;
   readonly config?: string;
   readonly manifest?: string;
+  readonly source?: "root-flag" | "config-flag" | "discovered";
 }
 
 export interface ArtifactRecord {
