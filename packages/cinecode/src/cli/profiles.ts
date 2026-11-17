@@ -7,6 +7,8 @@ export interface CinecodeGlobalConfig {
   defaultProfile?: string;
 }
 
+export const ALIASES_ENV = "CINECODE_ALIASES";
+
 export function getGlobalConfigPath(): string {
   const home = os.homedir();
   return path.join(home, ".cinecode", "config.json");
@@ -28,31 +30,52 @@ export function saveGlobalConfig(config: CinecodeGlobalConfig): void {
   fs.writeFileSync(cfgPath, JSON.stringify(config, null, 2), "utf8");
 }
 
+function readJson(file: string): Record<string, unknown> | undefined {
+  if (!fs.existsSync(file)) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function aliasTable(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object") return {};
+  const table: Record<string, string> = {};
+  for (const [name, expansion] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof expansion === "string" && expansion.trim() !== "") table[name] = expansion.trim();
+  }
+  return table;
+}
+
+/** Project tables: cinecode.json wins over package.json#cinecode.aliases. */
+export function loadLocalAliases(projectDir = process.cwd()): Record<string, string> {
+  const aliases: Record<string, string> = {};
+  const pkg = readJson(path.join(projectDir, "package.json"));
+  const pkgCinecode = pkg?.cinecode as Record<string, unknown> | undefined;
+  Object.assign(aliases, aliasTable(pkgCinecode?.aliases));
+  const local = readJson(path.join(projectDir, "cinecode.json"));
+  Object.assign(aliases, aliasTable(local?.aliases));
+  return aliases;
+}
+
+/** User-global table; only reached when alias expansion is enabled. */
+export function loadGlobalAliases(): Record<string, string> {
+  return aliasTable(loadGlobalConfig().aliases);
+}
+
 export function loadAliases(projectDir = process.cwd()): Record<string, string> {
-  const globalCfg = loadGlobalConfig();
-  const result: Record<string, string> = { ...(globalCfg.aliases || {}) };
+  return { ...loadGlobalAliases(), ...loadLocalAliases(projectDir) };
+}
 
-  const localPkg = path.join(projectDir, "package.json");
-  if (fs.existsSync(localPkg)) {
-    try {
-      const pkg = JSON.parse(fs.readFileSync(localPkg, "utf8"));
-      if (pkg.cinecode?.aliases) {
-        Object.assign(result, pkg.cinecode.aliases);
-      }
-    } catch {}
-  }
+export function aliasesEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[ALIASES_ENV] === "1";
+}
 
-  const localCinecodeJson = path.join(projectDir, "cinecode.json");
-  if (fs.existsSync(localCinecodeJson)) {
-    try {
-      const cfg = JSON.parse(fs.readFileSync(localCinecodeJson, "utf8"));
-      if (cfg.aliases) {
-        Object.assign(result, cfg.aliases);
-      }
-    } catch {}
-  }
-
-  return result;
+/** Opt-in: an empty table unless CINECODE_ALIASES=1. */
+export function loadEnabledAliases(projectDir = process.cwd(), env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  return aliasesEnabled(env) ? loadAliases(projectDir) : {};
 }
 
 export function setAlias(name: string, expansion: string): void {
@@ -72,17 +95,44 @@ export function removeAlias(name: string): boolean {
   return false;
 }
 
-export function expandCliArgs(args: string[], projectDir = process.cwd(), depth = 0): string[] {
-  if (args.length === 0 || depth > 5) return args;
+export interface AliasResolution {
+  readonly args: string[];
+  readonly applied: readonly string[];
+}
 
-  const first = args[0];
-  if (!first || first.startsWith("-")) return args;
+const MAX_ALIAS_DEPTH = 3;
 
-  const aliases = loadAliases(projectDir);
-  const expansion = aliases[first];
-  if (!expansion) return args;
+/**
+ * Expands the command-position token through the alias tables. Bounded,
+ * cycle-safe, never rewrites a known command and never starts from an option.
+ */
+export function resolveAliases(
+  args: readonly string[],
+  aliases: Readonly<Record<string, string>> = {},
+  isKnown: (name: string) => boolean = () => false,
+  tokenIndex = 0,
+): AliasResolution {
+  const applied: string[] = [];
+  const seen = new Set<string>();
+  const result = [...args];
+  for (let depth = 0; depth < MAX_ALIAS_DEPTH; depth += 1) {
+    const first = result[tokenIndex];
+    if (!first || first.startsWith("-") || seen.has(first) || isKnown(first)) break;
+    const expansion = aliases[first];
+    if (!expansion) break;
+    const parts = expansion.split(/\s+/).filter(Boolean);
+    applied.push(`${first} = ${expansion}`);
+    if (parts.length === 0 || parts[0]!.startsWith("-")) break;
+    seen.add(first);
+    result.splice(tokenIndex, 1, ...parts);
+  }
+  return { args: result, applied };
+}
 
-  const expandedParts = expansion.split(/\s+/).filter(Boolean);
-  const remaining = args.slice(1);
-  return expandCliArgs([...expandedParts, ...remaining], projectDir, depth + 1);
+export function expandCliArgs(
+  args: string[],
+  projectDir = process.cwd(),
+  isKnown: (name: string) => boolean = () => false,
+): string[] {
+  return resolveAliases(args, loadEnabledAliases(projectDir), isKnown).args;
 }

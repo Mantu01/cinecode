@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
 import { resolve } from "node:path";
 import { loadComposition, selectComposition } from "./still.js";
 import { resolveCacheDir, resolveOutputDir } from "./shared.js";
@@ -9,7 +10,7 @@ interface MultiResOptions {
   composition?: string;
   variants: string;
   out?: string;
-  seed: number;
+  seed?: number;
   concurrency?: string;
 }
 
@@ -20,7 +21,7 @@ export function createMultiResCommand(): Command {
     .option("-c, --composition <name>", "Composition name")
     .option("-v, --variants <list>", "Comma-separated variants (480p,720p,1080p,WIDTHxHEIGHT)", "480p,720p,1080p")
     .option("-o, --out <dir>", "Output directory")
-    .option("--seed <number>", "Random seed", (value) => parseInt(value, 10), 0)
+    .option("--seed <number>", "Random seed", (value) => parseInt(value, 10))
     .option("--concurrency <number>", "Worker count")
     .action(async (file: string, options: MultiResOptions) => {
       const config = await loadConfig(resolve("cinecode.config.ts")).catch(() => getDefaultConfig());
@@ -35,7 +36,7 @@ export function createMultiResCommand(): Command {
         variants,
         outputDir,
         cacheDir: resolveCacheDir(config),
-        seed: options.seed,
+        seed: options.seed ?? 0,
         concurrency: Number.isFinite(concurrency) ? concurrency : 4,
         overwrite: false,
         format: config.render?.format ?? "mp4",
@@ -50,6 +51,6 @@ export function createMultiResCommand(): Command {
         }
       }
       const failures = result.variants.filter((variant) => variant.error).length;
-      if (failures > 0) process.exitCode = 1;
+      if (failures > 0) throw new ExitSignal(EXIT_CODES.runtime);
     });
 }

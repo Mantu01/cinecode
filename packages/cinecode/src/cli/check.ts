@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
 import { resolve } from "node:path";
 import { readFile, stat } from "node:fs/promises";
 import type { CinecodeConfig, Composition } from "../core/types/index.js";
@@ -324,15 +325,13 @@ export async function checkCommand(options: CheckOptions): Promise<void> {
   }
 
   const failed = !report.ok || (options.strict && report.warnings.length > 0);
-  if (failed) process.exit(1);
+  if (failed) throw new ExitSignal(EXIT_CODES.validation);
 }
 
 export function createCheckCommand(): Command {
   const cmd = new Command("check")
     .description("Validate authoring code before rendering (no frames, no encode) — the CI pre-render gate")
-    .option("-c, --config <path>", "Path to config file")
     .option("--strict", "Treat warnings as errors", false)
-    .option("--json", "Output as JSON", false)
     .action(async (options: CheckOptions, command: Command) => {
       await checkCommand({ ...command.optsWithGlobals(), ...options });
     });

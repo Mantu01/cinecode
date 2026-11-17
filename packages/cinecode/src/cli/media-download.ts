@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { loadConfig } from "../config/schema.js";
 import { ensureGitignoreEntries } from "../config/gitignore.js";
 import { createError, ErrorCode } from "../errors/index.js";
+import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
 
 interface DownloadOptions {
   force?: boolean;
@@ -181,7 +182,7 @@ export async function mediaDownloadCommand(options: DownloadOptions): Promise<vo
   console.log(`Summary: ${ok} downloaded, ${skipped} skipped, ${failed} failed`);
 
   if (failed > 0) {
-    process.exit(1);
+    throw new ExitSignal(EXIT_CODES.environment);
   }
 }
 
@@ -190,7 +191,6 @@ export function createMediaDownloadCommand(): Command {
     .description("Download cloud media files into source directory")
     .option("--force", "Re-download existing files", false)
     .option("--only <name>", "Download only the specified entry")
-    .option("-c, --config <path>", "Path to config file")
     .action(async (options: DownloadOptions, command: Command) => {
       await mediaDownloadCommand({ ...command.optsWithGlobals(), ...options });
     });

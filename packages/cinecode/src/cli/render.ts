@@ -1,6 +1,5 @@
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { join, dirname, resolve } from "node:path";
-import { homedir } from "node:os";
 import type { CinecodeConfig, Composition, QualitySetting, VideoCodec, RenderFormat, PostProcessingConfig, PostProcessEffectConfig } from "../core/types/index.js";
 import { clampCrf, resolveVideoEncoding, type VideoEncoding } from "../core/quality.js";
 import { fitToPreset, resolvePlatformPreset } from "../encoder/presets.js";
@@ -19,6 +18,8 @@ import {
 import { formatTime, type ProgressEvent } from "../pipeline/progress.js";
 import type { RenderJob } from "../pipeline/index.js";
 import { isCinecodeError, formatError } from "../errors/index.js";
+import { ExitSignal, EXIT_CODES } from "./exit-codes.js";
+import { assertAlphaFormat } from "./usage-error.js";
 
 export interface RenderCliOptions {
   composition?: string;
@@ -30,6 +31,7 @@ export interface RenderCliOptions {
   out?: string;
   from?: string;
   to?: string;
+  config?: string;
   props?: string;
   concurrency?: number | "auto";
   noCache: boolean;
@@ -38,7 +40,7 @@ export interface RenderCliOptions {
   resume: boolean;
   overwrite: boolean;
   dryRun: boolean;
-  seed: number;
+  seed?: number;
   /** Override render quality; supersedes config and --preview. */
   quality?: QualitySetting;
   codec?: VideoCodec;
@@ -54,7 +56,7 @@ export interface RenderCliOptions {
   /** Path to a .cube LUT file for color grading */
   lut?: string;
   /** Disable all effects (fastest render) */
-  noEffects: boolean;
+  noEffects?: boolean;
   /** Comma-separated list of effects to apply */
   effects?: string;
   /** Named platform preset applied to resolution, fps, codec, CRF and format. */
@@ -108,7 +110,7 @@ function applyPostProcessingOverrides(
     return { ...postProcessing, effects: [] };
   }
   let effects: PostProcessEffectConfig[] = [...(postProcessing?.effects ?? [])];
-  if (options.effects) {
+  if (typeof options.effects === "string" && options.effects !== "") {
     const allowed = new Set(options.effects.split(",").map((s) => s.trim().toLowerCase()));
     effects = effects.filter((e) => allowed.has(e.name.toLowerCase()));
   }
@@ -253,7 +255,7 @@ async function renderLegacyCompositions(
   config: CinecodeConfig,
   options: RenderCliOptions,
 ): Promise<void> {
-  const configPath = options.props ?? "cinecode.config.js";
+  const configPath = options.config ?? options.props ?? "cinecode.config.js";
   const compositions = await loadComposition(configPath, options.composition);
 
   if (options.dryRun) {
@@ -334,7 +336,7 @@ export async function renderCommand(options: RenderCliOptions): Promise<void> {
     }
     return;
   }
-  const configPath = options.props ?? "cinecode.config.js";
+  const configPath = options.config ?? options.props ?? "cinecode.config.js";
   let config: CinecodeConfig;
   let configResolved: string;
   try {
@@ -359,15 +361,23 @@ export async function renderCommand(options: RenderCliOptions): Promise<void> {
   } catch (error) {
     if (error instanceof Error && error.message === "Render cancelled") {
       console.log("Render cancelled");
-      process.exit(130);
+      throw new ExitSignal(EXIT_CODES.cancelled);
     }
     if (isCinecodeError(error)) {
       console.error(formatError(error));
     } else {
       console.error(`Render failed: ${error instanceof Error ? error.message : String(error)}`);
     }
-    process.exit(1);
+    throw new ExitSignal(EXIT_CODES.runtime);
   }
+}
+
+/** Negated flag with its own key, so --effects and --no-effects are mutually exclusive. */
+function noEffectsOption(): Option {
+  const option = new Option("--no-effects", "Disable all effects (fastest render)").conflicts("effects");
+  option.attributeName = () => "noEffects";
+  option.preset(true);
+  return option;
 }
 
 export function createRenderCommand(): Command {
@@ -385,24 +395,24 @@ export function createRenderCommand(): Command {
     .option("-o, --out <path>", "Output file path")
     .option("--from <timecode|seconds|frames>", "Start time (HH:MM:SS:FF, seconds, or frames(N))")
     .option("--to <timecode|seconds|frames>", "End time (HH:MM:SS:FF, seconds, or frames(N))")
-    .option("--props <path>", "Path to config or legacy composition file", "cinecode.config.js")
-    .option("--concurrency <number|auto>", "Number of worker threads", parseConcurrency, "auto")
+    .option("--concurrency <number|auto>", "Number of worker threads", parseConcurrency)
     .option("--no-cache", "Disable render cache", false)
     .option("--fresh", "Ignore resume state, start fresh", false)
     .option("--resume", "Resume from the last durable render checkpoint", false)
     .option("--overwrite", "Overwrite existing output file", false)
     .option("--dry-run", "Print render plan without rendering", false)
-    .option("--seed <number>", "Random seed", (v) => parseInt(v, 10), 0)
-    .option("--format <format>", "Output format: mp4, webm, mkv, avi, gif, apng, webp, avif, png, pdf, frames, spritesheet", "mp4")
+    .option("--seed <number>", "Random seed", (v) => parseInt(v, 10))
+    .option("--format <format>", "Output format: mp4, webm, mkv, avi, gif, apng, webp, avif, png, pdf, frames, spritesheet")
     .option("--preset <name>", `Platform preset (${listPresetIds().join(", ")})`)
     .option("--list-presets", "List available platform presets", false)
-    .option("--gif-quality <n>", "GIF quality 1-8 (controls palette size). Default: 8", (v) => parseInt(v, 10), 8)
-    .option("--gif-dither <mode>", "GIF dithering: floyd-steinberg, sierra-2, atkinson, none. Default: floyd-steinberg", "floyd-steinberg")
-    .option("--gif-max-frames <n>", "Maximum frames in GIF output. Default: unlimited", (v) => parseInt(v, 10))
+    .option("--gif-quality <n>", "GIF quality 1-8 (controls palette size)", (v) => parseInt(v, 10))
+    .option("--gif-dither <mode>", "GIF dithering: floyd-steinberg, sierra-2, atkinson, none")
+    .option("--gif-max-frames <n>", "Maximum frames in GIF output", (v) => parseInt(v, 10))
     .option("--lut <path>", "Path to a .cube LUT file for color grading", undefined)
-    .option("--no-effects", "Disable all effects (fastest render)", false)
     .option("--effects <list>", "Comma-separated list of effects to apply (blur,bloom,chromatic-aberration)", undefined)
+    .addOption(noEffectsOption())
     .action(async (options: RenderCliOptions) => {
+      assertAlphaFormat(options.format, options.codec);
       await renderCommand(options);
     });
 

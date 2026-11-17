@@ -59,6 +59,23 @@ a cache-busting key so an edited module and its transitive imports reload.
 - The committed manifest is the manifest that ships. No build step edits
   `package.json`.
 
+## CLI contract
+
+- One program factory (`createProgram`) and one run function (`runCli`).
+  Importing the CLI entry never parses argv, reads the home directory or exits;
+  only the executable path runs it.
+- Global options exist on every command from one table: `--root`, `--config`,
+  `--json`, `--no-color`, `--verbose`. `--props` is a deprecated alias of
+  `--config` and warns on use.
+- Command implementations load lazily per command. Help and version import no
+  renderer, encoder, 3D, PDF, MIDI or observability stack.
+- Aliases are opt-in (`CINECODE_ALIASES=1`), applied after the command token is
+  known, bounded, cycle-safe, local-first, and never rewrite a known command.
+- Value-bearing flags carry no defaults so precedence stays observable.
+- Exit codes: `0` success, `1` runtime, `2` usage, `3` validation,
+  `4` environment, `130` cancelled. Command bodies throw `ExitSignal` instead of
+  touching the process exit state.
+
 ## Release readiness
 
 A green typecheck is not release readiness. Release readiness is the

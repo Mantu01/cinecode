@@ -9,6 +9,7 @@ interface InspectOptions {
   composition?: string;
   frame?: number;
   time?: string;
+  config?: string;
   props?: string;
   json?: boolean;
   deep?: boolean;
@@ -210,7 +211,7 @@ function describeAudioClip(clip: AudioClip | SoundClip, fps: number): string[] {
 }
 
 export async function inspectCommand(options: InspectOptions): Promise<void> {
-  const configPath = options.props ?? "cinecode.config.js";
+  const configPath = options.config ?? options.props ?? "cinecode.config.js";
   const compositions = await loadComposition(resolve(configPath), options.composition);
 
   if (compositions.length === 0) {
@@ -287,10 +288,8 @@ export function createInspectCommand(): Command {
     .option("-c, --composition <name>", "Composition name")
     .option("-f, --frame <number>", "Show clips active at frame", (v) => parseInt(v, 10))
     .option("-t, --time <timecode|seconds>", "Show clips active at time (HH:MM:SS:FF or seconds)")
-    .option("--props <path>", "Path to composition file or config")
-    .option("--json", "Output as JSON", false)
     .option("--deep", "Generate deep dependency graph across audio, visual, and effects", false)
-    .option("--format <format>", "Graph output format: dot, mermaid, ascii", "ascii")
+    .option("--format <format>", "Graph output format: dot, mermaid, ascii")
     .action(async (options: InspectOptions) => {
       await inspectCommand(options);
     });

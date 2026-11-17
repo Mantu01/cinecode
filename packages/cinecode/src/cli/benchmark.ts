@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
 import { cpus } from "node:os";
 import { performance } from "node:perf_hooks";
 import fs from "node:fs";
@@ -97,7 +98,7 @@ export function createBenchmarkCommand(): Command {
     .option("-c, --composition-name <name>", "Composition name")
     .option("-n, --frames <number>", "Frames per run", (value) => parseInt(value, 10), 30)
     .option("-r, --runs <number>", "Number of runs", (value) => parseInt(value, 10), 3)
-    .option("--seed <number>", "Deterministic seed", (value) => parseInt(value, 10), 0)
+    .option("--seed <number>", "Deterministic seed", (value) => parseInt(value, 10))
     .option("--compare-baseline", "Compare results against historical baseline", false)
     .option("--fail-on-regression", "Exit with error code 1 if performance regresses > 5%", false)
     .option("--save-baseline", "Save this benchmark run as official baseline", false)
@@ -106,7 +107,7 @@ export function createBenchmarkCommand(): Command {
       const stats = await benchmarkComposition(file, {
         frames: options.frames,
         runs: options.runs,
-        seed: options.seed,
+        seed: options.seed ?? 0,
         composition: options.compositionName,
       });
 
@@ -133,7 +134,7 @@ export function createBenchmarkCommand(): Command {
         if (timeDeltaPct > 5.0 || memDeltaPct > 10.0) {
           console.warn(pc.red(pc.bold("\n⚠ PERFORMANCE REGRESSION DETECTED!")));
           if (options.failOnRegression) {
-            process.exitCode = 1;
+            throw new ExitSignal(EXIT_CODES.runtime);
           }
         } else {
           console.log(pc.green("\n✔ No performance regressions detected."));

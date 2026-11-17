@@ -110,9 +110,13 @@ Open `http://localhost:3000` for the asset preview and `http://localhost:3000/in
 
 ## CLI
 
+Every command accepts the global options `--root <dir>`, `--config <path>`,
+`--json`, `--no-color` and `--verbose`, in any position. `--props` is a
+deprecated alias of `--config` on `render`, `preview`, `still` and `inspect`.
+
 | Command | Purpose |
 |---------|---------|
-| `cinecode render --props <file>` | Render a composition to a file |
+| `cinecode render --config <file>` | Render a composition to a file |
 | `cinecode still <file>` | Render a single frame |
 | `cinecode preview <file>` | Stream a preview |
 | `cinecode dev` | Dev server with HMR and inspector |
@@ -124,6 +128,15 @@ Open `http://localhost:3000` for the asset preview and `http://localhost:3000/in
 | `cinecode template [name]` | List or scaffold starter compositions |
 | `cinecode doctor [--fix]` | Environment and project diagnostics with auto-repair |
 | `cinecode health [--json]` | Compact CI-friendly system health report |
+
+Exit codes: `0` success, `1` runtime failure, `2` usage error, `3` validation
+failure, `4` environment failure, `130` cancelled.
+
+Command aliases are opt-in: set `CINECODE_ALIASES=1` to expand them from
+`cinecode.json`, `package.json#cinecode.aliases` and `~/.cinecode/config.json`
+(project tables win over the global table). An alias never rewrites a known
+command, expansion is bounded and cycle-safe, and an alias that resolves to no
+command fails with a suggestion.
 | `cinecode check` | Validate compositions and references |
 | `cinecode canvas serve` | Interactive drawing canvas server |
 | `cinecode render-multi <file>` | Render a resolution bundle in one command |

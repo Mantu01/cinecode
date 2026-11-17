@@ -9,6 +9,7 @@ import { createMediaResolver } from "../media/resolver.js";
 import { createMediaCache } from "../media/cache.js";
 import { loadComposition } from "./still.js";
 import { allClips } from "../core/types/tracks.js";
+import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
 
 export interface ValidateOptions {
   config?: string;
@@ -170,16 +171,14 @@ export async function validateCommand(options: ValidateOptions): Promise<void> {
   }
 
   if (allErrors.length > 0 || (options.strict && allWarnings.length > 0)) {
-    process.exit(1);
+    throw new ExitSignal(EXIT_CODES.validation);
   }
 }
 
 export function createValidateCommand(): Command {
   const cmd = new Command("validate")
     .description("Validate configuration, compositions, media, and fonts")
-    .option("-c, --config <path>", "Path to config file")
     .option("--strict", "Treat warnings as errors", false)
-    .option("--json", "Output as JSON", false)
     .option("--fix", "Auto-fix issues (currently: .gitignore)", false)
     .action(async (options: ValidateOptions, command: Command) => {
       await validateCommand({ ...command.optsWithGlobals(), ...options });

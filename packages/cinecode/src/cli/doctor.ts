@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
 import { platform, arch, freemem } from "node:os";
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
@@ -311,16 +312,14 @@ export async function doctorCommand(options: { config?: string; fix?: boolean; j
 
   const failed = checks.filter(c => c.status === "FAIL").length;
   if (failed > 0) {
-    process.exit(1);
+    throw new ExitSignal(EXIT_CODES.environment);
   }
 }
 
 export function createDoctorCommand(): Command {
   const cmd = new Command("doctor")
     .description("Run environment and project health checks")
-    .option("-c, --config <path>", "Path to config file")
     .option("--fix", "Auto-fix issues where possible", false)
-    .option("--json", "Output as JSON", false)
     .action(async (options: { config?: string; fix?: boolean; json?: boolean }, command: Command) => {
       await doctorCommand({ ...command.optsWithGlobals(), ...options });
     });

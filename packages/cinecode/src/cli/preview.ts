@@ -39,7 +39,7 @@ export async function previewCommand(options: PreviewCliOptions): Promise<void> 
 
   if (options.open) {
     const { loadComposition, selectComposition } = await import("./still.js");
-    const compositions = await loadComposition(options.props ?? "cinecode.config.js", options.composition);
+    const compositions = await loadComposition(options.config ?? options.props ?? "cinecode.config.js", options.composition);
     const composition = selectComposition(compositions, options.composition);
     const outputDir = join(process.cwd(), "output");
     const unresolvedPath = options.out ?? join(outputDir, `${composition.name}.preview.mp4`);
@@ -83,13 +83,12 @@ export function createPreviewCommand(): Command {
     .option("-o, --out <path>", "Output file path")
     .option("--from <timecode|seconds|frames>", "Start time (HH:MM:SS:FF, seconds, or frames(N))")
     .option("--to <timecode|seconds|frames>", "End time (HH:MM:SS:FF, seconds, or frames(N))")
-    .option("--props <path>", "Path to composition file or config", "cinecode.config.js")
-    .option("--concurrency <number|auto>", "Number of worker threads", (v) => v === "auto" ? "auto" : parseInt(v, 10), "auto")
+    .option("--concurrency <number|auto>", "Number of worker threads", (v) => v === "auto" ? "auto" : parseInt(v, 10))
     .option("--no-cache", "Disable render cache", false)
     .option("--fresh", "Ignore resume state, start fresh", false)
     .option("--overwrite", "Overwrite existing output file", false)
     .option("--dry-run", "Print render plan without rendering", false)
-    .option("--seed <number>", "Random seed", (v) => parseInt(v, 10), 0)
+    .option("--seed <number>", "Random seed", (v) => parseInt(v, 10))
     .option("--open", "Open preview in system default player", false)
     .action(async (options: PreviewCliOptions) => {
       await previewCommand(options);

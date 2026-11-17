@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 
@@ -29,11 +30,11 @@ export function createCreateCommand(): Command {
       try {
         const result = spawnSync("npx", args, { stdio: "inherit", cwd: resolve(directory, ".."), shell: true });
         if (result.status !== 0) {
-          process.exit(result.status ?? 1);
+          throw new ExitSignal(result.status ?? EXIT_CODES.runtime);
         }
       } catch (e) {
         console.error("Failed to create project. Try running 'npx create-cinecode@latest' directly.");
-        process.exit(1);
+        throw new ExitSignal(EXIT_CODES.environment);
       }
     });
 

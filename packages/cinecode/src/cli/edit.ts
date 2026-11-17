@@ -42,7 +42,6 @@ export function createEditCommand(): Command {
   return new Command("edit")
     .description("Open a composition in your editor, or print it as JSON")
     .argument("<composition>", "Composition file")
-    .option("--json", "Print the parsed composition instead of opening an editor")
     .option("--editor <command>", "Editor command to launch")
     .action(async (file: string, options: EditOptions) => {
       await editCommand(file, options);

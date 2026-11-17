@@ -132,7 +132,6 @@ export function createCleanCommand(): Command {
     .option("--force", "Skip confirmation prompt", false)
     .option("--dry-run", "Print what would be deleted without deleting", false)
     .option("--prune-stale-days <days>", "Prune cache entries unreferenced for N days instead of deleting everything", (value) => parseInt(value, 10))
-    .option("-c, --config <path>", "Path to config file")
     .action(async (options: CleanOptions, command: Command) => {
       await cleanCommand({ ...command.optsWithGlobals(), ...options });
     });

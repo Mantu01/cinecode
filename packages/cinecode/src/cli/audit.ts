@@ -1,11 +1,11 @@
 import { Command } from "commander";
 import pc from "picocolors";
 import { runSecurityAudit } from "./security/scanner.js";
+import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
 
 export function createAuditCommand(): Command {
   const cmd = new Command("audit")
     .description("Scan dependencies, plugins, and media assets for licenses and security vulnerabilities")
-    .option("--json", "Output audit report as JSON", false)
     .option("--allow-copyleft", "Do not fail on copyleft licenses (e.g. GPL, AGPL)", false)
     .action(async (options) => {
       console.log("Running Cinecode security and license audit...\n");
@@ -14,7 +14,7 @@ export function createAuditCommand(): Command {
       if (options.json) {
         console.log(JSON.stringify(report, null, 2));
         if (report.status === "fail" && !options.allowCopyleft) {
-          process.exitCode = 1;
+          throw new ExitSignal(EXIT_CODES.runtime);
         }
         return;
       }
@@ -51,7 +51,7 @@ export function createAuditCommand(): Command {
       console.log();
       if (report.status === "fail" && !options.allowCopyleft) {
         console.error(pc.red("✖ Audit failed due to high-risk issues or copyleft licenses."));
-        process.exitCode = 1;
+        throw new ExitSignal(EXIT_CODES.runtime);
       }
     });
 

@@ -5,6 +5,7 @@ import { cpus, totalmem } from "node:os";
 import { resolve } from "node:path";
 import ffmpegStatic from "@ffmpeg-installer/ffmpeg";
 import { checkRuntime } from "../loader/index.js";
+import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
 
 export interface FfmpegHealth {
   readonly version: string;
@@ -215,16 +216,15 @@ function formatHealth(report: SystemHealthReport): string {
 export function createHealthCommand(): Command {
   return new Command("health")
     .description("Report ffmpeg, Node, worker, disk, network and GPU health")
-    .option("--cache <dir>", "Cache directory to inspect", ".cinecode/cache")
-    .option("--json", "Output machine-readable JSON")
+    .option("--cache <dir>", "Cache directory to inspect")
     .option("--strict", "Exit non-zero when any issue is detected")
-    .action(async (options: { cache: string; json?: boolean; strict?: boolean }) => {
-      const report = await collectHealth(options.cache);
+    .action(async (options: { cache?: string; json?: boolean; strict?: boolean }) => {
+      const report = await collectHealth(options.cache ?? ".cinecode/cache");
       if (options.json) {
         console.log(JSON.stringify(report, null, 2));
       } else {
         console.log(formatHealth(report));
       }
-      if (options.strict && report.issues.length > 0) process.exitCode = 1;
+      if (options.strict && report.issues.length > 0) throw new ExitSignal(EXIT_CODES.environment);
     });
 }

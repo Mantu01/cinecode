@@ -23,6 +23,7 @@ import {
   startCompositionRender,
 } from "./shared.js";
 import { formatTime } from "../pipeline/progress.js";
+import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
 
 export type GenerateKind = "audio" | "image" | "scene" | "timeline" | "all";
 
@@ -174,7 +175,7 @@ export async function generateCommand(kind: GenerateKind, options: GenerateOptio
 
   if (!project.hasManifest) {
     console.error(`No main.ts manifest found at ${project.entryPath}. Create one with defineMain({...}).`);
-    process.exit(1);
+    throw new ExitSignal(EXIT_CODES.validation);
   }
 
   const targets = await selectTargets(kind, project, options);
@@ -214,10 +215,9 @@ export function createGenerateCommand(): Command {
     .option("--id <id...>", "Only generate the given ids")
     .option("--all", "Generate everything without prompting", false)
     .option("-y, --yes", "Skip prompts and generate everything", false)
-    .option("--config <path>", "Path to config file", "cinecode.config.js")
     .option("--out <dir>", "Output directory override")
-    .option("--seed <number>", "Random seed", (v) => parseInt(v, 10), 0)
-    .option("--concurrency <number|auto>", "Number of worker threads", (v) => (v === "auto" ? "auto" : parseInt(v, 10)), "auto")
+    .option("--seed <number>", "Random seed", (v) => parseInt(v, 10))
+    .option("--concurrency <number|auto>", "Number of worker threads", (v) => (v === "auto" ? "auto" : parseInt(v, 10)))
     .option("--overwrite", "Overwrite existing files", false)
     .option("--silent", "Suppress progress output", false)
     .option("--dry-run", "Resolve targets without writing", false)
@@ -225,7 +225,7 @@ export function createGenerateCommand(): Command {
       const valid: GenerateKind[] = ["audio", "image", "scene", "timeline", "all"];
       if (!valid.includes(kind as GenerateKind)) {
         console.error(`Unknown target "${kind}". Expected one of: ${valid.join(", ")}`);
-        process.exit(1);
+        throw new ExitSignal(EXIT_CODES.usage);
       }
       await generateCommand(kind as GenerateKind, { ...command.optsWithGlobals(), ...options });
     });

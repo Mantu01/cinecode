@@ -143,8 +143,6 @@ function formatSize(bytes: number): string {
 export function createMediaListCommand(): Command {
   const cmd = new Command("media:list")
     .description("List all media files in the project")
-    .option("--json", "Output as JSON")
-    .option("-c, --config <path>", "Path to config file")
     .option("-o, --out <path>", "Output file path")
     .action(async (options: MediaListOptions, command: Command) => {
       await mediaListCommand({ ...command.optsWithGlobals(), ...options });

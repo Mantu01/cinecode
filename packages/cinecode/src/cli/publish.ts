@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
 import fs from "node:fs";
 import path from "node:path";
 import pc from "picocolors";
@@ -147,7 +148,7 @@ export function createPublishCommand(): Command {
         console.log(pc.cyan(result.target));
       } else {
         console.error(pc.red(`✖ ${result.message}`));
-        process.exitCode = 1;
+        throw new ExitSignal(EXIT_CODES.environment);
       }
     });
 }

@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { writeFileSync, readFileSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { isUserModuleFile, loadUserModuleNamespace } from "../loader/index.js";
+import { assertExclusive } from "./usage-error.js";
 import type { Composition } from "../core/types/index.js";
 import { renderStill } from "../renderer/engine.js";
 
@@ -9,10 +10,11 @@ export interface StillOptions {
   composition?: string;
   frame?: number;
   time?: string;
-  out: string;
-  format: "png" | "jpg" | "webp";
+  out?: string;
+  format?: "png" | "jpg" | "webp";
+  config?: string;
   props?: string;
-  seed: number;
+  seed?: number;
 }
 
 export function parseTimeInput(input: string, fps: number): number {
@@ -55,16 +57,15 @@ export function selectComposition(compositions: Composition[], name?: string): C
 }
 
 export async function stillCommand(options: StillOptions): Promise<void> {
+  const out = options.out ?? "still.png";
   const format = (options.format ?? "png").toLowerCase();
   if (format !== "png" && format !== "jpg" && format !== "webp") {
     const { assertOutputFormat } = await import("../media/formats.js");
     assertOutputFormat(format, "image");
   }
-  const compositions = await loadComposition(options.props ?? "cinecode.config.js", options.composition);
+  const compositions = await loadComposition(options.config ?? options.props ?? "cinecode.config.js", options.composition);
   const composition = selectComposition(compositions, options.composition);
 
-  // Video clips decode through the renderer's media cache; a still rendered
-  // outside the render pipeline has to install it itself.
   const { createMediaCache } = await import("../media/cache.js");
   const { setMediaCacheForRenderer } = await import("../renderer/engine.js");
   const { getDefaultCacheDir } = await import("./render.js");
@@ -88,8 +89,8 @@ export async function stillCommand(options: StillOptions): Promise<void> {
   } else {
     buffer = (canvas as { toBuffer(mime: "image/jpeg", quality?: number): Buffer }).toBuffer("image/jpeg", 0.9);
   }
-  writeFileSync(options.out, buffer);
-  console.log(`Rendered frame ${frame} (${composition.width}x${composition.height}) to ${options.out}`);
+  writeFileSync(out, buffer);
+  console.log(`Rendered frame ${frame} (${composition.width}x${composition.height}) to ${out}`);
 }
 
 export function createStillCommand(): Command {
@@ -98,11 +99,14 @@ export function createStillCommand(): Command {
     .option("-c, --composition <name>", "Composition name")
     .option("-f, --frame <number>", "Frame number", (v) => parseInt(v, 10))
     .option("-t, --time <timecode|seconds>", "Time (HH:MM:SS:FF or seconds)")
-    .option("-o, --out <path>", "Output file path", "still.png")
-    .option("--format <png|jpg|webp>", "Output format", "png")
-    .option("--props <path>", "Path to composition file or config")
-    .option("--seed <number>", "Random seed", (v) => parseInt(v, 10), 0)
+    .option("-o, --out <path>", "Output file path")
+    .option("--format <png|jpg|webp>", "Output format")
+    .option("--seed <number>", "Random seed", (v) => parseInt(v, 10))
     .action(async (options: StillOptions) => {
+      assertExclusive([
+        ["--frame", options.frame !== undefined],
+        ["--time", options.time !== undefined],
+      ]);
       await stillCommand(options);
     });
   return cmd;

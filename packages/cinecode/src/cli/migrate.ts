@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
 import fs from "node:fs";
 import path from "node:path";
 import pc from "picocolors";
@@ -48,7 +49,7 @@ export function createMigrateCommand(): Command {
         }
       } catch (err: any) {
         console.error(pc.red(`\n✖ Migration failed: ${err.message}`));
-        process.exitCode = 1;
+        throw new ExitSignal(EXIT_CODES.validation);
       }
     });
 

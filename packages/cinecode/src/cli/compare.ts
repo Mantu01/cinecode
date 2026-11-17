@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { Canvas } from "@napi-rs/canvas";
@@ -76,18 +77,18 @@ export function createCompareCommand(): Command {
     .argument("<a>", "First composition file")
     .argument("<b>", "Second composition file")
     .option("-n, --frames <number>", "Frames to compare", (value) => parseInt(value, 10), 60)
-    .option("--seed <number>", "Deterministic seed", (value) => parseInt(value, 10), 42)
+    .option("--seed <number>", "Deterministic seed", (value) => parseInt(value, 10))
     .option("--diff <path>", "Write a side-by-side diff image of the worst frame")
-    .action(async (a: string, b: string, options: { frames: number; seed: number; diff?: string }) => {
+    .action(async (a: string, b: string, options: { frames: number; seed?: number; diff?: string }) => {
       const result = await compareCompositions(a, b, {
         frames: options.frames,
-        seed: options.seed,
+        seed: options.seed ?? 42,
         diffOutput: options.diff,
       });
       console.log(`Frames compared: ${result.frames.length}`);
       console.log(`Average diff:    ${result.averageDifference.toFixed(4)} (0-255)`);
       console.log(`Max diff:        ${result.maxDifference.toFixed(4)}`);
       console.log(`Worst frames:    ${result.worstFrames.join(", ")}`);
-      process.exitCode = result.maxDifference > 2 ? 1 : 0;
+      if (result.maxDifference > 2) throw new ExitSignal(EXIT_CODES.runtime);
     });
 }

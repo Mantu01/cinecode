@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
 import { marketplaceClient } from "../plugin/marketplace/client.js";
 import { installPlugin, removePlugin, listInstalledPlugins } from "../plugin/marketplace/installer.js";
 import { scaffoldPlugin, type TemplateType } from "../plugin/scaffold/index.js";
@@ -49,7 +50,7 @@ export function createPluginCommand(): Command {
         console.log(`✔ ${res.message}`);
       } else {
         console.error(`✖ Failed to install '${packageName}': ${res.message}`);
-        process.exitCode = 1;
+        throw new ExitSignal(EXIT_CODES.environment);
       }
     });
 
@@ -64,7 +65,7 @@ export function createPluginCommand(): Command {
         console.log(`✔ ${res.message}`);
       } else {
         console.error(`✖ Failed to remove '${packageName}': ${res.message}`);
-        process.exitCode = 1;
+        throw new ExitSignal(EXIT_CODES.environment);
       }
     });
 

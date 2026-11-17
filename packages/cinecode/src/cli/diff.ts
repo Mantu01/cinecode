@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
 import fs from "node:fs";
 import path from "node:path";
 import { execSync } from "node:child_process";
@@ -96,7 +97,7 @@ export function createDiffCommand(): Command {
         console.log();
       } catch (err) {
         console.error(pc.red(`Diff error: ${err instanceof Error ? err.message : String(err)}`));
-        process.exitCode = 1;
+        throw new ExitSignal(EXIT_CODES.runtime);
       }
     });
 

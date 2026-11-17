@@ -1,18 +1,17 @@
 import { Command } from "commander";
 import { listPlatformPresets, resolvePlatformPreset } from "../encoder/presets.js";
+import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
 
 export function createPresetsCommand(): Command {
   return new Command("presets")
     .description("List platform deliverable presets (YouTube, TikTok, Instagram, X)")
     .argument("[name]", "show details for a single preset")
-    .option("--json", "machine-readable output")
     .action((name: string | undefined, options: { json?: boolean }) => {
       if (name) {
         const preset = resolvePlatformPreset(name as never);
         if (!preset) {
           console.error(`Unknown preset: ${name}`);
-          process.exitCode = 1;
-          return;
+          throw new ExitSignal(EXIT_CODES.usage);
         }
         if (options.json) {
           console.log(JSON.stringify(preset, null, 2));

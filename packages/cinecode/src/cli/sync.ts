@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { readdir, stat } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
 import type { Composition } from "../core/types/index.js";
+import { EXIT_CODES, ExitSignal } from "./exit-codes.js";
 import { createMediaCache } from "../media/cache.js";
 import { loadCinecodeIgnore, type CinecodeIgnore } from "../config/ignore.js";
 import { loadComposition } from "./still.js";
@@ -182,7 +183,6 @@ export function createSyncCommand(): Command {
     .option("--no-default-ignores", "Disable built-in ignore patterns")
     .option("--dry-run", "Preview sync operations without uploading, downloading or deleting", false)
     .option("--delete-orphans", "Delete detected orphaned assets", false)
-    .option("--json", "Machine-readable report")
     .action(async (options: { dir: string; cache?: string; prune: boolean; plugins: boolean; ignore: string[]; defaultIgnores: boolean; json?: boolean; dryRun?: boolean; deleteOrphans?: boolean }) => {
       const report = await buildSyncReport({
         dir: options.dir,
@@ -217,6 +217,6 @@ export function createSyncCommand(): Command {
         for (const plugin of report.pluginsDiscovered) console.log(`  + ${plugin}`);
         for (const warning of report.pluginWarnings) console.log(`  ⚠ ${warning}`);
       }
-      if (report.missingFiles.length > 0 && !options.dryRun) process.exitCode = 1;
+      if (report.missingFiles.length > 0 && !options.dryRun) throw new ExitSignal(EXIT_CODES.validation);
     });
 }

@@ -80,7 +80,6 @@ export async function devCommand(options: DevCliOptions): Promise<void> {
 export function createDevCommand(): Command {
   return new Command("dev")
     .description("Start the dev server with granular HMR for scenes, images, and audio")
-    .option("-c, --config <path>", "Path to config file", "cinecode.config.js")
     .option("-p, --port <number>", "Port to listen on", (v) => parseInt(v, 10))
     .option("--host <host>", "Host to bind")
     .option("--open", "Open the preview in the browser", false)
