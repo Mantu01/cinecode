@@ -114,6 +114,7 @@ export interface ErrorLocation {
   line?: number;
   column?: number;
   clip?: string;
+  track?: string;
   time?: string;
 }
 
@@ -285,6 +286,9 @@ export function formatError(error: CinecodeError, verbose = false, color = true)
     if (error.location.file) locParts.push(error.location.file);
     if (error.location.line !== undefined) locParts.push(String(error.location.line));
     if (error.location.column !== undefined) locParts.push(String(error.location.column));
+    if (error.location.clip) locParts.push(`clip ${error.location.clip}`);
+    if (error.location.track) locParts.push(`track ${error.location.track}`);
+    if (error.location.time) locParts.push(error.location.time);
     if (locParts.length > 0) {
       parts.push(`  ${gray}Location${reset}: ${locParts.join(":")}`);
     }

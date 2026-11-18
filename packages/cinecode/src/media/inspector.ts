@@ -16,6 +16,12 @@ export interface ProbeResult {
   readonly sampleRate?: number;
   readonly videoCodec?: string;
   readonly audioCodec?: string;
+  readonly streamCount: number;
+  readonly videoDuration?: number;
+  readonly audioDuration?: number;
+  readonly audioChannels?: number;
+  readonly audioBitDepth?: number;
+  readonly audioSampleFormat?: string;
 }
 
 function parseFps(rate: string): number {
@@ -35,7 +41,7 @@ export async function inspectMedia(
   const cached = await options.cache.getMetadata(filePath);
   if (cached) return cached;
 
-  const result = await probeWithFfprobe(filePath);
+  const result = await probeMediaFile(filePath);
   const metadata: MediaMetadata = {
     duration: result.duration,
     width: result.width,
@@ -51,7 +57,7 @@ export async function inspectMedia(
   return metadata;
 }
 
-function probeWithFfprobe(filePath: string): Promise<ProbeResult> {
+export function probeMediaFile(filePath: string): Promise<ProbeResult> {
   return new Promise((resolve, reject) => {
     const args = [
       "-v", "quiet",
@@ -101,21 +107,31 @@ function parseProbeData(data: Record<string, unknown>): ProbeResult {
   let height = 0;
   let fps = 30;
   let videoCodec: string | undefined;
+  let videoDuration: number | undefined;
   let hasAudio = false;
   let sampleRate: number | undefined;
   let audioCodec: string | undefined;
+  let audioDuration: number | undefined;
+  let audioChannels: number | undefined;
+  let audioBitDepth: number | undefined;
+  let audioSampleFormat: string | undefined;
 
   if (videoStream) {
     width = Number(videoStream.width ?? 0);
     height = Number(videoStream.height ?? 0);
     fps = parseFps(String(videoStream.r_frame_rate ?? videoStream.avg_frame_rate ?? "30/1"));
     videoCodec = String(videoStream.codec_name ?? "");
+    videoDuration = Number(videoStream.duration ?? "") || undefined;
   }
 
   if (audioStream) {
     hasAudio = true;
     sampleRate = Number(audioStream.sample_rate ?? 0) || undefined;
     audioCodec = String(audioStream.codec_name ?? "");
+    audioDuration = Number(audioStream.duration ?? "") || undefined;
+    audioChannels = Number(audioStream.channels ?? 0) || undefined;
+    audioBitDepth = Number(audioStream.bits_per_raw_sample ?? audioStream.bits_per_sample ?? 0) || undefined;
+    audioSampleFormat = audioStream.sample_fmt === undefined ? undefined : String(audioStream.sample_fmt);
   }
 
   return {
@@ -127,25 +143,51 @@ function parseProbeData(data: Record<string, unknown>): ProbeResult {
     sampleRate,
     videoCodec,
     audioCodec,
+    streamCount: streams.length,
+    videoDuration,
+    audioDuration,
+    audioChannels,
+    audioBitDepth,
+    audioSampleFormat,
   };
 }
 
 export function isSupportedVideoExtension(ext: string): boolean {
-  return ["mp4", "mov", "mkv", "webm"].includes(ext.toLowerCase());
+  return ["mp4", "mov", "mkv", "webm", "avi", "m4v"].includes(ext.toLowerCase());
 }
 
 export function isSupportedImageExtension(ext: string): boolean {
-  return ["png", "jpg", "jpeg", "webp", "gif"].includes(ext.toLowerCase());
+  return ["png", "jpg", "jpeg", "webp", "gif", "svg", "bmp", "tiff"].includes(ext.toLowerCase());
 }
 
 export function isSupportedAudioExtension(ext: string): boolean {
   return ["wav", "mp3", "m4a", "aac", "ogg", "flac"].includes(ext.toLowerCase());
 }
 
+export function isSupportedFontExtension(ext: string): boolean {
+  return ["ttf", "otf", "woff", "woff2"].includes(ext.toLowerCase());
+}
+
+export function isSupportedLutExtension(ext: string): boolean {
+  return ["cube", "3dl"].includes(ext.toLowerCase());
+}
+
+export type MediaFileType = "video" | "image" | "audio" | "font" | "lut" | "unknown";
+
 export function getMediaType(filePath: string): "video" | "image" | "audio" | "unknown" {
   const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
   if (isSupportedVideoExtension(ext)) return "video";
   if (isSupportedImageExtension(ext)) return "image";
   if (isSupportedAudioExtension(ext)) return "audio";
+  return "unknown";
+}
+
+export function getExtendedMediaType(filePath: string): MediaFileType {
+  const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
+  if (isSupportedVideoExtension(ext)) return "video";
+  if (isSupportedImageExtension(ext)) return "image";
+  if (isSupportedAudioExtension(ext)) return "audio";
+  if (isSupportedFontExtension(ext)) return "font";
+  if (isSupportedLutExtension(ext)) return "lut";
   return "unknown";
 }

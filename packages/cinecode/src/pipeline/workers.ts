@@ -2,9 +2,10 @@ import { Worker } from "node:worker_threads";
 import { cpus } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Composition } from "../core/types/index.js";
-import type { MemoryBudget } from "./memory.js";
-import { estimateChunkBytes, MemoryBudgetError, MemoryTracker } from "./memory.js";
+import type { Composition, FontEntry } from "../core/types/index.js";
+import type { ByteBudget } from "./memory.js";
+import { estimateChunkBytes, formatBytes } from "./memory.js";
+import { frameFromTransfer } from "./frame-format.js";
 import { attachCacheChannel, type CacheProvider } from "./cache-channel.js";
 import type { FrameErrorPolicy, FrameFailure } from "./frame-worker.js";
 
@@ -44,11 +45,18 @@ export interface WorkerManagerOptions {
   readonly seed: number;
   /** Render cache root — workers build their media cache under it. */
   readonly cacheDir: string;
-  readonly memoryBudget?: MemoryBudget;
+  /** Shared render byte budget; each in-flight chunk reserves its estimate. */
+  readonly budget?: ByteBudget;
+  /** Largest single chunk the pool may dispatch. */
+  readonly maxChunkBytes?: number;
   readonly onMemoryWarning?: (usageBytes: number, budgetBytes: number) => void;
   readonly errorPolicy?: FrameErrorPolicy;
   /** Main-thread cache provider for worker cache-miss requests. */
   readonly cacheProvider?: CacheProvider;
+  /** Configured fonts registered in each worker before rendering. */
+  readonly fonts?: readonly FontEntry[];
+  readonly projectRoot?: string;
+  readonly mediaDir?: string;
 }
 
 /**
@@ -93,6 +101,36 @@ interface ActiveWorker {
   readonly estimatedBytes: number;
 }
 
+interface TransportOutput extends Omit<WorkerResult, "frames"> {
+  readonly frames: readonly (
+    | { readonly index: number; readonly buffer: Buffer }
+    | { readonly index: number; readonly pixels: ArrayBufferView }
+  )[];
+}
+
+export interface WorkerPoolStats {
+  readonly chunksInFlight: number;
+  readonly reservedBytes: number;
+  readonly peakReservedBytes: number;
+  readonly budgetBytes: number;
+  readonly transferredFrames: number;
+}
+
+let transferredFrames = 0;
+
+/** Rebuilds transferred pixel buffers as frames, without copying pixels. */
+function normalizeResult(output: TransportOutput, chunkIndex: number): WorkerResult {
+  return {
+    ...output,
+    chunkIndex,
+    frames: output.frames.map((frame) => {
+      if (!("pixels" in frame)) return { index: frame.index, buffer: frame.buffer };
+      transferredFrames += 1;
+      return { index: frame.index, buffer: frameFromTransfer(frame.pixels, true) };
+    }),
+  };
+}
+
 export class WorkerManager {
   private readonly workers: Worker[] = [];
   private readonly concurrency: number;
@@ -102,51 +140,97 @@ export class WorkerManager {
   private readonly cacheDir: string;
   private pendingChunks: FrameChunk[] = [];
   private activeWorkers: ActiveWorker[] = [];
+  private readonly chunkReservations = new Map<number, number>();
   private nextChunkIndex = 0;
   private initialized = false;
-  private readonly memoryBudget: MemoryBudget | undefined;
-  private readonly memoryTracker = new MemoryTracker();
+  private readonly budget: ByteBudget | undefined;
+  private readonly maxChunkBytes: number | undefined;
   private readonly onMemoryWarning: ((usageBytes: number, budgetBytes: number) => void) | undefined;
+  private warned = false;
   private readonly frameWidth: number;
   private readonly frameHeight: number;
   private readonly errorPolicy: FrameErrorPolicy;
   private readonly cacheProvider: CacheProvider;
+  private readonly fonts: readonly FontEntry[] | undefined;
+  private readonly projectRoot: string;
+  private readonly mediaDir: string;
 
   constructor(options: WorkerManagerOptions) {
     this.concurrency = options.concurrency;
     this.compositionJson = JSON.stringify(stripAudioForWorkers(options.composition));
     this.seed = options.seed;
     this.cacheDir = options.cacheDir;
-    this.memoryBudget = options.memoryBudget;
+    this.budget = options.budget;
+    this.maxChunkBytes = options.maxChunkBytes;
     this.onMemoryWarning = options.onMemoryWarning;
     this.frameWidth = options.composition.width;
     this.frameHeight = options.composition.height;
     this.errorPolicy = options.errorPolicy ?? "placeholder";
     this.cacheProvider = options.cacheProvider ?? (async () => undefined);
+    this.fonts = options.fonts;
+    this.projectRoot = options.projectRoot ?? process.cwd();
+    this.mediaDir = options.mediaDir ?? "media";
   }
 
-  private checkMemory(chunk: FrameChunk): void {
-    if (!this.memoryBudget) return;
-    const bytes = estimateChunkBytes(chunk.frames.length, this.frameWidth, this.frameHeight);
-    this.memoryTracker.trackAllocation(bytes);
-    const status = this.memoryTracker.checkBudget(this.effectiveBudget());
-    if (status === "over-budget") {
-      const usage = this.memoryTracker.getUsage();
-      this.memoryTracker.releaseAllocation(bytes);
-      throw new MemoryBudgetError(usage, this.effectiveBudget().maxBytesPerChunk);
-    }
-    if (status === "warning" && !this.memoryTracker.hasWarned()) {
-      this.onMemoryWarning?.(this.memoryTracker.getUsage(), this.effectiveBudget().maxBytesPerChunk);
+  /** Byte estimate reserved for one chunk while its frames are in flight. */
+  private chunkEstimate(chunk: FrameChunk): number {
+    return this.budget ? estimateChunkBytes(chunk.frames.length, this.frameWidth, this.frameHeight) : 0;
+  }
+
+  private assertChunkFits(bytes: number): void {
+    if (this.maxChunkBytes !== undefined && bytes > this.maxChunkBytes) {
+      throw new Error(
+        `Render chunk needs ${formatBytes(bytes)} of frames, over the ${formatBytes(this.maxChunkBytes)} chunk budget. Reduce the chunk size or raise the render memory budget.`,
+      );
     }
   }
 
-  /**
-   * The tracker accumulates in-flight chunk estimates across all workers, so the
-   * per-chunk budget scales by concurrency to bound the pool's live allocations.
-   */
-  private effectiveBudget(): MemoryBudget {
-    const budget = this.memoryBudget as MemoryBudget;
-    return { ...budget, maxBytesPerChunk: budget.maxBytesPerChunk * this.concurrency };
+  private warnIfTight(): void {
+    if (!this.budget || this.warned) return;
+    if (this.budget.usedBytes > this.budget.limitBytes * 0.8) {
+      this.warned = true;
+      this.onMemoryWarning?.(this.budget.usedBytes, this.budget.limitBytes);
+    }
+  }
+
+  /** Reserves in-flight chunk bytes when they fit, so dispatch never stalls. */
+  private tryReserveChunk(chunk: FrameChunk): number | null {
+    const bytes = this.chunkEstimate(chunk);
+    if (!this.budget) return 0;
+    this.assertChunkFits(bytes);
+    if (!this.budget.tryReserve(bytes)) return null;
+    this.warnIfTight();
+    return bytes;
+  }
+
+  /** Waits for budget; only used when no chunk is in flight. */
+  private async reserve(chunk: FrameChunk): Promise<number> {
+    const bytes = this.chunkEstimate(chunk);
+    if (!this.budget) return 0;
+    this.assertChunkFits(bytes);
+    await this.budget.reserve(bytes);
+    this.warnIfTight();
+    return bytes;
+  }
+
+  /** Frames of a finished chunk were encoded: give the budget back. */
+  releaseChunk(result: WorkerResult): void {
+    const active = this.chunkReservations.get(result.chunkIndex);
+    if (!active) return;
+    this.chunkReservations.delete(result.chunkIndex);
+    this.budget?.release(active);
+  }
+
+  getStats(): WorkerPoolStats {
+    let reserved = 0;
+    for (const bytes of this.chunkReservations.values()) reserved += bytes;
+    return {
+      chunksInFlight: this.activeWorkers.length,
+      reservedBytes: reserved,
+      peakReservedBytes: this.budget?.peakBytes ?? 0,
+      budgetBytes: this.budget?.limitBytes ?? 0,
+      transferredFrames,
+    };
   }
 
   private createWorker(): Worker {
@@ -158,6 +242,9 @@ export class WorkerManager {
         errorPolicy: this.errorPolicy,
         frameWidth: this.frameWidth,
         frameHeight: this.frameHeight,
+        fonts: this.fonts,
+        projectRoot: this.projectRoot,
+        mediaDir: this.mediaDir,
       } as {
         compositionJson: string;
         seed: number;
@@ -165,6 +252,9 @@ export class WorkerManager {
         errorPolicy: FrameErrorPolicy;
         frameWidth: number;
         frameHeight: number;
+        fonts?: readonly FontEntry[];
+        projectRoot: string;
+        mediaDir: string;
       },
     });
   }
@@ -175,16 +265,18 @@ export class WorkerManager {
     for (let i = 0; i < this.concurrency; i++) {
       const worker = this.createWorker();
       attachCacheChannel(worker, this.cacheProvider);
-      worker.on("message", (output: WorkerResult) => {
+      worker.on("message", (output: TransportOutput) => {
         if ((output as { type?: string }).type === "cache-request") return;
         const active = this.activeWorkers.find((a) => a.worker === worker);
-        if (active) active.resolve({ ...output, chunkIndex: active.chunkIndex });
+        if (active) active.resolve(normalizeResult(output, active.chunkIndex));
       });
       worker.on("error", (error) => {
         const activeIndex = this.activeWorkers.findIndex((a) => a.worker === worker);
         if (activeIndex >= 0) {
           const active = this.activeWorkers[activeIndex]!;
           this.activeWorkers.splice(activeIndex, 1);
+          this.chunkReservations.delete(active.chunkIndex);
+          this.budget?.release(active.estimatedBytes);
           active.reject(error);
         }
       });
@@ -193,6 +285,8 @@ export class WorkerManager {
         if (activeIndex >= 0) {
           const active = this.activeWorkers[activeIndex]!;
           this.activeWorkers.splice(activeIndex, 1);
+          this.chunkReservations.delete(active.chunkIndex);
+          this.budget?.release(active.estimatedBytes);
           if (code !== 0) active.reject(new Error(`Worker exited with code ${code}`));
         }
       });
@@ -200,11 +294,9 @@ export class WorkerManager {
     }
   }
 
-  private dispatch(worker: Worker, chunk: FrameChunk): void {
+  private dispatch(worker: Worker, chunk: FrameChunk, estimatedBytes: number): void {
     const frames = chunk.frames;
-    const estimatedBytes = this.memoryBudget
-      ? estimateChunkBytes(frames.length, this.frameWidth, this.frameHeight)
-      : 0;
+    if (estimatedBytes > 0) this.chunkReservations.set(chunk.startFrame, estimatedBytes);
     const promise = new Promise<WorkerResult>((resolve, reject) => {
       this.activeWorkers.push({
         worker,
@@ -233,16 +325,36 @@ export class WorkerManager {
     this.initWorkers();
 
     const results: WorkerResult[] = [];
+    const freeWorkers = [...this.workers];
 
-    for (const worker of this.workers) {
-      if (this.nextChunkIndex >= this.pendingChunks.length) break;
-      const chunk = this.pendingChunks[this.nextChunkIndex++];
-      if (!chunk) continue;
-      this.checkMemory(chunk);
-      this.dispatch(worker, chunk);
+    /** Dispatches the next chunk to `worker` when it fits the byte budget. */
+    const dispatchNext = (worker: Worker): boolean => {
+      const chunk = this.pendingChunks[this.nextChunkIndex];
+      if (!chunk) return false;
+      const bytes = this.tryReserveChunk(chunk);
+      if (bytes === null) return false;
+      this.nextChunkIndex += 1;
+      this.dispatch(worker, chunk, bytes);
+      return true;
+    };
+
+    while (freeWorkers.length > 0 && dispatchNext(freeWorkers[0]!)) {
+      freeWorkers.shift();
     }
 
-    while (this.activeWorkers.length > 0) {
+    while (this.activeWorkers.length > 0 || freeWorkers.length > 0) {
+      // Nothing in flight: wait for budget and dispatch one chunk so the queue
+      // always makes progress even when a single chunk spans the whole budget.
+      if (this.activeWorkers.length === 0) {
+        const worker = freeWorkers[0];
+        const chunk = this.pendingChunks[this.nextChunkIndex];
+        if (!worker || !chunk) break;
+        this.nextChunkIndex += 1;
+        freeWorkers.shift();
+        this.dispatch(worker, chunk, await this.reserve(chunk));
+        continue;
+      }
+
       const raced = this.activeWorkers.map((a) =>
         a.promise.then((value) => ({ promise: a.promise, value })),
       );
@@ -252,21 +364,14 @@ export class WorkerManager {
       const completedIndex = this.activeWorkers.findIndex((a) =>
         Object.is(a.promise, winner.promise),
       );
-      let completedWorker: Worker | undefined;
       if (completedIndex >= 0) {
         const completed = this.activeWorkers[completedIndex]!;
-        completedWorker = completed.worker;
-        if (completed.estimatedBytes > 0)
-          this.memoryTracker.releaseAllocation(completed.estimatedBytes);
         this.activeWorkers.splice(completedIndex, 1);
+        freeWorkers.push(completed.worker);
       }
 
-      if (completedWorker && this.nextChunkIndex < this.pendingChunks.length) {
-        const chunk = this.pendingChunks[this.nextChunkIndex++];
-        if (chunk) {
-          this.checkMemory(chunk);
-          this.dispatch(completedWorker, chunk);
-        }
+      while (freeWorkers.length > 0 && dispatchNext(freeWorkers[0]!)) {
+        freeWorkers.shift();
       }
     }
 

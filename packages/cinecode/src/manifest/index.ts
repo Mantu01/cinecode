@@ -22,6 +22,12 @@ import { computeClipSpan } from "../core/validation/index.js";
 import { loadModuleFile, resolveEntryFile } from "./loader.js";
 import { hotReloadEnabled } from "../loader/index.js";
 import { createError, ErrorCode } from "../errors/index.js";
+import {
+  parseAndValidateDuration,
+  validateManifestDocument,
+  type ManifestValidationOptions,
+  type ManifestValidationResult,
+} from "./validation.js";
 
 export interface ManifestProject {
   readonly rootDir: string;
@@ -29,26 +35,13 @@ export interface ManifestProject {
   readonly config: CinecodeConfig;
   readonly manifest: MainManifest;
   readonly hasManifest: boolean;
+  readonly rawManifest?: unknown;
+  readonly validation?: ManifestValidationResult;
+  readonly moduleCache?: Map<string, unknown>;
 }
 
 export function normalizeManifest(raw: unknown, manifestPath = "main.ts"): MainManifest {
   const manifest = (raw ?? {}) as MainManifest;
-  const checkIds = (entries: readonly { id: string }[] | undefined, kind: string): void => {
-    if (!entries) return;
-    const seen = new Set<string>();
-    for (const entry of entries) {
-      const fail = (reason: string): never => {
-        throw createError(ErrorCode.CC1010, { path: manifestPath, reason }, { location: { file: manifestPath } });
-      };
-      if (!entry.id) fail(`every ${kind} entry requires an "id"`);
-      if (seen.has(entry.id)) fail(`duplicate ${kind} id "${entry.id}"`);
-      seen.add(entry.id);
-    }
-  };
-  checkIds(manifest.images, "image");
-  checkIds(manifest.audio, "audio");
-  checkIds(manifest.scenes, "scene");
-  checkIds(manifest.timelines, "timeline");
   return {
     images: manifest.images ?? [],
     audio: manifest.audio ?? [],
@@ -70,7 +63,7 @@ export async function loadManifestProject(
     return { rootDir, entryPath, config, manifest: normalizeManifest({}, entryPath), hasManifest: false };
   }
   const raw = await loadModuleFile<MainManifest>(entry, rootDir, { fresh: hotReloadEnabled() });
-  return { rootDir, entryPath, config, manifest: normalizeManifest(raw, entryPath), hasManifest: true };
+  return { rootDir, entryPath, config, manifest: normalizeManifest(raw, entryPath), hasManifest: true, rawManifest: raw };
 }
 
 export function findEntry<T extends { id: string }>(
@@ -107,13 +100,8 @@ export function toSeconds(
   fps: number = 30,
 ): number | undefined {
   if (value === undefined) return undefined;
-  if (typeof value === "number") return value;
-  if (value.includes(":")) {
-    const [h = 0, m = 0, s = 0, f = 0] = value.split(":").map(Number);
-    return h * 3600 + m * 60 + s + f / fps;
-  }
-  const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  const parsed = parseAndValidateDuration(value, fps);
+  return parsed.valid ? parsed.seconds : undefined;
 }
 
 /** Shifts every clip in a timeline forward by `offsetSeconds`. */
@@ -184,11 +172,13 @@ export async function resolveScene(
   scene: { id: string; name?: string; file?: string; duration?: number | string },
   rootDir: string,
   fps: number,
+  moduleCache?: Map<string, unknown>,
 ): Promise<ResolvedScene> {
   if (!scene.file) {
     throw createError(ErrorCode.CC3008, { path: `scene:${scene.id}`, expected: 'a "file" to load' });
   }
-  const raw = await loadModuleFile<unknown>(scene.file, rootDir, { fresh: hotReloadEnabled() });
+  const resolved = resolveEntryFile(scene.file, rootDir);
+  const raw = moduleCache?.get(resolved) ?? moduleCache?.get(scene.file) ?? await loadModuleFile<unknown>(scene.file, rootDir, { fresh: hotReloadEnabled() });
   const timeline = await resolveTimelineValue(raw, scene.file);
   const explicit =
     toSeconds(scene.duration, fps) ?? (isSceneDef(raw) ? toSeconds(raw.duration, fps) : undefined);
@@ -225,7 +215,8 @@ export async function assembleTimelineComposition(
 
   let timeline: Timeline;
   if (entry.file) {
-    const raw = await loadModuleFile<unknown>(entry.file, rootDir, { fresh: hotReloadEnabled() });
+    const resolved = resolveEntryFile(entry.file, rootDir);
+    const raw = project.moduleCache?.get(resolved) ?? project.moduleCache?.get(entry.file) ?? await loadModuleFile<unknown>(entry.file, rootDir, { fresh: hotReloadEnabled() });
     if (isComposition(raw)) {
       return { ...raw, name: raw.name ?? entry.id };
     }
@@ -267,7 +258,7 @@ async function assembleTimelineFromRefs(
   let cursor = 0;
   for (const sceneId of entry.sceneRefs ?? []) {
     const sceneEntry = findEntry(manifest.scenes, sceneId, "scene");
-    const scene = await resolveScene(sceneEntry, rootDir, fps);
+    const scene = await resolveScene(sceneEntry, rootDir, fps, project.moduleCache);
     const shifted = shiftTimeline(scene.timeline, cursor);
     tracks.push(...shifted.tracks);
     cursor += scene.duration;
@@ -278,6 +269,20 @@ async function assembleTimelineFromRefs(
 // ---------------------------------------------------------------------------
 // Audio resolution
 // ---------------------------------------------------------------------------
+
+export function resolveMediaFilePath(ref: string, rootDir: string, config: CinecodeConfig): string {
+  const mediaDir = resolve(rootDir, config.mediaDir ?? "media");
+  const inMedia = resolve(mediaDir, ref);
+  if (existsSync(inMedia)) return inMedia;
+  if (config.allowCoLocatedMedia) {
+    const sourceDir = resolve(rootDir, config.sourceDir ?? "src");
+    const inSource = resolve(sourceDir, ref);
+    if (existsSync(inSource)) return inSource;
+  }
+  const inRoot = resolve(rootDir, ref);
+  if (existsSync(inRoot)) return inRoot;
+  return inMedia;
+}
 
 export async function resolveAudioBuffer(
   project: ManifestProject,
@@ -292,7 +297,8 @@ export async function resolveAudioBuffer(
     toSeconds(entry.duration, fps) ?? toSeconds(project.config.video?.defaultDuration, fps) ?? 5;
 
   if (entry.file) {
-    const raw = await loadModuleFile<unknown>(entry.file, project.rootDir, { fresh: hotReloadEnabled() });
+    const resolved = resolveEntryFile(entry.file, project.rootDir);
+    const raw = project.moduleCache?.get(resolved) ?? project.moduleCache?.get(entry.file) ?? await loadModuleFile<unknown>(entry.file, project.rootDir, { fresh: hotReloadEnabled() });
     const built = await evaluateAudio(raw, {
       sampleRate,
       channels,
@@ -311,7 +317,8 @@ export async function resolveAudioBuffer(
       resolve(project.rootDir, project.config.cacheDir ?? ".cinecode/cache", "media"),
     );
     await cache.initialize();
-    const decoded = await decodeAudioFile(resolve(project.rootDir, entry.src), {
+    const mediaPath = resolveMediaFilePath(entry.src, project.rootDir, project.config);
+    const decoded = await decodeAudioFile(mediaPath, {
       cache,
       targetSampleRate: sampleRate,
       targetChannels: channels,
@@ -391,7 +398,7 @@ async function assembleAudioTracks(
     if (entry.src && !entry.file) {
       clips.push({
         type: "audio",
-        src: resolve(project.rootDir, entry.src),
+        src: resolveMediaFilePath(entry.src, project.rootDir, project.config),
         start: 0,
         duration,
         volume,
@@ -416,7 +423,7 @@ export async function composeSceneComposition(
   const { config, manifest, rootDir } = project;
   const sceneEntry = findEntry(manifest.scenes, sceneId, "scene");
   const fps = sceneEntry.fps ?? config.video?.fps ?? 30;
-  const scene = await resolveScene(sceneEntry, rootDir, fps);
+  const scene = await resolveScene(sceneEntry, rootDir, fps, project.moduleCache);
   return makeComposition({
     name: sceneEntry.id,
     width: sceneEntry.width ?? config.video?.width ?? 1920,
@@ -457,7 +464,8 @@ export async function resolveImageClip(
   if (!entry.file) {
     throw createError(ErrorCode.CC3008, { path: `image:${imageId}`, expected: 'a "file" to load' });
   }
-  const raw = await loadModuleFile<unknown>(entry.file, project.rootDir, { fresh: hotReloadEnabled() });
+  const resolved = resolveEntryFile(entry.file, project.rootDir);
+  const raw = project.moduleCache?.get(resolved) ?? project.moduleCache?.get(entry.file) ?? await loadModuleFile<unknown>(entry.file, project.rootDir, { fresh: hotReloadEnabled() });
   const scaledWidth = Math.round(width * scaleFactor);
   const scaledHeight = Math.round(height * scaleFactor);
 
@@ -495,4 +503,5 @@ export async function resolveImageClip(
   };
 }
 
-export { makeTrack, makeTimeline, resolveEntryFile };
+export { makeTrack, makeTimeline, resolveEntryFile, validateManifestDocument, parseAndValidateDuration };
+export type { ManifestValidationResult, ManifestValidationOptions };

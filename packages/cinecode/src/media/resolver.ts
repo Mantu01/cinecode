@@ -5,12 +5,20 @@ import { inspectMedia, getMediaType, isSupportedVideoExtension, isSupportedImage
 import { resolveMediaSource } from "../extensions/index.js";
 import { getMediaResolverChain } from "./resolverChain.js";
 import { recordDegradation } from "../errors/degradations.js";
+import { MediaIndex } from "./media-index.js";
+import { isCinecodeError } from "../errors/index.js";
+import type { MainManifest, Composition } from "../core/types/index.js";
 
 export interface ResolverOptions {
   sourceDir: string;
+  mediaDir?: string;
+  projectRoot?: string;
+  allowCoLocatedMedia?: boolean;
   cache: MediaCache;
   cloudMedia?: readonly { url: string; name?: string; sha256?: string }[];
   ignore?: (relativePath: string) => boolean;
+  manifest?: MainManifest | null;
+  compositions?: readonly Composition[];
 }
 
 export interface ResolvedMedia {
@@ -48,51 +56,30 @@ export class MediaResolutionErrorImpl extends Error {
 }
 
 export class MediaCatalog {
+  readonly index: MediaIndex;
   private readonly sourceDir: string;
   private readonly cache: MediaCache;
   private readonly cloudMedia: readonly { url: string; name?: string; sha256?: string }[];
-  private readonly ignore?: (relativePath: string) => boolean;
-  private fileIndex: Map<string, string> = new Map();
 
   constructor(options: ResolverOptions) {
     this.sourceDir = resolve(options.sourceDir);
     this.cache = options.cache;
     this.cloudMedia = options.cloudMedia ?? [];
-    this.ignore = options.ignore;
+    this.index = new MediaIndex({
+      mediaDir: options.mediaDir ?? options.sourceDir,
+      sourceDir: options.sourceDir,
+      projectRoot: options.projectRoot ?? options.sourceDir,
+      allowCoLocatedMedia: options.allowCoLocatedMedia,
+      cache: options.cache,
+      cloudMedia: options.cloudMedia,
+      ignore: options.ignore,
+      manifest: options.manifest,
+      compositions: options.compositions,
+    });
   }
 
   async initialize(): Promise<void> {
-    await this.buildFileIndex();
-  }
-
-  private async buildFileIndex(): Promise<void> {
-    this.fileIndex.clear();
-    await this.indexDirectory(this.sourceDir);
-  }
-
-  private async indexDirectory(dir: string): Promise<void> {
-    try {
-      const entries = await readdir(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        const fullPath = join(dir, entry.name);
-        if (entry.isDirectory()) {
-          await this.indexDirectory(fullPath);
-        } else if (entry.isFile()) {
-          const relPath = relative(this.sourceDir, fullPath).replace(/\\/g, "/");
-          if (this.ignore?.(relPath)) continue;
-          this.fileIndex.set(relPath.toLowerCase(), fullPath);
-          this.fileIndex.set(entry.name.toLowerCase(), fullPath);
-        }
-      }
-    } catch (error) {
-      recordDegradation({
-        code: "CC2004",
-        what: "media source directory scan incomplete",
-        reason: error instanceof Error ? error.message : String(error),
-        input: dir,
-        instead: "files below this directory are not indexed until it is readable",
-      });
-    }
+    await this.index.initialize();
   }
 
   async resolve(name: string, position?: { file: string; line: number; column: number }): Promise<ResolvedMedia> {
@@ -121,121 +108,46 @@ export class MediaCatalog {
       }
     }
 
-    const normalizedName = name.toLowerCase();
-    const filePath = this.fileIndex.get(normalizedName);
-
-    if (!filePath) {
-      // Registered media sources get first refusal before the local lookup fails:
-      // a source can resolve refs the local index does not contain (cloud, API…).
-      const source = resolveMediaSource(name);
-      if (source) {
-        const resolution = await source.resolve(name);
-        const type = getMediaType(resolution.path);
-        if (type !== "unknown") {
-          try {
-            const metadata = await inspectMedia(resolution.path, { cache: this.cache, sourceDir: this.sourceDir });
-            return { path: resolution.path, name: resolution.name ?? basename(resolution.path), type, metadata };
-          } catch (error) {
-            throw new MediaResolutionErrorImpl(
-              "CC2003",
-              `Unreadable or corrupt file: ${resolution.path}. ${error instanceof Error ? error.message : String(error)}`,
-              undefined,
-              resolution.path,
-            );
-          }
-        }
-      }
-      const suggestions = this.findSimilar(normalizedName);
-      const message = this.formatMissingError(name, suggestions, position);
-      throw new MediaResolutionErrorImpl("CC2001", message, suggestions, resolve(this.sourceDir, name));
-    }
-
-    const type = getMediaType(filePath);
-    if (type === "unknown") {
-      throw new MediaResolutionErrorImpl("CC2002", `Unsupported format: ${filePath}`, undefined, filePath);
-    }
-
-    try {
-      await stat(filePath);
-    } catch {
-      throw new MediaResolutionErrorImpl("CC2003", `Unreadable or corrupt file: ${filePath}`, undefined, filePath);
-    }
-
-    const metadata = await inspectMedia(filePath, { cache: this.cache, sourceDir: this.sourceDir });
-
-    return {
-      path: filePath,
-      name: basename(filePath),
-      type,
-      metadata,
-    };
-  }
-
-  private findSimilar(name: string): string[] {
-    const allNames = Array.from(this.fileIndex.keys());
-    const scored = allNames
-      .map(n => ({ name: n, score: this.levenshtein(name, n) }))
-      .filter(x => x.score <= 3)
-      .sort((a, b) => a.score - b.score)
-      .slice(0, 3)
-      .map(x => x.name);
-    return scored;
-  }
-
-  private levenshtein(a: string, b: string): number {
-    const rows = a.length + 1;
-    const cols = b.length + 1;
-    const matrix = new Array(rows * cols).fill(0);
-    const idx = (r: number, c: number) => r * cols + c;
-
-    for (let i = 0; i <= a.length; i++) matrix[idx(i, 0)] = i;
-    for (let j = 0; j <= b.length; j++) matrix[idx(0, j)] = j;
-
-    for (let i = 1; i <= a.length; i++) {
-      for (let j = 1; j <= b.length; j++) {
-        const charA = a[i - 1];
-        const charB = b[j - 1];
-        if (charA === charB) {
-          matrix[idx(i, j)] = matrix[idx(i - 1, j - 1)];
-        } else {
-          matrix[idx(i, j)] = 1 + Math.min(
-            matrix[idx(i - 1, j)],
-            matrix[idx(i, j - 1)],
-            matrix[idx(i - 1, j - 1)]
+    // Registered media sources get first refusal before the local lookup fails
+    const source = resolveMediaSource(name);
+    if (source) {
+      const resolution = await source.resolve(name);
+      const type = getMediaType(resolution.path);
+      if (type !== "unknown") {
+        try {
+          const metadata = await inspectMedia(resolution.path, { cache: this.cache, sourceDir: this.sourceDir });
+          return { path: resolution.path, name: resolution.name ?? basename(resolution.path), type, metadata };
+        } catch (error) {
+          throw new MediaResolutionErrorImpl(
+            "CC2003",
+            `Unreadable or corrupt file: ${resolution.path}. ${error instanceof Error ? error.message : String(error)}`,
+            undefined,
+            resolution.path,
           );
         }
       }
     }
-    return matrix[idx(a.length, b.length)];
-  }
 
-  private formatMissingError(
-    name: string,
-    suggestions: string[],
-    position?: { file: string; line: number; column: number }
-  ): string {
-    let msg = `Media file not found: "${name}"`;
-    if (position) {
-      msg += ` at ${position.file}:${position.line}:${position.column}`;
+    try {
+      return await this.index.resolveMedia(name);
+    } catch (error) {
+      if (isCinecodeError(error)) throw error;
+      throw new MediaResolutionErrorImpl("CC2001", `Media file not found: "${name}"`, undefined, resolve(this.sourceDir, name));
     }
-    if (suggestions.length > 0) {
-      msg += `. Did you mean: ${suggestions.join(", ")}?`;
-    }
-    return msg;
   }
 
   async listMedia(): Promise<ResolvedMedia[]> {
     const results: ResolvedMedia[] = [];
-    for (const [, filePath] of this.fileIndex) {
-      const type = getMediaType(filePath);
+    for (const entry of this.index.list()) {
+      if (!entry.exists) continue;
+      const type = getMediaType(entry.absolutePath);
       if (type === "unknown") continue;
 
       try {
-        await stat(filePath);
-        const metadata = await inspectMedia(filePath, { cache: this.cache, sourceDir: this.sourceDir });
+        const metadata = await inspectMedia(entry.absolutePath, { cache: this.cache, sourceDir: this.sourceDir });
         results.push({
-          path: filePath,
-          name: basename(filePath),
+          path: entry.absolutePath,
+          name: entry.name,
           type,
           metadata,
         });
@@ -244,7 +156,7 @@ export class MediaCatalog {
           code: "CC2004",
           what: "media file omitted from listing",
           reason: error instanceof Error ? error.message : String(error),
-          input: filePath,
+          input: entry.absolutePath,
           instead: "the file is skipped in `media:list` until it becomes readable",
         });
       }

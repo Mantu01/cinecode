@@ -1,18 +1,17 @@
-import { rename, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import type { Composition, RenderFormat, QualitySetting } from "../core/types/index.js";
 import type { VideoEncoding } from "../core/quality.js";
 import { encodingCacheKey, normalizeQuality, resolveVideoEncoding } from "../core/quality.js";
 import type { AudioTrackState } from "../audio/types.js";
-import { prepareAudioTracks } from "../audio/prepare.js";
+import { assertSidechainSources, prepareAudioTracks } from "../audio/prepare.js";
 import {
   createConversion,
   createVfrConversion,
   frameToSeconds,
   secondsToFrame,
 } from "../core/time/index.js";
-import { computeClipSpan } from "../core/validation/index.js";
-import { findTimelineOvershoots } from "../core/time/timeline.js";
+import { computeClipSpan, validateComposition, compositionValidationError } from "../core/validation/index.js";
 import { createColorTransform, resolveColorManagementConfig } from "../renderer/color/profiles.js";
 import { createRenderCache, type RenderCache } from "./cache.js";
 import { createResumeManager, type ResumeManager } from "./resume.js";
@@ -26,7 +25,12 @@ import {
   type WorkerResult,
   type WorkerManager,
 } from "./workers.js";
-import { getMediaCacheForRenderer } from "../renderer/engine.js";
+import {
+  getMediaCacheForRenderer,
+  clearRendererCaches,
+  createRenderSession,
+  getRendererCacheStats,
+} from "../renderer/engine.js";
 import { tuneConcurrency, analyzeWorkload } from "./concurrency-tuner.js";
 import { createMediaPrefetcher } from "../media/prefetch.js";
 import { createProgressReporter, type ProgressReporter, type ProgressHandler } from "./progress.js";
@@ -39,10 +43,21 @@ import { createMediaCache } from "../media/cache.js";
 import { mixAudioTracks, type MixerOptions } from "../audio/mixer.js";
 import type { MidiPlayback } from "../midi/index.js";
 import { ffmpegLayoutForChannelCount } from "../audio/channels.js";
-import { muxAudioVideo, type MuxerOptions } from "../audio/muxer.js";
+import {
+  muxAudioVideo,
+  planMuxAudio,
+  type AudioMuxCodec,
+  type MuxAudioPlan,
+  type MuxerOptions,
+} from "../audio/muxer.js";
+import type { PcmBitDepth } from "../audio/encode.js";
+import { probeMediaFile } from "../media/inspector.js";
 import { computeCompositionHash } from "./cache.js";
+import { outputPlanFor, resolveAudioPlan, resolveOutputPlan } from "../core/output-plan.js";
 import { createError, ErrorCode } from "../errors/codes.js";
-import { recordDegradation } from "../errors/degradations.js";
+import type { FontEntry } from "../core/types/index.js";
+import { registerProjectFonts } from "../renderer/text/fonts.js";
+import { recordDegradation, recordWarning } from "../errors/degradations.js";
 import { preprocessVideo } from "../media/preprocess.js";
 import { getPluginRegistry } from "../plugin/registry.js";
 import {
@@ -53,11 +68,12 @@ import {
   resolveStrategy,
   DEFAULT_RECOVERY,
 } from "./recovery.js";
+import { getFrameTransportStats } from "./frame-format.js";
 import {
-  createMemoryBudget,
+  ByteBudget,
   estimateChunkBytes,
   formatBytes,
-  type MemoryBudget,
+  resolveTransportBudget,
 } from "./memory.js";
 
 export interface RenderOptions {
@@ -92,7 +108,10 @@ export interface RenderOptions {
   readonly recovery?: RecoveryPolicy;
   /** Per-frame worker fault policy: placeholder, repeat-previous, or abort. */
   readonly frameErrorPolicy?: "placeholder" | "repeat-previous" | "abort";
-  readonly memoryBudget?: MemoryBudget;
+  /** Render byte budget in MiB; defaults to a share of available memory. */
+  readonly memoryBudgetMb?: number;
+  /** Print the effective memory budget and frame transport statistics. */
+  readonly verbose?: boolean;
   readonly previewMode?: boolean;
   readonly previewFps?: number;
   /** Run a rate-analysis pass before the final encode (requires bitrate). */
@@ -108,6 +127,30 @@ export interface RenderOptions {
   /** Optional MIDI playback player synced once per rendered frame. */
   readonly midiPlayer?: MidiPlayback;
   readonly bitrateKbps?: number;
+  /** Audio codec for the muxed stream; defaults to aac, or opus for webm. */
+  readonly audioCodec?: AudioMuxCodec;
+  /** Audio bitrate in kbps for lossy codecs; ignored (and rejected) for lossless ones. */
+  readonly audioBitrateKbps?: number;
+  /** WAV bit depth fed to the encoder: 16/24 integer or 32 float (default). */
+  readonly pcmBitDepth?: PcmBitDepth;
+  /** Keep an audio stream even when the mix is silent. */
+  readonly forceAudio?: boolean;
+  /** Fall back to a silent bed when mixing fails, reported as a degradation. */
+  readonly allowSilentAudio?: boolean;
+  /** Continue rendering despite fatal timeline validation issues (recorded as a degradation). */
+  readonly allowInvalidTimeline?: boolean;
+  /** Configured project fonts, registered in every render process before drawing. */
+  readonly fonts?: readonly FontEntry[];
+  readonly projectRoot?: string;
+  readonly mediaDir?: string;
+  /** Fail the render when a glyph falls back to another family. */
+  readonly strictFonts?: boolean;
+  /** GIF palette quality 1-8 (higher = more colours). */
+  readonly gifQuality?: number;
+  /** GIF dithering algorithm. */
+  readonly gifDither?: "floyd-steinberg" | "sierra-2" | "atkinson" | "none";
+  /** Cap on GIF frames. */
+  readonly gifMaxFrames?: number;
   /** Write a poster image selected from the rendered composition. */
   readonly generateThumbnail?:
     | boolean
@@ -120,6 +163,10 @@ export interface RenderResult {
   readonly fileSize: number;
   readonly timeTaken: number;
   readonly cacheReuse: number;
+  /** Frames written; equals pages for document outputs. */
+  readonly frames?: number;
+  /** Pages written by a PDF output. */
+  readonly pages?: number;
 }
 
 export interface RenderJob {
@@ -165,20 +212,17 @@ function computeTotalFrames(composition: Composition): number {
 }
 
 /**
- * Reads a chunk of frames and sends them to the encoder via a back-pressured
- * write queue. The queue holds at most `highWaterMark` frames so the encoder
- * (a single ffmpeg process reading stdin) is never starved while workers are
- * ahead, and workers don't pile up unbounded buffers in memory.
- *
- * Each frame write is fired-and-forgotten; `writeErrors` collects any that
- * occur so they can be surfaced after all frames have been enqueued.
+ * Byte-budgeted queue between rendered frames and the encoder. Capacity is a
+ * byte allowance, so a 4K render buffers a handful of frames while a 720p one
+ * buffers many. Frames enter and leave in order; when the allowance is spent
+ * the producer waits instead of dropping or reordering frames.
  */
-class FrameQueue {
+export class FrameQueue {
   private readonly encoder: FrameSink;
-  private readonly highWaterMark: number;
-  /** Slots available — decremented on enqueue, incremented on write-complete. */
-  private slots: number;
+  private readonly budget: ByteBudget;
+  private readonly frameBytes: number;
   private pendingWrites = 0;
+  private pendingBytes = 0;
   private drained = false;
   private resolveDrain!: () => void;
   private drainPromise = new Promise<void>((r) => {
@@ -186,10 +230,10 @@ class FrameQueue {
   });
   private readonly writeErrors: Error[] = [];
 
-  constructor(encoder: FrameSink, highWaterMark = 64) {
+  constructor(encoder: FrameSink, budget: ByteBudget, frameBytes: number) {
     this.encoder = encoder;
-    this.highWaterMark = highWaterMark;
-    this.slots = highWaterMark;
+    this.budget = budget;
+    this.frameBytes = frameBytes;
   }
 
   get empty(): boolean {
@@ -198,49 +242,35 @@ class FrameQueue {
   get size(): number {
     return this.pendingWrites;
   }
-
-  /** Push a frame. Returns a promise that resolves when the frame is accepted. */
-  enqueue(frame: { index: number; buffer: Buffer }): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (this.slots <= 0) {
-        // Wait for a slot to free up — a new microtask is created each time
-        // slots becomes positive, so this naturally chains without flooding.
-        const checkSlot = (): void => {
-          if (this.slots > 0) {
-            this.doWrite(frame, resolve, reject);
-          } else {
-            setImmediate(checkSlot);
-          }
-        };
-        setImmediate(checkSlot);
-        return;
-      }
-      this.doWrite(frame, resolve, reject);
-    });
+  get queuedBytes(): number {
+    return this.pendingBytes;
   }
 
-  private doWrite(
-    frame: { index: number; buffer: Buffer },
-    resolve: () => void,
-    reject: (err: Error) => void,
-  ): void {
-    this.slots--;
-    this.pendingWrites++;
-    this.encoder
-      .addFrame(frame.buffer)
-      .then(() => {
-        this.pendingWrites--;
-        this.slots++;
-        if (this.pendingWrites === 0 && this.drained) this.resolveDrain();
-        resolve();
-      })
-      .catch((err) => {
-        this.writeErrors.push(err);
-        this.pendingWrites--;
-        this.slots++;
-        if (this.pendingWrites === 0 && this.drained) this.resolveDrain();
-        reject(err);
-      });
+  /** Resolves once the frame has been written to the encoder. */
+  async enqueue(frame: { index: number; buffer: Buffer }): Promise<void> {
+    if (frame.buffer.byteLength !== this.frameBytes) {
+      throw new RangeError(
+        `[CC2205] frame ${frame.index} is ${frame.buffer.byteLength} bytes, expected ${this.frameBytes}`,
+      );
+    }
+    const bytes = frame.buffer.byteLength;
+    await this.budget.reserve(bytes);
+    this.pendingWrites += 1;
+    this.pendingBytes += bytes;
+    try {
+      await this.encoder.addFrame(frame.buffer);
+    } catch (err) {
+      this.pendingWrites -= 1;
+      this.pendingBytes -= bytes;
+      this.budget.release(bytes);
+      this.writeErrors.push(err instanceof Error ? err : new Error(String(err)));
+      if (this.pendingWrites === 0 && this.drained) this.resolveDrain();
+      throw err;
+    }
+    this.pendingWrites -= 1;
+    this.pendingBytes -= bytes;
+    this.budget.release(bytes);
+    if (this.pendingWrites === 0 && this.drained) this.resolveDrain();
   }
 
   /**
@@ -283,20 +313,86 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
     onProgress,
     silent = false,
     recovery,
-    memoryBudget: memoryBudgetOption,
+    memoryBudgetMb,
   } = options;
 
-  const encoding: VideoEncoding =
+  const fontResult = registerProjectFonts(options.fonts, {
+    projectRoot: options.projectRoot ?? process.cwd(),
+    mediaDir: options.mediaDir ?? "media",
+  });
+  if (fontResult.errors.length > 0) {
+    const first = fontResult.errors[0]!;
+    const error = createError(
+      ErrorCode.CC3006,
+      { font: first.family, text: "font file" },
+      { location: { file: first.path }, fixHint: "Fix the font entry path or use a supported .ttf/.otf/.ttc file inside the media root." },
+    );
+    error.message = first.message;
+    throw error;
+  }
+  for (const warning of fontResult.warnings) {
+    recordDegradation({
+      code: ErrorCode.CC3006,
+      what: "duplicate font family ignored",
+      reason: warning.message,
+      input: warning.path ?? warning.family,
+      instead: "the first configured face for that family is used",
+    });
+  }
+
+  const timelineValidation = validateComposition(composition);
+  if (!timelineValidation.valid) {
+    if (options.allowInvalidTimeline !== true) throw compositionValidationError(timelineValidation);
+    recordDegradation({
+      code: ErrorCode.CC1013,
+      what: "render continued with fatal timeline validation issues",
+      reason: timelineValidation.errors.map((issue) => `[${issue.code}] ${issue.message}`).join("; "),
+      input: composition.name,
+      instead: "frames were rendered from a composition that validate reports as invalid",
+    });
+  }
+
+  const plan = outputPlanFor(requestedFormat);
+  const baseEncoding: VideoEncoding =
     encodingOption ??
     resolveVideoEncoding({ quality: quality ? normalizeQuality(quality) : undefined });
-  const alpha =
-    alphaOption === true || requestedFormat === "webm-alpha" || requestedFormat === "prores-alpha";
-  const format: RenderFormat | undefined =
-    requestedFormat === "webm-alpha"
-      ? "webm"
-      : requestedFormat === "prores-alpha"
-        ? "prores"
-        : requestedFormat;
+  const encoding: VideoEncoding =
+    encodingOption === undefined && plan.codecs.length > 0 && !plan.codecs.includes(baseEncoding.codec)
+      ? { ...baseEncoding, codec: plan.defaultCodec ?? baseEncoding.codec }
+      : baseEncoding;
+  const output = resolveOutputPlan({
+    format: requestedFormat,
+    alpha: alphaOption === true,
+    codec: plan.codecs.length > 0 ? encoding.codec : undefined,
+  });
+  const format: RenderFormat = output.format;
+  const alpha = output.alpha;
+  const requestedAudioChannels = composition.audio?.channels ?? 2;
+  const hasAudioTracks = composition.rootTimeline.tracks.some((track) => track.kind === "audio");
+  const audioPlan = resolveAudioPlan(format, options.audioCodec);
+  const muxPlan: MuxAudioPlan | null =
+    audioPlan !== null && (hasAudioTracks || options.forceAudio === true)
+      ? planMuxAudio({
+          audioCodec: options.audioCodec ?? audioPlan.defaultCodec,
+          audioBitrateKbps: options.audioBitrateKbps,
+          pcmBitDepth: options.pcmBitDepth,
+          audioChannels: requestedAudioChannels,
+          channelLayout:
+            requestedAudioChannels === 2
+              ? audioPlan.layout
+              : ffmpegLayoutForChannelCount(requestedAudioChannels),
+          containerFormat: audioPlan.muxer,
+        })
+      : null;
+  if (audioPlan === null && hasAudioTracks) {
+    recordDegradation({
+      code: ErrorCode.CC4005,
+      what: "audio tracks ignored by this output format",
+      reason: format + " output has no audio stream",
+      input: composition.name,
+      instead: "the render continues without audio",
+    });
+  }
 
   const renderCache = createRenderCache(cacheDir);
   const resumeManager = createResumeManager(cacheDir);
@@ -331,26 +427,10 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
     : null;
   const compositionHash = computeCompositionHash(
     composition,
-    `${seed}-${encodingCacheKey(encoding)}-rawbgra-${fromFrame}-${toFrame ?? ""}-tempo:${tempoKey}-2pass:${options.twoPass === true}-br:${options.bitrateKbps ?? "auto"}-burn:${options.burnSubtitles !== false}-color:${colorManagement.workingColorSpace}>${colorManagement.outputColorSpace}`,
+    `${seed}-${encodingCacheKey(encoding)}-rawrgba-${fromFrame}-${toFrame ?? ""}-tempo:${tempoKey}-2pass:${options.twoPass === true}-br:${options.bitrateKbps ?? "auto"}-burn:${options.burnSubtitles !== false}-color:${colorManagement.workingColorSpace}>${colorManagement.outputColorSpace}`,
   );
   const renderConversion = compositionConversion(composition);
   const graphTotalFrames = computeTotalFrames(composition);
-
-  if (composition.boundaryBehavior === "strict") {
-    const overshoots = findTimelineOvershoots(
-      composition.rootTimeline,
-      renderConversion,
-      graphTotalFrames,
-    );
-    if (overshoots.length > 0) {
-      const first = overshoots[0]!;
-      throw createError(
-        ErrorCode.CC3003,
-        { clip: `${first.clipName} (${first.overshootFrames} frame(s) past the boundary)` },
-        { fixHint: "Extend the composition duration or trim the clip; boundaryBehavior is \"strict\"." },
-      );
-    }
-  }
 
   const totalFrames = Math.max(
     0,
@@ -398,6 +478,8 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
     }
   }
 
+  clearRendererCaches();
+  const renderSession = createRenderSession();
   let processedComposition = composition;
   if (preprocessedVideos.size > 0) {
     processedComposition = {
@@ -446,13 +528,17 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
     }
   }
 
-  const memoryBudget = memoryBudgetOption ?? createMemoryBudget();
+  const transportBudget = resolveTransportBudget({
+    width: composition.width,
+    height: composition.height,
+    concurrency: resolveConcurrency(concurrency),
+    chunkSize,
+    maxBytes: memoryBudgetMb === undefined ? undefined : memoryBudgetMb * 1024 * 1024,
+  });
+  const frameBudget = new ByteBudget(transportBudget.totalBytes);
   const framesPerBudget = Math.max(
     1,
-    Math.floor(
-      (memoryBudget.maxBytesPerChunk * memoryBudget.hardLimitRatio) /
-        estimateChunkBytes(1, composition.width, composition.height),
-    ),
+    Math.floor(transportBudget.chunkBytes / estimateChunkBytes(1, composition.width, composition.height)),
   );
   const resolvedChunkSize = Math.min(resolveChunkSize(composition, chunkSize), framesPerBudget);
   const baseChunks = createChunks(totalFrames, resolvedChunkSize);
@@ -466,11 +552,10 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
   let videoEncoder: VideoEncoder | null = null;
   let cancelled = false;
 
-  const tempExtension =
-    format === "webm" ? ".tmp.webm" : format === "prores" ? ".tmp.mov" : ".tmp.mp4";
-  const tempVideoPath = `${outputPath}${tempExtension}`;
+  const tempExtension = ".tmp" + (plan.extension || "." + format);
+  const tempVideoPath = outputPath + tempExtension;
   const twoPass = options.twoPass === true;
-  const rawFramePath = `${outputPath}.tmp.bgra`;
+  const rawFramePath = `${outputPath}.tmp.rgba`;
 
   await registry.runHook("onResolutionChange", {
     width: processedComposition.width,
@@ -491,158 +576,124 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
     });
   };
 
-  // GIF, PNG-sequence, and PDF outputs do not go through the MP4 encode/mux
-  // path. They render frames directly and hand them to the image-output
-  // encoders so a .gif or .pdf request can never silently emit H.264.
-  if (alpha && format === "gif") {
-    reporter.reportDegradation(
-      "[CC6001] GIF does not support alpha transparency — the background will be composited opaque",
-      {
-        code: ErrorCode.CC6001,
-        what: "alpha channel requested for GIF",
-        input: outputPath,
-        instead: "opaque background composited into the GIF",
-      },
-    );
-  }
-
-  if (format === "gif" || format === "png" || format === "pdf") {
+  // Non-streamed outputs render frames on demand into a bounded writer, so a
+  // GIF, APNG, PDF or frame sequence never buffers the whole render.
+  if (plan.strategy !== "stream") {
     const { renderFrame } = await import("../renderer/engine.js");
-    const { encodeAnimatedGif, writeFrameSequence } = await import("../encoder/outputs.js");
-    const { generatePdf } = await import("../pdf/index.js");
+    const { writeImageOutput } = await import("./image-output.js");
     reporter = createProgressReporter({ totalFrames, onProgress, silent, onWarning: warningHook });
     reporter.setStage("rendering");
-    const buffers: Buffer[] = [];
-    for (let frame = effectiveFromFrame; frame < effectiveToFrame; frame += 1) {
-      if (cancelled) throw createError(ErrorCode.CC4003);
-      await registry.runHook("beforeFrame", {
-        composition: processedComposition,
-        frame,
-        frameNumber: frame,
-        totalFrames,
-        timestamp: frameToSeconds(frame, renderConversion),
-      });
-      const outcome = await renderFrameWithRecovery(
-        () => renderFrame(processedComposition, frame, seed),
-        processedComposition,
-        recovery,
-        frame,
-      );
-      await registry.runHook("afterFrame", {
-        composition: processedComposition,
-        frame,
-        frameNumber: frame,
-        totalFrames,
-        timestamp: frameToSeconds(frame, renderConversion),
-      });
-      if (!outcome.buffer) {
-        throw createError(ErrorCode.CC4001, { frame, source: composition.name }, { cause: outcome.error });
-      }
-      if (outcome.error) {
-        reporter.reportDegradation(
-          `[CC4001] frame ${frame} failed: ${outcome.error.message} — ${outcome.usedFallback ? "placeholder substituted" : "recovered"}`,
-          {
-            code: ErrorCode.CC4001,
-            what: `frame ${frame} failed to render`,
-            input: composition.name,
-            instead: outcome.usedFallback ? "a placeholder frame was substituted" : "the frame was recovered on retry",
-          },
+
+    const renderFrames = async function* (): AsyncGenerator<Buffer> {
+      for (let frame = effectiveFromFrame; frame < effectiveToFrame; frame += 1) {
+        if (cancelled) throw createError(ErrorCode.CC4003);
+        await registry.runHook("beforeFrame", {
+          composition: processedComposition,
+          frame,
+          frameNumber: frame,
+          totalFrames,
+          timestamp: frameToSeconds(frame, renderConversion),
+        });
+        const outcome = await renderFrameWithRecovery(
+          () => renderFrame(processedComposition, frame, seed, { session: renderSession }),
+          processedComposition,
+          recovery,
+          frame,
         );
-      }
-      buffers.push(outcome.buffer);
-      completedFrames += 1;
-      options.midiPlayer?.syncFrame(frameToSeconds(frame, renderConversion));
-      reporter.reportFrame(completedFrames);
-      await fireProgressHook(completedFrames);
-    }
-    if (format === "gif") {
-      const gifResult = await encodeAnimatedGif(buffers, outputPath, {
-        fps: composition.fps,
-        overwrite,
-      });
-      if (!gifResult.success) throw createError(ErrorCode.CC4002, { details: gifResult.error ?? "GIF output failed" }, { location: { file: outputPath } });
-      const outputStat = await stat(outputPath).catch(() => null);
-      const fileSize = outputStat?.size ?? 0;
-      const duration = frameToSeconds(totalFrames, renderConversion);
-      const timeTaken = Date.now() - startTime;
-      reporter.reportDone(outputPath, duration, fileSize, 0);
-      if (!fresh && !noCache) await resumeManager.clear();
-      await registry.runHook("afterRender", {
-        composition: processedComposition,
-        outputPath,
-        totalFrames,
-        durationMs: timeTaken,
-      });
-      return { outputPath, duration, fileSize, timeTaken, cacheReuse: 0 };
-    }
-    if (format === "png") {
-      const seqResult = await writeFrameSequence(buffers, outputPath, { overwrite });
-      if (!seqResult.success) throw createError(ErrorCode.CC4002, { details: seqResult.error ?? "PNG sequence output failed" }, { location: { file: outputPath } });
-      const outputStat = await stat(outputPath).catch(() => null);
-      const fileSize = outputStat?.size ?? 0;
-      const duration = frameToSeconds(totalFrames, renderConversion);
-      const timeTaken = Date.now() - startTime;
-      reporter.reportDone(outputPath, duration, fileSize, 0);
-      if (!fresh && !noCache) await resumeManager.clear();
-      await registry.runHook("afterRender", {
-        composition: processedComposition,
-        outputPath,
-        totalFrames,
-        durationMs: timeTaken,
-      });
-      return { outputPath, duration, fileSize, timeTaken, cacheReuse: 0 };
-    }
-    // PDF output: each frame becomes one page; PNG buffers written via embedPng.
-    // Vector-only compositions render pages as native PDF shapes instead of rasters.
-    {
-      const { PDFDocument } = await import("pdf-lib");
-      const { isVectorOnly, appendVectorPage } = await import("../pdf/vector.js");
-      let pdfBuffer: Buffer;
-      if (isVectorOnly(processedComposition)) {
-        const pdfDoc = await PDFDocument.create();
-        for (let frame = effectiveFromFrame; frame < effectiveToFrame; frame += 1) {
-          await appendVectorPage(pdfDoc, processedComposition, frame, {
-            width: composition.width,
-            height: composition.height,
-          });
+        await registry.runHook("afterFrame", {
+          composition: processedComposition,
+          frame,
+          frameNumber: frame,
+          totalFrames,
+          timestamp: frameToSeconds(frame, renderConversion),
+        });
+        if (!outcome.buffer) {
+          throw createError(ErrorCode.CC4001, { frame, source: composition.name }, { cause: outcome.error });
         }
-        pdfBuffer = Buffer.from(await pdfDoc.save());
-      } else {
-        const pages = buffers.map((buf) => [
-          {
-            type: "canvas" as const,
-            data: buf,
-            width: composition.width,
-            height: composition.height,
-          },
-        ]);
-        pdfBuffer = await generatePdf(pages, {
+        if (outcome.error) {
+          reporter.reportDegradation(
+            `[CC4001] frame ${frame} failed: ${outcome.error.message}${outcome.usedFallback ? " — placeholder substituted" : " — recovered"}`,
+            {
+              code: ErrorCode.CC4001,
+              what: `frame ${frame} failed to render`,
+              input: composition.name,
+              instead: outcome.usedFallback ? "a placeholder frame was substituted" : "the frame was recovered on retry",
+            },
+          );
+        }
+        completedFrames += 1;
+        options.midiPlayer?.syncFrame(frameToSeconds(frame, renderConversion));
+        reporter.reportFrame(completedFrames);
+        await fireProgressHook(completedFrames);
+        yield outcome.buffer;
+      }
+    };
+
+    const vectorPdf =
+      plan.strategy === "document" && (await import("../pdf/vector.js")).isVectorOnly(processedComposition);
+    let summary: { fileSize: number; frames: number; pages: number };
+    if (vectorPdf) {
+      const { PdfDocumentBuilder } = await import("../pdf/index.js");
+      const { appendVectorPage } = await import("../pdf/vector.js");
+      const builder = await PdfDocumentBuilder.create({
+        width: composition.width,
+        height: composition.height,
+        title: composition.name,
+      });
+      for (let frame = effectiveFromFrame; frame < effectiveToFrame; frame += 1) {
+        if (cancelled) throw createError(ErrorCode.CC4003);
+        await appendVectorPage(builder.document, processedComposition, frame, {
           width: composition.width,
           height: composition.height,
-          dpi: 150,
         });
+        completedFrames += 1;
+        reporter.reportFrame(completedFrames);
       }
-      await withAtomicOutput(outputPath, async (stagedOutput) => {
-        await writeFile(stagedOutput, pdfBuffer);
+      const built = await builder.finish();
+      await withAtomicOutput(outputPath, async (staged) => {
+        await writeFile(staged, built.buffer);
       });
-      const duration = frameToSeconds(totalFrames, renderConversion);
-      const timeTaken = Date.now() - startTime;
-      reporter.reportDone(outputPath, duration, pdfBuffer.length, 0);
-      if (!fresh && !noCache) await resumeManager.clear();
-      await registry.runHook("afterRender", {
-        composition: processedComposition,
+      summary = { fileSize: built.buffer.length, frames: built.pages, pages: built.pages };
+    } else {
+      const written = await writeImageOutput({
+        format,
+        plan,
         outputPath,
-        totalFrames,
-        durationMs: timeTaken,
+        width: composition.width,
+        height: composition.height,
+        fps: composition.fps,
+        overwrite,
+        frames: renderFrames(),
+        gif: {
+          quality: options.gifQuality,
+          dither: options.gifDither,
+          maxFrames: options.gifMaxFrames,
+        },
+        title: composition.name,
       });
-      return {
-        outputPath,
-        duration: pdfBuffer.length,
-        fileSize: pdfBuffer.length,
-        timeTaken,
-        cacheReuse: 0,
-      };
+      summary = { fileSize: written.fileSize, frames: written.frames, pages: written.pages };
     }
+
+    clearRendererCaches();
+    const duration = summary.frames / Math.max(1, composition.fps);
+    const timeTaken = Date.now() - startTime;
+    reporter.reportDone(outputPath, duration, summary.fileSize, 0);
+    if (!fresh && !noCache) await resumeManager.clear();
+    await registry.runHook("afterRender", {
+      composition: processedComposition,
+      outputPath,
+      totalFrames,
+      durationMs: timeTaken,
+    });
+    return {
+      outputPath,
+      duration,
+      fileSize: summary.fileSize,
+      timeTaken,
+      cacheReuse: 0,
+      frames: summary.frames,
+      pages: summary.pages,
+    };
   }
 
   const cleanup = async () => {
@@ -705,7 +756,7 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
       sink = videoEncoder;
     }
 
-    const frameQueue = new FrameQueue(sink);
+    const frameQueue = new FrameQueue(sink, frameBudget, transportBudget.frameBytes);
     reporter = createProgressReporter({ totalFrames, onProgress, silent, onWarning: warningHook });
     reporter.setStage("rendering");
 
@@ -719,6 +770,9 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
         `[CC7002] ${tuning.reason} (${workload.classification}, ${resolvedConcurrency} worker(s))`,
       );
     }
+    if (options.verbose === true && !silent) {
+      console.log(`[CC7100] render memory budget: ${transportBudget.description}`);
+    }
     const prefetcher = createMediaPrefetcher({
       onWarning: (message) => reporter.reportWarning(`[CC7003] ${message}`),
     });
@@ -727,7 +781,11 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
       composition: processedComposition,
       seed,
       cacheDir,
-      memoryBudget,
+      budget: frameBudget,
+      maxChunkBytes: transportBudget.chunkBytes,
+      fonts: options.fonts,
+      projectRoot: options.projectRoot ?? process.cwd(),
+      mediaDir: options.mediaDir ?? "media",
       errorPolicy: options.frameErrorPolicy ?? "placeholder",
       cacheProvider: async (request) => {
         if (!request.key.startsWith("video:")) return undefined;
@@ -790,7 +848,7 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
           colorTransform.transformBuffer(
             new Uint8ClampedArray(buffer.buffer, buffer.byteOffset, buffer.byteLength),
             {
-              layout: "bgra",
+              layout: "rgba",
             },
           );
         }
@@ -949,11 +1007,25 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
           });
         }
         await encodeFrames(framesToEncode, chunkIndex, false);
+        workerManager.releaseChunk(result);
         lastEmittedChunk = chunkIndex;
       }
     }
 
     await workerManager.terminate();
+    clearRendererCaches();
+    frameBudget.reset();
+    if (options.verbose === true && !silent) {
+      const transport = getFrameTransportStats();
+      console.log(
+        `[CC7101] frame transport: ${transport.framesProduced} produced, ${transport.framesTransferred} transferred, ${transport.pixelCopies} pixel copies, budget peak ${formatBytes(frameBudget.peakBytes)}`,
+      );
+      const caches = getRendererCacheStats();
+      const cacheBytes = caches.reduce((total, cache) => total + cache.bytes, 0);
+      console.log(
+        `[CC7102] renderer caches: ${caches.length} bounded cache(s), ${formatBytes(cacheBytes)} retained, ${caches.reduce((total, cache) => total + cache.evictions, 0)} eviction(s)`,
+      );
+    }
 
     if (lastEmittedChunk !== chunks.length - 1 && !cancelled) {
       throw createError(ErrorCode.CC4002, {
@@ -1017,12 +1089,17 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
       sidechains: audioConfig.sidechains,
     };
 
+    const audioTrackNames = composition.rootTimeline.tracks
+      .filter((track) => track.kind === "audio")
+      .map((track) => track.name ?? "");
     const audioPrepare = {
       cache: mediaCache,
       sampleRate,
       channels,
       duration,
       stemCacheDir: cacheDir,
+      conversion: renderConversion,
+      trackNames: audioTrackNames,
     };
 
     const mixTrackCount = composition.rootTimeline.tracks.filter(
@@ -1048,20 +1125,41 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
           tracks.push(...prepared);
         }
         if (tracks.length === 0) return null;
+        assertSidechainSources(tracks);
         return mixAudioTracks(tracks, mixerOptions);
       },
       resolveStrategy(recovery, "audio"),
       recovery?.maxRetries ?? 0,
     );
 
-    if (audioOutcome.status !== "ok" && audioOutcome.status !== "recovered") {
-      throw createError(
-        ErrorCode.CC5001,
-        { name: composition.name, reason: audioOutcome.error?.message ?? "unknown" },
-        { location: { file: outputPath }, cause: audioOutcome.error },
-      );
+    if (audioOutcome.status !== "ok") {
+      const reason = audioOutcome.error?.message ?? "unknown";
+      if (options.allowSilentAudio !== true) {
+        throw createError(
+          ErrorCode.CC5001,
+          { name: composition.name, reason },
+          { location: { file: outputPath }, cause: audioOutcome.error },
+        );
+      }
+      recordDegradation({
+        code: ErrorCode.CC5001,
+        what: "audio mix replaced with silence",
+        reason,
+        input: composition.name,
+        instead: "the render continues without an audio bed (allowSilentAudio)",
+      });
     }
     const mixResult = audioOutcome.value ?? mixAudioTracks([], mixerOptions);
+    const muxAudio = muxPlan !== null && (!mixResult.report.silent || options.forceAudio === true);
+    if (muxAudio && mixResult.report.silent) {
+      recordDegradation({
+        code: ErrorCode.CC5001,
+        what: "audio stream forced on a silent mix",
+        reason: "every audio track is muted, excluded or silent",
+        input: composition.name,
+        instead: "a silent audio track is written",
+      });
+    }
 
     await registry.runHook("afterMix", {
       composition: processedComposition,
@@ -1070,33 +1168,68 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
       durationSeconds: duration,
       durationMs: Date.now() - mixStarted,
       peakLevel: mixResult.peakLevel,
+      peakAfterLimit: mixResult.report.peakAfterLimit,
+      silent: mixResult.report.silent,
+      channelConversions: mixResult.report.channelConversions.map((conversion) => ({
+        id: conversion.id,
+        from: conversion.from,
+        to: conversion.to,
+        kind: conversion.kind,
+      })),
     });
 
     reporter.reportAudioDone();
     reporter.reportEncoding();
     reporter.reportCacheStats(cacheReuseFrames, Math.max(1, totalFrames));
 
-    const muxOptions: MuxerOptions = {
-      videoPath: tempVideoPath,
-      audioBuffer: mixResult.buffer,
-      outputPath,
-      overwrite,
-      audioCodec: format === "webm" ? "opus" : "aac",
-      audioChannels: channels,
-      channelLayout: ffmpegLayoutForChannelCount(channels),
-      containerFormat: format === "webm" ? "webm" : format === "prores" ? "mov" : "mp4",
-    };
+    const muxOptions: MuxerOptions | null = muxPlan
+      ? {
+          videoPath: tempVideoPath,
+          audioBuffer: mixResult.buffer,
+          outputPath,
+          overwrite,
+          videoDuration: duration,
+          audioCodec: muxPlan.codec,
+          audioBitrateKbps: muxPlan.bitrateKbps,
+          pcmBitDepth: muxPlan.bitDepth,
+          audioChannels: muxPlan.channels,
+          channelLayout: muxPlan.channelLayout,
+          containerFormat: muxPlan.container,
+        }
+      : null;
 
-    reporter.reportMuxing();
+    if (muxAudio) reporter.reportMuxing();
     await withAtomicOutput(outputPath, async (stagedOutput) => {
+      if (!muxAudio || !muxOptions) {
+        await copyFile(tempVideoPath, stagedOutput);
+        await verifyMuxedOutput(stagedOutput, {
+          audio: false,
+          nonSilent: false,
+          duration,
+          outputPath,
+        });
+        return;
+      }
       const muxResult = await muxAudioVideo({
         ...muxOptions,
         outputPath: stagedOutput,
         overwrite: true,
       });
-      if (!muxResult.success) {
-        throw muxError(muxResult.error, outputPath);
+      if (!muxResult.success) throw muxError(muxResult.error, outputPath);
+      if (muxResult.adjustment !== "none") {
+        recordWarning({
+          code: ErrorCode.CC4005,
+          message: `audio bed ${muxResult.adjustment === "padded" ? "padded with silence" : "trimmed"} to the ${duration.toFixed(3)}s video duration`,
+          input: outputPath,
+        });
       }
+      await verifyMuxedOutput(stagedOutput, {
+        audio: true,
+        nonSilent: !mixResult.report.silent,
+        codec: muxPlan?.ffmpegCodec,
+        duration,
+        outputPath,
+      });
     });
 
     if (composition.chapters && composition.chapters.length > 0) {
@@ -1140,6 +1273,13 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
     const { flushFontFallbackWarnings } = await import("../renderer/text/engine.js");
     const fallbackWarning = flushFontFallbackWarnings();
     if (fallbackWarning) {
+      if (options.strictFonts === true) {
+        throw createError(
+          ErrorCode.CC3006,
+          { font: "configured family(s)", text: fallbackWarning },
+          { location: { file: outputPath }, fixHint: "Install the requested font or disable strict font checking." },
+        );
+      }
       reporter.reportDegradation(fallbackWarning, {
         code: "CC3006",
         what: "text font fallback",
@@ -1188,6 +1328,45 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
       context: "renderVideo",
     });
     throw error;
+  }
+}
+
+async function verifyMuxedOutput(
+  filePath: string,
+  expected: {
+    readonly audio: boolean;
+    readonly nonSilent: boolean;
+    readonly codec?: string;
+    readonly duration: number;
+    readonly outputPath: string;
+  },
+): Promise<void> {
+  const probe = await probeMediaFile(filePath);
+  if (!probe.videoCodec) {
+    throw muxError(`muxed artifact has no video stream (${probe.streamCount} streams)`, expected.outputPath);
+  }
+  if (expected.audio) {
+    if (!probe.hasAudio) {
+      throw muxError("expected an audio stream, the muxed artifact has none", expected.outputPath);
+    }
+    if (expected.codec && probe.audioCodec !== expected.codec) {
+      throw muxError(
+        `expected audio codec "${expected.codec}", got "${probe.audioCodec ?? "none"}"`,
+        expected.outputPath,
+      );
+    }
+    if (expected.nonSilent && probe.audioDuration === 0) {
+      throw muxError("expected a non-silent audio stream, the muxed artifact has an empty one", expected.outputPath);
+    }
+  } else if (probe.hasAudio) {
+    throw muxError("expected no audio stream, the muxed artifact has one", expected.outputPath);
+  }
+  const tolerance = Math.max(0.5, expected.duration * 0.02);
+  if (Math.abs(probe.duration - expected.duration) > tolerance) {
+    throw muxError(
+      `output duration ${probe.duration.toFixed(3)}s does not match the video duration ${expected.duration.toFixed(3)}s`,
+      expected.outputPath,
+    );
   }
 }
 

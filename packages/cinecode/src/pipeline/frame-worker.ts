@@ -1,7 +1,7 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { Canvas } from "@napi-rs/canvas";
 import { join } from "node:path";
-import type { Composition } from "../core/types/index.js";
+import type { Composition, FontEntry } from "../core/types/index.js";
 import {
   renderFrame,
   primeVideoFramesForRange,
@@ -9,9 +9,15 @@ import {
   videoFrameRefsFor,
   hasVideoFrameCached,
   storeRemoteVideoFrame,
+  createRenderSession,
+  clearRendererCaches,
 } from "../renderer/engine.js";
 import { createMediaCache } from "../media/cache.js";
 import { createCacheClient } from "./cache-channel.js";
+import { registerProjectFonts } from "../renderer/text/fonts.js";
+import { createBuiltinRegistry } from "../extensions/bootstrap.js";
+import { createRenderRuntime, type RenderRuntime } from "../renderer/runtime.js";
+import { frameFromPixels, frameTransfer } from "./frame-format.js";
 
 export type FrameErrorPolicy = "placeholder" | "repeat-previous" | "abort";
 
@@ -22,6 +28,9 @@ interface WorkerStartup {
   errorPolicy?: FrameErrorPolicy;
   frameWidth?: number;
   frameHeight?: number;
+  fonts?: readonly FontEntry[];
+  projectRoot?: string;
+  mediaDir?: string;
 }
 
 interface ChunkInput {
@@ -44,20 +53,18 @@ interface WorkerOutput {
   diagnostics?: string;
 }
 
+interface TransportFrame {
+  readonly index: number;
+  readonly pixels: Uint8Array;
+}
+
 const MAX_CONSECUTIVE_FAILURES = 5;
 const MAX_FAILURE_RATIO = 0.02;
 
+/** One read out of the canvas; straight RGBA with its own transferable buffer. */
 function frameToBuffer(canvas: Canvas): Buffer {
-  const ctx = canvas.getContext("2d");
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const bgra = new Uint8Array(imageData.data.length);
-  for (let i = 0; i < imageData.data.length; i += 4) {
-    bgra[i] = imageData.data[i + 2]!;
-    bgra[i + 1] = imageData.data[i + 1]!;
-    bgra[i + 2] = imageData.data[i]!;
-    bgra[i + 3] = imageData.data[i + 3]!;
-  }
-  return Buffer.from(bgra.buffer);
+  const imageData = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
+  return frameFromPixels(imageData.data);
 }
 
 function placeholderBuffer(width: number, height: number, message: string): Buffer {
@@ -144,9 +151,11 @@ async function processFrames(
   policy: FrameErrorPolicy,
   frameWidth: number,
   frameHeight: number,
+  runtime: RenderRuntime,
 ): Promise<WorkerOutput> {
   const results: { index: number; buffer: Buffer }[] = [];
   const failures: FrameFailure[] = [];
+  const session = createRenderSession();
   let consecutiveFailures = 0;
   let previousBuffer: Buffer | null = null;
 
@@ -155,7 +164,7 @@ async function processFrames(
 
   for (const frame of frames) {
     try {
-      const result = await renderFrame(composition, frame, seed);
+      const result = await renderFrame(composition, frame, seed, { runtime, session });
       const buffer = frameToBuffer(result.canvas);
       results.push({ index: frame, buffer });
       previousBuffer = buffer;
@@ -246,13 +255,32 @@ const policy: FrameErrorPolicy = startup.errorPolicy ?? "placeholder";
 const composition = JSON.parse(startup.compositionJson) as Composition;
 const frameWidth = startup.frameWidth ?? composition.width;
 const frameHeight = startup.frameHeight ?? composition.height;
+const fontResult = registerProjectFonts(startup.fonts, {
+  projectRoot: startup.projectRoot ?? process.cwd(),
+  mediaDir: startup.mediaDir ?? "media",
+});
+if (fontResult.errors.length > 0) throw new Error(fontResult.errors[0]!.message);
+const runtime = createRenderRuntime(createBuiltinRegistry(), "worker");
+
+process.once("exit", clearRendererCaches);
 
 parentPort!.on("message", (msg: ChunkInput) => {
   if ((msg as { type?: string }).type === "cache-response") return;
   ensureMediaCache(cacheDir)
-    .then(() => processFrames(composition, seed, msg.frames, policy, frameWidth, frameHeight))
+    .then(() => processFrames(composition, seed, msg.frames, policy, frameWidth, frameHeight, runtime))
     .then((output) => {
-      parentPort!.postMessage(output);
+      const frames: TransportFrame[] = [];
+      const transfer: ArrayBuffer[] = [];
+      const moved = new Set<ArrayBuffer>();
+      for (const frame of output.frames) {
+        // repeat-previous reuses one buffer; a moved buffer cannot be sent twice
+        const buffer = moved.has(frame.buffer.buffer as ArrayBuffer) ? Buffer.from(frame.buffer) : frame.buffer;
+        const sent = frameTransfer(buffer);
+        moved.add(sent.transfer);
+        frames.push({ index: frame.index, pixels: sent.view });
+        transfer.push(sent.transfer);
+      }
+      parentPort!.postMessage({ ...output, frames }, transfer);
     })
     .catch((error) => {
       parentPort!.postMessage({

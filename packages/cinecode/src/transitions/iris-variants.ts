@@ -1,6 +1,5 @@
 import type { SKRSContext2D } from "@napi-rs/canvas";
 import { defineTransition, type TransitionContext, type TransitionProcessor } from "./engine.js";
-import { registerTransition } from "../extensions/index.js";
 
 export type IrisShape = "circle" | "rect";
 
@@ -112,5 +111,3 @@ export const irisCloseTransition: TransitionProcessor = defineTransition({
     }),
 });
 
-registerTransition(irisOpenTransition);
-registerTransition(irisCloseTransition);

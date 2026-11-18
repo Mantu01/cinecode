@@ -1,6 +1,5 @@
 import type { EffectInput, EffectProcessor } from "./engine.js";
 import { defineEffect, getData, putData } from "./engine.js";
-import { registerEffect } from "../extensions/index.js";
 import { parseColor } from "../renderer/color/parse.js";
 
 export type NeonGlowMode = "radial" | "directional";
@@ -234,4 +233,3 @@ export const neonGlowEffect: EffectProcessor = defineEffect({
   },
 });
 
-registerEffect(neonGlowEffect);

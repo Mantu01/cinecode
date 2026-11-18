@@ -1,21 +1,72 @@
 import { spawn } from "node:child_process";
 import ffmpegStatic from "@ffmpeg-installer/ffmpeg";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { createHash } from "node:crypto";
 import { Canvas, loadImage } from "@napi-rs/canvas";
 import { buildHdrColorArgs, type HdrMetadata } from "./index.js";
 
 /**
  * Output-side media operations: format conversion, stitching, splitting,
- * thumbnails, frame sequences, and animated GIF. All are ffmpeg-coordinated
- * and deterministic for the same inputs.
+ * thumbnails, frame sequences, animated GIF/APNG and sprite sheets. Frame
+ * writers consume an async source so memory stays constant in duration.
  */
 
 export interface FfmpegResult {
   readonly success: boolean;
   readonly outputPath: string;
   readonly error?: string;
+}
+
+/** Rendered frames, streamed or already collected. Writers never hold them all. */
+export type FrameSource = AsyncIterable<Buffer> | readonly Buffer[];
+
+async function* frameStream(source: FrameSource): AsyncGenerator<Buffer> {
+  if (Symbol.asyncIterator in (source as object)) {
+    for await (const frame of source as AsyncIterable<Buffer>) yield frame;
+    return;
+  }
+  for (const frame of source as readonly Buffer[]) yield frame;
+}
+
+function pngSize(buffer: Buffer): { width: number; height: number } {
+  if (buffer.length < 24 || buffer.readUInt32BE(0) !== 0x89504e47) {
+    throw new Error("[CC4002] frame sequence expects PNG frames from the renderer");
+  }
+  return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+}
+
+/** Index naming for `%d` / `%05d` patterns, zero-based from frame 0. */
+export function frameFileName(pattern: string, index: number): string {
+  return pattern.replace(/%0?(\d*)d/, (_match, pad: string) =>
+    String(index).padStart(pad === "" ? 1 : Number(pad), "0"),
+  );
+}
+
+interface WrittenFrames {
+  readonly count: number;
+  readonly width: number;
+  readonly height: number;
+  readonly directory: string;
+  readonly pattern: string;
+}
+
+async function writeFramesToDir(
+  frames: FrameSource,
+  directory: string,
+  options: { readonly pattern?: string; readonly maxFrames?: number; readonly overwrite?: boolean } = {},
+): Promise<WrittenFrames> {
+  const pattern = options.pattern ?? "frame-%05d.png";
+  let count = 0;
+  let width = 0;
+  let height = 0;
+  for await (const frame of frameStream(frames)) {
+    if (options.maxFrames !== undefined && count >= options.maxFrames) break;
+    if (count === 0) ({ width, height } = pngSize(frame));
+    await writeFile(join(directory, frameFileName(pattern, count)), frame);
+    count += 1;
+  }
+  return { count, width, height, directory, pattern };
 }
 
 function runFfmpeg(args: readonly string[], stdinData?: Buffer): Promise<FfmpegResult> {
@@ -47,11 +98,11 @@ export interface ConvertOptions {
   readonly extraArgs?: readonly string[];
 }
 
-export type StillImageFormat = "png" | "jpg" | "webp" | "avif";
+export type StillImageFormat = "png" | "jpg" | "webp";
 
 export interface StillImageOptions {
   readonly overwrite?: boolean;
-  /** 0-100 for WebP/JPEG, 0-63 for AVIF (lower = better quality). */
+  /** 0-100 quality for WebP and JPEG. */
   readonly quality?: number;
   readonly lossless?: boolean;
   readonly alpha?: boolean;
@@ -68,21 +119,13 @@ export async function encodeStillImage(
   const { overwrite = false, alpha = false, hdr } = options;
   const codec: string[] = [];
   if (format === "png") {
-    codec.push("-c:v", "png", "-pix_fmt", alpha ? "rgba" : "rgb24");
+    codec.push("-c:v", "png", "-f", "image2", "-pix_fmt", alpha ? "rgba" : "rgb24");
   } else if (format === "jpg") {
-    codec.push("-c:v", "mjpeg", "-pix_fmt", "yuvj420p", "-q:v", String(Math.max(2, Math.round(31 - (options.quality ?? 90) * 0.29))));
-  } else if (format === "webp") {
-    codec.push("-c:v", "libwebp", "-quality", String(Math.max(0, Math.min(100, Math.round(options.quality ?? 90)))));
+    codec.push("-c:v", "mjpeg", "-f", "image2", "-pix_fmt", "yuvj420p", "-q:v", String(Math.max(2, Math.round(31 - (options.quality ?? 90) * 0.29))));
+  } else {
+    codec.push("-f", "webp", "-c:v", "libwebp", "-quality", String(Math.max(0, Math.min(100, Math.round(options.quality ?? 90)))));
     if (options.lossless) codec.push("-lossless", "1");
     codec.push("-pix_fmt", alpha ? "yuva420p" : "yuv420p");
-  } else {
-    codec.push(
-      "-c:v", "libaom-av1",
-      "-crf", String(Math.max(0, Math.min(63, Math.round(options.quality === undefined ? 24 : options.quality / 100 * 63)))),
-      "-b:v", "0",
-      "-pix_fmt", "yuv420p",
-    );
-    if (alpha) codec.push("-alpha_mode", "1");
   }
   if (hdr) codec.push(...buildHdrColorArgs(hdr));
   return runFfmpeg([
@@ -129,24 +172,47 @@ export interface AnimatedPngOptions {
   readonly fps?: number;
   readonly overwrite?: boolean;
   readonly plays?: number;
+  readonly maxFrames?: number;
 }
 
-/** Encode frames as an APNG using ffmpeg's apng muxer. */
+export interface AnimatedPngResult extends FfmpegResult {
+  readonly frames: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * Encode frames as an APNG. Frames are spooled to a temp sequence directory so
+ * memory stays constant; the png encoder and rgba pixel format are explicit.
+ */
 export async function encodeAnimatedPng(
-  frames: readonly Buffer[],
+  frames: FrameSource,
   outputPath: string,
   options: AnimatedPngOptions = {},
-): Promise<FfmpegResult> {
-  if (frames.length === 0) return { success: false, outputPath, error: "No frames supplied" };
-  const { fps = 30, overwrite = false, plays = 0 } = options;
-  return runFfmpeg([
-    "-v", "error",
-    ...(overwrite ? ["-y"] : ["-n"]),
-    "-f", "image2pipe", "-framerate", String(fps), "-i", "-",
-    "-f", "apng",
-    "-plays", String(Math.max(0, Math.round(plays))),
-    outputPath,
-  ], Buffer.concat([...frames]));
+): Promise<AnimatedPngResult> {
+  const { fps = 30, overwrite = false, plays = 0, maxFrames } = options;
+  const work = await mkdtemp(join(tmpdir(), "cinecode-apng-"));
+  try {
+    const written = await writeFramesToDir(frames, work, { maxFrames });
+    if (written.count === 0) {
+      return { success: false, outputPath, error: "No frames supplied", frames: 0, width: 0, height: 0 };
+    }
+    const result = await runFfmpeg([
+      "-v", "error",
+      ...(overwrite ? ["-y"] : ["-n"]),
+      "-framerate", String(fps),
+      "-start_number", "0",
+      "-i", join(work, written.pattern),
+      "-c:v", "apng",
+      "-pix_fmt", "rgba",
+      "-f", "apng",
+      "-plays", String(Math.max(0, Math.round(plays))),
+      outputPath,
+    ]);
+    return { ...result, frames: written.count, width: written.width, height: written.height };
+  } finally {
+    await rm(work, { recursive: true, force: true }).catch(() => undefined);
+  }
 }
 
 /** Transcode a media file to another container/codec. */
@@ -193,7 +259,7 @@ export interface SplitOptions {
 /** Split a video into segments at given second ranges. */
 export async function splitVideo(inputPath: string, segments: readonly SplitSegment[], options: SplitOptions = {}): Promise<FfmpegResult[]> {
   const { overwrite = false } = options;
-  const results = await Promise.all(
+  return Promise.all(
     segments.map((segment) =>
       runFfmpeg([
         "-v", "error",
@@ -206,7 +272,6 @@ export async function splitVideo(inputPath: string, segments: readonly SplitSegm
       ]),
     ),
   );
-  return results;
 }
 
 export interface ThumbnailOptions {
@@ -232,30 +297,56 @@ export async function generateThumbnail(inputPath: string, timestamp: number, ou
 export interface FrameSequenceOptions {
   readonly overwrite?: boolean;
   readonly pattern?: string;
+  readonly maxFrames?: number;
+}
+
+export interface FrameSequenceResult extends FfmpegResult {
+  readonly frames: number;
+  readonly width: number;
+  readonly height: number;
+  readonly directory: string;
+  readonly pattern: string;
 }
 
 /**
  * Write a directory of per-frame PNG images (a frame sequence) for external
- * compositing/interchange. `frames` are raw PNG buffers in frame order.
- * Written directly — no ffmpeg involved — so the sequence is exactly the
- * rendered frames.
+ * compositing/interchange. Frames are written one at a time with zero-based
+ * `%05d` naming, so memory does not grow with frame count.
  */
 export async function writeFrameSequence(
-  frames: readonly Buffer[],
+  frames: FrameSource,
   outputDir: string,
   options: FrameSequenceOptions = {},
-): Promise<FfmpegResult> {
-  const { overwrite = false, pattern = "frame-%05d.png" } = options;
+): Promise<FrameSequenceResult> {
+  const { overwrite = false, pattern = "frame-%05d.png", maxFrames } = options;
   await mkdir(outputDir, { recursive: true });
   const outputPath = join(outputDir, pattern);
-  if (frames.length === 0) return { success: false, outputPath, error: "No frames supplied" };
-  const writes = frames.map((frame, index) => {
-    const name = pattern.replace("%05d", String(index).padStart(5, "0"));
-    return writeFile(join(outputDir, name), frame);
-  });
-  await Promise.all(writes);
-  void overwrite;
-  return { success: true, outputPath };
+  const existing = await stat(join(outputDir, frameFileName(pattern, 0))).catch(() => null);
+  if (existing && !overwrite) {
+    return {
+      success: false,
+      outputPath,
+      error: "Frame sequence already exists (use overwrite)",
+      frames: 0,
+      width: 0,
+      height: 0,
+      directory: outputDir,
+      pattern,
+    };
+  }
+  const written = await writeFramesToDir(frames, outputDir, { pattern, maxFrames });
+  if (written.count === 0) {
+    return { success: false, outputPath, error: "No frames supplied", frames: 0, width: 0, height: 0, directory: outputDir, pattern };
+  }
+  return {
+    success: true,
+    outputPath,
+    frames: written.count,
+    width: written.width,
+    height: written.height,
+    directory: outputDir,
+    pattern,
+  };
 }
 
 export interface AnimatedGifOptions {
@@ -268,23 +359,33 @@ export interface AnimatedGifOptions {
   readonly dither?: "floyd-steinberg" | "sierra-2" | "atkinson" | "none";
   /** Number of loop iterations; 0 = infinite. */
   readonly loops?: number;
+  readonly maxFrames?: number;
 }
+
+export interface AnimatedGifResult extends FfmpegResult {
+  readonly frames: number;
+  readonly width: number;
+  readonly height: number;
+  readonly fileSize: number;
+}
+
+const FFMPEG_DITHER: Readonly<Record<NonNullable<AnimatedGifOptions["dither"]>, string>> = {
+  "floyd-steinberg": "floyd_steinberg",
+  "sierra-2": "sierra2",
+  atkinson: "atkinson",
+  none: "none",
+};
 
 /**
- * Multi-pass GIF encoding with palette optimization and configurable dithering.
- * Pass 1 generates an optimal palette with diff_mode for transparency support.
- * Pass 2 applies the palette with the selected dithering algorithm.
- * Returns the output path and actual file size.
+ * Two-pass GIF encode. Pass 1 writes an optimal palette from the whole
+ * sequence, pass 2 applies that palette to the same sequence, so both passes
+ * read the frames from a spooled directory and memory stays constant.
  */
-export interface GifOptimizedResult extends FfmpegResult {
-  readonly fileSize?: number;
-}
-
-export async function encodeAnimatedGifOptimized(
-  frames: readonly Buffer[],
+export async function encodeAnimatedGif(
+  frames: FrameSource,
   outputPath: string,
   options: AnimatedGifOptions = {},
-): Promise<GifOptimizedResult> {
+): Promise<AnimatedGifResult> {
   const {
     fps = 12,
     overwrite = false,
@@ -292,117 +393,61 @@ export async function encodeAnimatedGifOptimized(
     quality = 8,
     dither = "floyd-steinberg",
     loops = 0,
+    maxFrames,
   } = options;
-
-  const first = frames[0];
-  if (!first) return { success: false, outputPath, error: "No frames supplied" };
-
-  const tempDir = join((await import("node:os")).tmpdir(), `cinecode-gif-${Date.now()}`);
-  await mkdir(tempDir, { recursive: true });
-
+  const work = await mkdtemp(join(tmpdir(), "cinecode-gif-"));
   try {
-    const palettePath = join(tempDir, "palette.png");
-    const maxColors = Math.max(16, Math.round(256 * quality / 8));
+    const written = await writeFramesToDir(frames, work, { maxFrames });
+    if (written.count === 0) {
+      return { success: false, outputPath, error: "No frames supplied", frames: 0, width: 0, height: 0, fileSize: 0 };
+    }
+    const maxColors = Math.max(16, Math.min(256, Math.round((256 * quality) / 8)));
+    const chain = [`fps=${fps}`, ...(maxWidth ? [`scale=${maxWidth}:-1:flags=lanczos`] : [])].join(",");
+    const palettePath = join(work, "palette.png");
+    const source = join(work, written.pattern);
 
-    // Pass 1: generate optimal palette with diff_mode for transparency
-    const paletteResult = await runFfmpeg(
-      [
-        "-v", "error", "-y",
-        "-f", "image2pipe", "-framerate", String(fps), "-i", "-",
-        "-vf", maxWidth
-          ? `fps=${fps},scale=${maxWidth}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=${maxColors}:diff_mode=diff[p];[s1][p]paletteuse=dither=${dither}`
-          : `fps=${fps},split[s0][s1];[s0]palettegen=max_colors=${maxColors}:diff_mode=diff[p];[s1][p]paletteuse=dither=${dither}`,
-        palettePath,
-      ],
-      Buffer.concat([...frames]),
-    );
-
-    if (!paletteResult.success) {
-      return { success: false, outputPath, error: `Palette generation failed: ${paletteResult.error}` };
+    const palettePass = await runFfmpeg([
+      "-v", "error", "-y",
+      "-framerate", String(fps),
+      "-start_number", "0",
+      "-i", source,
+      "-vf", `${chain},palettegen=max_colors=${maxColors}:stats_mode=diff`,
+      palettePath,
+    ]);
+    if (!palettePass.success) {
+      return {
+        success: false,
+        outputPath,
+        error: `Palette generation failed: ${palettePass.error}`,
+        frames: written.count,
+        width: written.width,
+        height: written.height,
+        fileSize: 0,
+      };
     }
 
-    // Pass 2: encode with generated palette
-    const filter = maxWidth
-      ? `fps=${fps},scale=${maxWidth}:-1:flags=lanczos,paletteuse=dither=${dither}:diff_mode=rectangle`
-      : `fps=${fps},paletteuse=dither=${dither}:diff_mode=rectangle`;
-
-    const result = await runFfmpeg(
-      [
-        "-v", "error",
-        ...(overwrite ? ["-y"] : ["-n"]),
-        "-f", "image2pipe", "-framerate", String(fps), "-i", "-",
-        "-i", palettePath,
-        "-filter_complex", filter,
-        "-loop", String(loops),
-        outputPath,
-      ],
-      Buffer.concat([...frames]),
-    );
-
-    const { stat } = await import("node:fs/promises");
-    const fileSize = (await stat(outputPath).catch(() => null))?.size;
-
-    return {
-      success: result.success,
+    const encoded = await runFfmpeg([
+      "-v", "error",
+      ...(overwrite ? ["-y"] : ["-n"]),
+      "-framerate", String(fps),
+      "-start_number", "0",
+      "-i", source,
+      "-i", palettePath,
+      "-lavfi", `[0:v]${chain}[x];[x][1:v]paletteuse=dither=${FFMPEG_DITHER[dither]}:diff_mode=rectangle`,
+      "-loop", String(Math.max(0, Math.round(loops))),
       outputPath,
-      error: result.error,
+    ]);
+    const fileSize = (await stat(outputPath).catch(() => null))?.size ?? 0;
+    return {
+      ...encoded,
+      frames: written.count,
+      width: written.width,
+      height: written.height,
       fileSize,
     };
   } finally {
-    await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+    await rm(work, { recursive: true, force: true }).catch(() => undefined);
   }
-}
-
-/**
- * Drops duplicate consecutive frames (by MD5 hash prefix) and caps total count.
- * Reduces GIF frame count and file size when content is mostly static.
- */
-export interface GifOptimizeOptions {
-  readonly skipDuplicateFrames?: boolean;
-  readonly minFrameDuration?: number;
-  readonly maxFrames?: number;
-}
-
-export function optimizeGifFrames(frames: Buffer[], options: GifOptimizeOptions = {}): Buffer[] {
-  const { skipDuplicateFrames = true, maxFrames } = options;
-  const optimized: Buffer[] = [];
-  let lastHash = "";
-
-  for (const frame of frames) {
-    const hash = createHash("md5").update(frame).digest("hex").slice(0, 8);
-    if (skipDuplicateFrames && hash === lastHash) continue;
-    lastHash = hash;
-    optimized.push(frame);
-    if (maxFrames && optimized.length >= maxFrames) break;
-  }
-  return optimized;
-}
-
-/**
- * Encode rendered PNG frames into an animated GIF with a generated palette
- * for acceptable quality. Deterministic for the same frame buffers.
- */
-export async function encodeAnimatedGif(frames: readonly Buffer[], outputPath: string, options: AnimatedGifOptions = {}): Promise<FfmpegResult> {
-  const { fps = 12, overwrite = false, maxWidth } = options;
-  const first = frames[0];
-  if (!first) return { success: false, outputPath, error: "No frames supplied" };
-  await mkdir(dirname(outputPath), { recursive: true }).catch(() => undefined);
-  const filters = maxWidth
-    ? `fps=${fps},scale=${maxWidth}:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse`
-    : `fps=${fps},split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse`;
-  return runFfmpeg(
-    [
-      "-v", "error",
-      ...(overwrite ? ["-y"] : ["-n"]),
-      "-f", "image2pipe",
-      "-framerate", String(fps),
-      "-i", "-",
-      "-vf", filters,
-      "-loop", "0",
-      outputPath,
-    ],
-    Buffer.concat([...frames]),
-  );
 }
 
 export interface SpriteSheetOptions {
@@ -410,6 +455,9 @@ export interface SpriteSheetOptions {
   readonly padding?: number;
   readonly background?: string;
   readonly overwrite?: boolean;
+  /** Total frame count, needed to size the grid before frames arrive. */
+  readonly frameCount?: number;
+  readonly maxFrames?: number;
 }
 
 export interface SpriteSheetResult extends FfmpegResult {
@@ -418,62 +466,106 @@ export interface SpriteSheetResult extends FfmpegResult {
   readonly cellWidth: number;
   readonly cellHeight: number;
   readonly frames: number;
+  readonly width: number;
+  readonly height: number;
+  readonly metadataPath: string;
 }
 
 /**
  * Compose rendered PNG frames into a sprite sheet (texture atlas) laid out in a
- * grid, writing the atlas PNG plus a JSON metadata sidecar describing each
- * frame's rectangle. Deterministic for the same frame buffers.
+ * grid, writing the atlas PNG plus a JSON sidecar describing each frame's
+ * rectangle. Frames are drawn one at a time from a uniform cell size.
  */
 export async function writeSpriteSheet(
-  frames: readonly Buffer[],
+  frames: FrameSource,
   outputPngPath: string,
   options: SpriteSheetOptions = {},
 ): Promise<SpriteSheetResult> {
-  const { padding = 0, background = "#00000000", overwrite = false } = options;
-  const first = frames[0];
-  if (!first) return { success: false, outputPath: outputPngPath, error: "No frames supplied", columns: 0, rows: 0, cellWidth: 0, cellHeight: 0, frames: 0 };
+  const { padding = 0, background = "#00000000", overwrite = false, frameCount, maxFrames } = options;
+  const metadataPath = outputPngPath.replace(/\.[^.]+$/, "") + ".json";
+  const empty = (error: string): SpriteSheetResult => ({
+    success: false,
+    outputPath: outputPngPath,
+    error,
+    columns: 0,
+    rows: 0,
+    cellWidth: 0,
+    cellHeight: 0,
+    frames: 0,
+    width: 0,
+    height: 0,
+    metadataPath,
+  });
 
-  const images = await Promise.all(frames.map((frame) => loadImage(frame)));
-  const cellWidth = Math.max(...images.map((img) => img.width));
-  const cellHeight = Math.max(...images.map((img) => img.height));
-  const columns = options.columns && options.columns > 0 ? Math.min(options.columns, frames.length) : Math.ceil(Math.sqrt(frames.length));
-  const rows = Math.ceil(frames.length / columns);
+  const total = frameCount ?? (Array.isArray(frames) ? frames.length : undefined);
+  if (total === undefined && options.columns === undefined) {
+    return empty("Sprite sheets from a frame stream need frameCount or columns");
+  }
+  const planned = Math.min(maxFrames ?? total ?? Infinity, total ?? Infinity);
+  const columns = options.columns && options.columns > 0 ? Math.min(options.columns, planned) : Math.ceil(Math.sqrt(planned || 1));
+  const rows = Math.max(1, Math.ceil((planned || 1) / columns));
 
-  const width = columns * cellWidth + (columns - 1) * padding;
-  const height = rows * cellHeight + (rows - 1) * padding;
-  const canvas = new Canvas(width, height);
-  const ctx = canvas.getContext("2d");
-  if (background !== "#00000000") {
-    ctx.fillStyle = background;
-    ctx.fillRect(0, 0, width, height);
-  } else {
-    ctx.clearRect(0, 0, width, height);
+  if (!overwrite) {
+    try {
+      await stat(outputPngPath);
+      return empty("File exists (use overwrite)");
+    } catch {
+      // no existing sheet
+    }
   }
 
+  let cellWidth = 0;
+  let cellHeight = 0;
+  let canvas: Canvas | null = null;
+  let ctx: ReturnType<Canvas["getContext"]> | null = null;
   const rects: { index: number; x: number; y: number; w: number; h: number }[] = [];
-  for (let i = 0; i < images.length; i += 1) {
-    const col = i % columns;
-    const row = Math.floor(i / columns);
-    const x = col * (cellWidth + padding);
-    const y = row * (cellHeight + padding);
-    ctx.drawImage(images[i]!, x, y, images[i]!.width, images[i]!.height);
-    rects.push({ index: i, x, y, w: images[i]!.width, h: images[i]!.height });
+
+  for await (const frame of frameStream(frames)) {
+    if (maxFrames !== undefined && rects.length >= maxFrames) break;
+    if (rects.length >= planned) break;
+    if (!canvas) {
+      ({ width: cellWidth, height: cellHeight } = pngSize(frame));
+      const width = columns * cellWidth + (columns - 1) * padding;
+      const height = rows * cellHeight + (rows - 1) * padding;
+      canvas = new Canvas(width, height);
+      ctx = canvas.getContext("2d");
+      if (background !== "#00000000") {
+        ctx.fillStyle = background;
+        ctx.fillRect(0, 0, width, height);
+      } else {
+        ctx.clearRect(0, 0, width, height);
+      }
+    }
+    const image = await loadImage(frame);
+    const index = rects.length;
+    const x = (index % columns) * (cellWidth + padding);
+    const y = Math.floor(index / columns) * (cellHeight + padding);
+    ctx!.drawImage(image, x, y, image.width, image.height);
+    rects.push({ index, x, y, w: image.width, h: image.height });
   }
+
+  if (!canvas || rects.length === 0) return empty("No frames supplied");
 
   await mkdir(dirname(outputPngPath), { recursive: true });
-  if (!overwrite) {
-    const { access } = await import("node:fs/promises");
-    try {
-      await access(outputPngPath);
-      return { success: false, outputPath: outputPngPath, error: "File exists (use overwrite)", columns, rows, cellWidth, cellHeight, frames: frames.length };
-    } catch { /* ENOENT expected */ }
-  }
+  const width = columns * cellWidth + (columns - 1) * padding;
+  const height = rows * cellHeight + (rows - 1) * padding;
+  await writeFile(outputPngPath, canvas.toBuffer("image/png"));
+  await writeFile(
+    metadataPath,
+    `${JSON.stringify({ width, height, columns, rows, cellWidth, cellHeight, frames: rects }, null, 2)}\n`,
+    "utf-8",
+  );
 
-  const buffer = canvas.toBuffer("image/png");
-  await writeFile(outputPngPath, buffer);
-  const metadataPath = outputPngPath.replace(/\.[^.]+$/, "") + ".json";
-  await writeFile(metadataPath, `${JSON.stringify({ width, height, columns, rows, cellWidth, cellHeight, frames: rects }, null, 2)}\n`, "utf-8");
-
-  return { success: true, outputPath: outputPngPath, columns, rows, cellWidth, cellHeight, frames: frames.length };
+  return {
+    success: true,
+    outputPath: outputPngPath,
+    columns,
+    rows,
+    cellWidth,
+    cellHeight,
+    frames: rects.length,
+    width,
+    height,
+    metadataPath,
+  };
 }

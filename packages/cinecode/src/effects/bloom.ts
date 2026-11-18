@@ -1,7 +1,6 @@
 import { Canvas } from "@napi-rs/canvas";
 import type { EffectInput, EffectProcessor } from "./engine.js";
 import { defineEffect, getData, putData } from "./engine.js";
-import { registerEffect } from "../extensions/index.js";
 import { gaussianBlur } from "./engine.js";
 
 export interface BloomParams {
@@ -56,4 +55,3 @@ export const bloomEffect: EffectProcessor = defineEffect({
   },
 });
 
-registerEffect(bloomEffect);

@@ -116,10 +116,44 @@ export interface AudioTrackState {
   readonly muted: boolean;
 }
 
+export interface ExcludedTrack {
+  readonly id: string;
+  readonly name?: string;
+  readonly reason: string;
+}
+
+export interface MixAllocation {
+  readonly blockFrames: number;
+  readonly scratchBytes: number;
+  readonly outputBytes: number;
+}
+
+export interface ChannelConversion {
+  readonly id: string;
+  readonly name?: string;
+  readonly from: number;
+  readonly to: number;
+  readonly kind: "upmix" | "downmix";
+}
+
+export interface MixReport {
+  readonly durationSeconds: number;
+  readonly tracksMixed: number;
+  readonly mutedTracks: readonly string[];
+  readonly excludedTracks: readonly ExcludedTrack[];
+  readonly channelConversions: readonly ChannelConversion[];
+  readonly peakBeforeLimit: number;
+  readonly peakAfterLimit: number;
+  readonly limiterEngaged: boolean;
+  readonly silent: boolean;
+  readonly allocation: MixAllocation;
+}
+
 export interface MixResult {
   readonly buffer: AudioBuffer;
   readonly peakLevel: number;
   readonly limiterEngaged: boolean;
   readonly limiterDuration: number;
   readonly limiterPeak: number;
+  readonly report: MixReport;
 }

@@ -9,6 +9,7 @@ export {
   type FrameExtractorOptions,
 } from "./frames.js";
 export * from "./conform.js";
+export * from "./media-index.js";
 export * from "./resolver.js";
 export * from "./resolver-types.js";
 export * from "./resolverChain.js";

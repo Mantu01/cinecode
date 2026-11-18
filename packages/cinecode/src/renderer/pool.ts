@@ -85,6 +85,125 @@ export function createCanvasPool(maxPerSize = 4): CanvasPool {
   return pool;
 }
 
+export interface CacheStats {
+  readonly name: string;
+  readonly entries: number;
+  readonly bytes: number;
+  readonly maxBytes: number;
+  readonly evictions: number;
+}
+
+/**
+ * Byte-bounded least-recently-used cache. Reads refresh entry order, so a
+ * canvas used every frame survives while one-off resolution buffers drain.
+ * Stats expose bytes, entries and eviction count so a render can prove its
+ * caches are bounded and shrink after a job.
+ */
+export class ByteBoundedCache<K, V> {
+  private readonly map = new Map<K, V>();
+  private bytes = 0;
+  private evictions = 0;
+  private readonly onEvict: ((key: K, value: V) => void) | undefined;
+
+  constructor(
+    private readonly name: string,
+    private readonly maxBytes: number,
+    private readonly sizeOf: (value: V) => number,
+    onEvict?: (key: K, value: V) => void,
+  ) {
+    this.onEvict = onEvict;
+    registerByteCache(this);
+  }
+
+  get size(): number {
+    return this.map.size;
+  }
+
+  get byteSize(): number {
+    return this.bytes;
+  }
+
+  get(key: K): V | undefined {
+    const value = this.map.get(key);
+    if (value !== undefined) {
+      this.map.delete(key);
+      this.map.set(key, value);
+    }
+    return value;
+  }
+
+  has(key: K): boolean {
+    return this.map.has(key);
+  }
+
+  set(key: K, value: V): void {
+    const previous = this.map.get(key);
+    if (previous !== undefined) {
+      this.bytes -= this.sizeOf(previous);
+      this.map.delete(key);
+    }
+    this.map.set(key, value);
+    this.bytes += this.sizeOf(value);
+    this.evict();
+  }
+
+  delete(key: K): boolean {
+    const value = this.map.get(key);
+    if (value === undefined) return false;
+    this.map.delete(key);
+    this.bytes -= this.sizeOf(value);
+    this.onEvict?.(key, value);
+    return true;
+  }
+
+  clear(): void {
+    for (const [key, value] of this.map) this.onEvict?.(key, value);
+    this.map.clear();
+    this.bytes = 0;
+  }
+
+  keys(): IterableIterator<K> {
+    return this.map.keys();
+  }
+
+  values(): IterableIterator<V> {
+    return this.map.values();
+  }
+
+  stats(): CacheStats {
+    return {
+      name: this.name,
+      entries: this.map.size,
+      bytes: this.bytes,
+      maxBytes: this.maxBytes,
+      evictions: this.evictions,
+    };
+  }
+
+  private evict(): void {
+    while (this.bytes > this.maxBytes && this.map.size > 0) {
+      const oldest = this.map.keys().next().value;
+      if (oldest === undefined) break;
+      const value = this.map.get(oldest);
+      this.map.delete(oldest);
+      this.bytes -= value === undefined ? 0 : this.sizeOf(value);
+      this.evictions += 1;
+      if (value !== undefined) this.onEvict?.(oldest, value);
+    }
+  }
+}
+
+const byteCacheRegistry: { stats(): CacheStats }[] = [];
+
+function registerByteCache(cache: { stats(): CacheStats }): void {
+  byteCacheRegistry.push(cache);
+}
+
+/** Every renderer cache with its current bytes, limit and eviction count. */
+export function getRendererCacheStats(): readonly CacheStats[] {
+  return byteCacheRegistry.map((cache) => cache.stats());
+}
+
 export function evictOldest<K, V>(map: Map<K, V>, maxSize: number): void {
   if (map.size >= maxSize) {
     const firstKey = map.keys().next().value;

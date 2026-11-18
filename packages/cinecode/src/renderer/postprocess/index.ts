@@ -9,5 +9,4 @@ export {
   type FusedColorPass,
   type ColorPassKind,
 } from "./batch.js";
-export { bulge, bulgeEffect, GLOBAL_POST_PROCESS_EFFECTS } from "./effects.js";
-export { resolveGlobalEffect, listGlobalEffects } from "./resolve.js";
+export { bulge, bulgeEffect } from "./effects.js";

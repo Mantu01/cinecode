@@ -1,10 +1,16 @@
 import { Command } from "commander";
-import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { assertExclusive } from "./usage-error.js";
 import { renderStill, setMediaCacheForRenderer } from "../renderer/engine.js";
 import { runReport } from "./run-report.js";
 import { createProjectResolver, reportResolution } from "./project-resolver.js";
+import { registerProjectFonts } from "../renderer/text/fonts.js";
+import { createError, ErrorCode } from "../errors/index.js";
+import { resolveRenderParameters, formatExplainReport, describeExplainReport } from "./precedence.js";
+import { STILL_FORMATS, outputPlanFor, type RenderFormat } from "../core/output-plan.js";
+import { assertOutputFormat } from "../media/formats.js";
+import { encodeStillImage, type StillImageFormat } from "../encoder/outputs.js";
+import { withAtomicOutput } from "../encoder/output.js";
 
 export interface StillOptions {
   composition?: string;
@@ -14,20 +20,32 @@ export interface StillOptions {
   frame?: number;
   time?: string;
   out?: string;
-  format?: "png" | "jpg" | "webp";
+  format?: RenderFormat;
   config?: string;
   root?: string;
   props?: string;
   seed?: number;
+  dryRun?: boolean;
+  explain?: boolean;
+  resolution?: string;
+}
+
+/** Rejects any format that is not a still image, naming the alternatives. */
+function assertStillFormat(format: string): RenderFormat {
+  const normalized = format.toLowerCase();
+  assertOutputFormat(normalized, "image");
+  if (!STILL_FORMATS.includes(normalized as RenderFormat)) {
+    throw createError(
+      ErrorCode.CC2002,
+      { type: "image", path: format },
+      { fixHint: `${format} is not a still image format; use one of ${STILL_FORMATS.join(", ")}.` },
+    );
+  }
+  return normalized as RenderFormat;
 }
 
 export async function stillCommand(options: StillOptions): Promise<void> {
-  const out = options.out ?? "still.png";
-  const format = (options.format ?? "png").toLowerCase();
-  if (format !== "png" && format !== "jpg" && format !== "webp") {
-    const { assertOutputFormat } = await import("../media/formats.js");
-    assertOutputFormat(format, "image");
-  }
+  if (options.format) assertStillFormat(options.format);
   const resolver = createProjectResolver({
     root: options.root,
     config: options.config ?? options.props,
@@ -40,31 +58,88 @@ export async function stillCommand(options: StillOptions): Promise<void> {
   const project = await resolver.resolve();
   reportResolution(project, (options as { verbose?: boolean }).verbose === true);
   const composition = (await resolver.selected())[0]!;
+  const fontResult = registerProjectFonts(project.config.fonts, {
+    projectRoot: project.root,
+    mediaDir: project.config.mediaDir ?? "media",
+  });
+  if (fontResult.errors.length > 0) {
+    const font = fontResult.errors[0]!;
+    throw createError(ErrorCode.CC3006, { font: font.family, text: "font file" }, {
+      location: { file: font.path },
+      fixHint: font.message,
+    });
+  }
+
+  const { parameters, explain } = resolveRenderParameters({
+    flags: {
+      resolution: options.resolution,
+      format: options.format as any,
+      out: options.out,
+      from: options.frame !== undefined ? options.frame : options.time,
+    },
+    selection: {
+      id: project.selection.id,
+      name: composition.name,
+      width: composition.width,
+      height: composition.height,
+      fps: composition.fps,
+      duration: composition.duration,
+    },
+    project: {
+      root: project.root,
+      configPath: project.configPath,
+      manifestPath: project.manifestPath,
+      mode: project.mode,
+      selection: project.selection.id ? `${project.selection.kind} ${project.selection.id}` : project.selection.kind,
+      config: project.config,
+    },
+    kind: "still",
+  });
+
+  runReport.result({ explain: describeExplainReport(explain) });
+
+  if (options.explain || options.dryRun) {
+    console.log(formatExplainReport(explain));
+    return;
+  }
+
   const media = await project.media();
   setMediaCacheForRenderer(media.cache);
 
-  let frame = options.frame ?? 0;
-  if (options.time) {
-    const { parseTimeInput } = await import("./shared.js");
-    frame = parseTimeInput(options.time, composition.fps);
-  }
-  if (frame < 0) frame = 0;
+  const frame = Math.max(0, parameters.frameWindow.value.from);
+  const out = parameters.outputPath.value;
+  const format = assertStillFormat(parameters.format.value);
+  const plan = outputPlanFor(format);
 
   runReport.expectArtifact("image");
-  const canvas = await renderStill(composition, frame, options.seed);
+  const canvas = await renderStill(
+    {
+      ...composition,
+      width: parameters.width.value,
+      height: parameters.height.value,
+      fps: parameters.fps.value,
+    },
+    frame,
+    options.seed,
+  );
 
-  let buffer: Buffer;
-  if (format === "png") {
-    buffer = (canvas as { toBuffer(mime: "image/png"): Buffer }).toBuffer("image/png");
-  } else if (format === "webp") {
-    buffer = (canvas as { toBuffer(mime: "image/webp", quality?: number): Buffer }).toBuffer("image/webp", 0.9);
-  } else {
-    buffer = (canvas as { toBuffer(mime: "image/jpeg", quality?: number): Buffer }).toBuffer("image/jpeg", 0.9);
-  }
-  writeFileSync(out, buffer);
+  const png = (canvas as { toBuffer(mime: "image/png"): Buffer }).toBuffer("image/png");
+  await withAtomicOutput(out, async (staged) => {
+    if (format === "png") {
+      await (await import("node:fs/promises")).writeFile(staged, png);
+      return;
+    }
+    const encoded = await encodeStillImage(png, staged, format as StillImageFormat, {
+      overwrite: true,
+      alpha: plan.alpha,
+    });
+    if (!encoded.success) {
+      throw createError(ErrorCode.CC4002, { details: encoded.error ?? "still encoding failed" }, { location: { file: out } });
+    }
+  });
   runReport.artifact({ kind: "image", path: resolve(out), units: 1, unit: "frame" });
   runReport.result({ composition: composition.name, frame, output: resolve(out), format });
-  console.log(`Rendered frame ${frame} (${composition.width}x${composition.height}) to ${out}`);
+  console.log(`Rendered frame ${frame} (${parameters.width.value}x${parameters.height.value}) to ${out}`);
 }
 
 export function createStillCommand(): Command {
@@ -77,8 +152,11 @@ export function createStillCommand(): Command {
     .option("-f, --frame <number>", "Frame number", (v) => parseInt(v, 10))
     .option("-t, --time <timecode|seconds>", "Time (HH:MM:SS:FF or seconds)")
     .option("-o, --out <path>", "Output file path")
-    .option("--format <png|jpg|webp>", "Output format")
+    .option("--format <format>", `Output format: ${STILL_FORMATS.join(", ")}`)
+    .option("--resolution <WIDTHxHEIGHT>", "Override resolution")
     .option("--seed <number>", "Random seed", (v) => parseInt(v, 10))
+    .option("--dry-run", "Print render plan without rendering", false)
+    .option("--explain", "Print resolved parameters and their origins without rendering", false)
     .action(async (options: StillOptions) => {
       assertExclusive([
         ["--frame", options.frame !== undefined],

@@ -58,8 +58,4 @@ export default defineMain({
       tags: ["master"],
     },
   ],
-
-  // Reserved for future-proofing.
-  characters: [],
-  motions: [],
 });

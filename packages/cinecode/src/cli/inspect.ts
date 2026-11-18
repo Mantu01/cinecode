@@ -4,6 +4,7 @@ import { parseTimeInput } from "./shared.js";
 import { allClips } from "../core/types/tracks.js";
 import { runReport } from "./run-report.js";
 import { createProjectResolver, reportResolution } from "./project-resolver.js";
+import { resolveRenderParameters, describeExplainReport } from "./precedence.js";
 
 interface InspectOptions {
   composition?: string;
@@ -227,7 +228,30 @@ export async function inspectCommand(options: InspectOptions): Promise<void> {
   const resolution = await resolver.resolve();
   reportResolution(resolution, true);
   const composition = (await resolver.selected())[0]!;
-  const fps = composition.fps;
+  const timelineValidation = (await resolution.validateCompositions()).find(
+    (entry) => entry.composition === composition.name,
+  );
+  const { parameters, explain } = resolveRenderParameters({
+    selection: {
+      name: composition.name,
+      width: composition.width,
+      height: composition.height,
+      fps: composition.fps,
+      duration: composition.duration,
+    },
+    project: {
+      root: resolution.root,
+      configPath: resolution.configPath,
+      manifestPath: resolution.manifestPath,
+      mode: resolution.mode,
+      selection: resolution.selection.id ? `${resolution.selection.kind} ${resolution.selection.id}` : resolution.selection.kind,
+      config: resolution.config,
+    },
+  });
+  runReport.result({ explain: describeExplainReport(explain) });
+  const fps = parameters.fps.value;
+  const width = parameters.width.value;
+  const height = parameters.height.value;
   const totalFrames = composition.duration ? Math.ceil((typeof composition.duration === "number" ? composition.duration : parseFloat(composition.duration as string)) * fps) : 0;
 
   let targetFrame: number | null = null;
@@ -244,11 +268,18 @@ export async function inspectCommand(options: InspectOptions): Promise<void> {
     const clips = allClips(composition.rootTimeline);
     const output = {
       composition: composition.name,
-      resolution: `${composition.width}x${composition.height}`,
+      resolution: `${width}x${height}`,
       fps,
       duration: composition.duration,
       totalFrames,
       background: composition.background,
+      validation: timelineValidation
+        ? {
+            valid: timelineValidation.valid,
+            errors: timelineValidation.errors,
+            warnings: timelineValidation.warnings,
+          }
+        : undefined,
       clips: clips.map(clip => {
         const base = {
           start: clip.start,
@@ -273,6 +304,17 @@ export async function inspectCommand(options: InspectOptions): Promise<void> {
 
   console.log(`Composition: ${composition.name} (${composition.width}\u00d7${composition.height} @ ${fps}fps, ${composition.duration ?? "?"}s, ${totalFrames} frames)`);
   console.log(`Background: ${composition.background}`);
+  if (timelineValidation) {
+    console.log(
+      `Validation: ${timelineValidation.errors.length} error(s), ${timelineValidation.warnings.length} warning(s)`,
+    );
+    for (const issue of [...timelineValidation.errors, ...timelineValidation.warnings]) {
+      const where = [issue.clipName ? `clip ${issue.clipName}` : "", issue.trackName ? `track ${issue.trackName}` : "", issue.timecode ?? ""]
+        .filter(Boolean)
+        .join(", ");
+      console.log(`  ${issue.severity} [${issue.code}] ${issue.message}${where ? ` (${where})` : ""}`);
+    }
+  }
   console.log("");
 
   const clips = allClips(composition.rootTimeline);

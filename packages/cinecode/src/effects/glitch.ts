@@ -1,5 +1,4 @@
 import type { EffectProcessor } from "./engine.js";
-import { registerEffect } from "../extensions/index.js";
 import { getData, putData, type EffectInput } from "./engine.js";
 import { deriveSeed, random, type SeededRandom } from "../core/random/index.js";
 
@@ -168,4 +167,3 @@ export const glitchEffect: EffectProcessor = {
   },
 };
 
-registerEffect(glitchEffect);

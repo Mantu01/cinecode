@@ -1,7 +1,6 @@
 import { createCanvas, type Canvas } from "@napi-rs/canvas";
 import type { EffectInput, EffectProcessor } from "./engine.js";
 import { defineEffect } from "./engine.js";
-import { registerEffect } from "../extensions/index.js";
 import { noise2d } from "../core/random/index.js";
 import { blendOverlayCanvas } from "./overlay.js";
 
@@ -140,4 +139,3 @@ export const lightLeakEffect: EffectProcessor = defineEffect({
   },
 });
 
-registerEffect(lightLeakEffect);

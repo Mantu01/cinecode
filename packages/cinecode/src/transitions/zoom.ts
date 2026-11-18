@@ -1,6 +1,5 @@
 import type { SKRSContext2D } from "@napi-rs/canvas";
 import { defineTransition, type TransitionContext, type TransitionProcessor } from "./engine.js";
-import { registerTransition } from "../extensions/index.js";
 
 export type ZoomDirection = "in" | "out";
 
@@ -41,4 +40,3 @@ export const zoomTransitionProcessor: TransitionProcessor = defineTransition({
     zoomTransition(ctx, context, (params.direction as ZoomDirection) ?? "out", params.speed as number),
 });
 
-registerTransition(zoomTransitionProcessor);

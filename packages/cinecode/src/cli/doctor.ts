@@ -101,24 +101,38 @@ async function checkEncoder(): Promise<DoctorCheck> {
   }
 }
 
-async function checkFonts(config: CinecodeConfig): Promise<DoctorCheck> {
-  try {
-    if (config.fonts) {
-      for (const font of config.fonts) {
-        await import(font.src);
-      }
-      return { name: "Fonts", status: "PASS", message: `${config.fonts.length} font(s) loaded` };
-    }
+async function checkFonts(config: CinecodeConfig, root: string): Promise<DoctorCheck> {
+  if (!config.fonts || config.fonts.length === 0) {
     return { name: "Fonts", status: "PASS", message: "No custom fonts configured" };
-  } catch (e) {
-    return { name: "Fonts", status: "FAIL", message: `Font loading failed: ${e instanceof Error ? e.message : "Unknown error"}`, fixable: false };
   }
+  const { registerProjectFonts, describeRegisteredFonts } = await import("../renderer/text/fonts.js");
+  const result = registerProjectFonts(config.fonts, {
+    projectRoot: root,
+    mediaDir: config.mediaDir ?? "media",
+  });
+  if (result.errors.length > 0) {
+    const first = result.errors[0]!;
+    return {
+      name: "Fonts",
+      status: "FAIL",
+      message: `Font registration failed for "${first.family}": ${first.message}`,
+      fixable: false,
+    };
+  }
+  const description = describeRegisteredFonts();
+  return {
+    name: "Fonts",
+    status: result.warnings.length > 0 ? "WARN" : "PASS",
+    message: `${description.count} font(s) registered: ${description.families.join(", ")}${result.warnings.length > 0 ? ` (${result.warnings.length} duplicate family entry ignored)` : ""}`,
+    fixable: false,
+  };
 }
 
 async function checkFolders(config: CinecodeConfig): Promise<DoctorCheck> {
   const outputDir = config.outputDir ?? "output";
   const cacheDir = config.cacheDir ?? ".cinecode/cache";
-  const dirs = [config.sourceDir, outputDir, cacheDir];
+  const mediaDir = config.mediaDir ?? "media";
+  const dirs = [config.sourceDir, mediaDir, outputDir, cacheDir];
   const issues: string[] = [];
 
   for (const dir of dirs) {
@@ -130,7 +144,7 @@ async function checkFolders(config: CinecodeConfig): Promise<DoctorCheck> {
   }
 
   if (issues.length === 0) {
-    return { name: "Folders", status: "PASS", message: "sourceDir, outputDir, cacheDir exist and writable" };
+    return { name: "Folders", status: "PASS", message: "sourceDir, mediaDir, outputDir, cacheDir exist and writable" };
   }
   return { name: "Folders", status: "FAIL", message: `Not writable: ${issues.join(", ")}`, fixable: true };
 }
@@ -250,7 +264,7 @@ export async function doctorCommand(options: { config?: string; root?: string; f
     checkRenderer(),
     checkEncoder(),
     checkFfmpeg(),
-    checkFonts(config),
+    checkFonts(config, resolution.root),
     checkFolders(config),
     checkDiskSpace(),
     checkConfig(config, resolution.configPath),
@@ -267,7 +281,8 @@ export async function doctorCommand(options: { config?: string; root?: string; f
         if (check.name === "Folders") {
           const outputDir = config.outputDir ?? "output";
           const cacheDir = config.cacheDir ?? ".cinecode/cache";
-          for (const dir of [config.sourceDir, outputDir, cacheDir]) {
+          const mediaDir = config.mediaDir ?? "media";
+          for (const dir of [config.sourceDir, mediaDir, outputDir, cacheDir]) {
             try {
               await import("node:fs/promises").then(fs => fs.mkdir(resolve(dir), { recursive: true }));
             } catch {
@@ -285,6 +300,7 @@ export async function doctorCommand(options: { config?: string; root?: string; f
         if (check.name === ".gitignore") {
           await ensureGitignoreEntries({
             sourceDir: config.sourceDir,
+            mediaDir: config.mediaDir ?? "media",
             outputDir: config.outputDir ?? "output",
             cacheDir: config.cacheDir ?? ".cinecode/cache",
             projectRoot: resolution.root,

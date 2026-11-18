@@ -1,8 +1,8 @@
 import { Command } from "commander";
 import { writeFileSync } from "node:fs";
-import { stat as fsStat } from "node:fs/promises";
 import { runReport } from "./run-report.js";
 import { createProjectResolver, reportResolution } from "./project-resolver.js";
+import { inspectMedia, type MediaFileType } from "../media/index.js";
 
 export interface MediaListOptions {
   json?: boolean;
@@ -13,12 +13,13 @@ export interface MediaListOptions {
 
 export interface MediaListOutput {
   readonly name: string;
-  readonly type: "video" | "image" | "audio";
+  readonly type: MediaFileType;
   readonly duration: number;
   readonly resolution: string;
   readonly size: number;
   readonly origin: "local" | "cloud";
-  readonly status: "ok" | "unreadable" | "referenced-but-missing";
+  readonly status: "ok" | "unreadable" | "referenced-but-missing" | "unreferenced";
+  readonly referencedBy?: readonly string[];
 }
 
 export async function mediaListCommand(options: MediaListOptions): Promise<void> {
@@ -27,33 +28,47 @@ export async function mediaListCommand(options: MediaListOptions): Promise<void>
   reportResolution(resolution, (options as { verbose?: boolean }).verbose === true);
   const access = await resolution.media();
 
-  const media = await access.catalog.listMedia();
-  const cloudMedia = access.catalog.getCloudMedia();
-
+  const entries = access.index.list();
   const output: MediaListOutput[] = [];
 
-  for (const m of media) {
-    const fileStat = await fsStat(m.path).catch(() => null);
-    output.push({
-      name: m.name,
-      type: m.type,
-      duration: m.metadata.duration,
-      resolution: `${m.metadata.width}x${m.metadata.height}`,
-      size: fileStat?.size ?? 0,
-      origin: "local",
-      status: "ok",
-    });
-  }
+  for (const entry of entries) {
+    if (!entry.exists) {
+      output.push({
+        name: entry.name,
+        type: entry.type,
+        duration: 0,
+        resolution: "unknown",
+        size: 0,
+        origin: entry.origin,
+        status: "referenced-but-missing",
+        referencedBy: entry.referencedBy.length > 0 ? entry.referencedBy : undefined,
+      });
+      continue;
+    }
 
-  for (const c of cloudMedia) {
+    let duration = 0;
+    let resolutionStr = "unknown";
+    let status: "ok" | "unreadable" | "unreferenced" = entry.state === "unreferenced" ? "unreferenced" : "ok";
+
+    if (entry.type === "video" || entry.type === "image" || entry.type === "audio") {
+      try {
+        const metadata = await inspectMedia(entry.absolutePath, { cache: access.cache, sourceDir: resolution.config.sourceDir });
+        duration = metadata.duration ?? 0;
+        resolutionStr = metadata.width && metadata.height ? `${metadata.width}x${metadata.height}` : "unknown";
+      } catch {
+        status = "unreadable";
+      }
+    }
+
     output.push({
-      name: c.name ?? c.url.split("/").pop() ?? "unknown",
-      type: "video",
-      duration: 0,
-      resolution: "unknown",
-      size: 0,
-      origin: "cloud",
-      status: "referenced-but-missing",
+      name: entry.name,
+      type: entry.type,
+      duration,
+      resolution: resolutionStr,
+      size: entry.size,
+      origin: entry.origin,
+      status,
+      referencedBy: entry.referencedBy.length > 0 ? entry.referencedBy : undefined,
     });
   }
 
@@ -80,7 +95,7 @@ function formatTable(items: MediaListOutput[]): string {
     return "No media files found.";
   }
 
-  const headers = ["name", "type", "duration", "resolution", "size", "origin", "status"];
+  const headers = ["name", "type", "duration", "resolution", "size", "origin", "status", "referenced-by"];
   const rows = items.map(item => [
     item.name,
     item.type,
@@ -89,6 +104,7 @@ function formatTable(items: MediaListOutput[]): string {
     formatSize(item.size),
     item.origin,
     item.status,
+    (item.referencedBy ?? []).join(", ") || "-",
   ]);
 
   const colWidths = headers.map((h, i) => Math.max(

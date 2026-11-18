@@ -2,6 +2,7 @@ import { loadComposition, selectComposition } from "../cli/composition-loader.js
 import { parseTimeInput } from "../cli/shared.js";
 import { createRenderJob, type RenderOptions, type RenderJob } from "../pipeline/index.js";
 import { getDefaultCacheDir } from "../cli/render.js";
+import { resolveRenderParameters } from "../cli/precedence.js";
 import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
@@ -25,6 +26,12 @@ export interface RenderApiOptions {
   readonly quality?: "final" | "medium" | "low";
   /** Chunk size in frames for worker parallelism. */
   readonly chunkSize?: number;
+  /** Render memory budget in MiB (frames queued + chunks in flight). */
+  readonly memoryBudgetMb?: number;
+  /** Configured fonts registered in every render process before drawing. */
+  readonly fonts?: readonly import("../core/types/index.js").FontEntry[];
+  readonly projectRoot?: string;
+  readonly mediaDir?: string;
 }
 
 export interface RenderApiResult {
@@ -60,53 +67,54 @@ export async function render(options: RenderApiOptions): Promise<RenderJob> {
   const compositions = await loadComposition(entry);
   const composition = selectComposition(compositions, compositionName);
 
-  const effectiveFps = fps ?? composition.fps;
-  const effectiveResolution = resolution ?? {
-    width: composition.width,
-    height: composition.height,
-  };
+  const { parameters } = resolveRenderParameters({
+    flags: {
+      fps,
+      width: resolution?.width,
+      height: resolution?.height,
+      out,
+      from,
+      to,
+      concurrency,
+      memoryBudgetMb: options.memoryBudgetMb,
+      preview,
+      quality: quality as any,
+    },
+    selection: {
+      name: composition.name,
+      width: composition.width,
+      height: composition.height,
+      fps: composition.fps,
+      duration: composition.duration,
+    },
+  });
 
-  let fromFrame = 0;
-  let toFrame: number | undefined;
-
-  if (composition.duration) {
-    const dur =
-      typeof composition.duration === "number"
-        ? composition.duration
-        : parseFloat(composition.duration as string);
-    toFrame = Math.ceil(dur * effectiveFps);
-  }
-
-  if (from !== undefined) {
-    fromFrame = typeof from === "number" ? from : parseTimeInput(from as string, effectiveFps);
-  }
-  if (to !== undefined) {
-    toFrame = typeof to === "number" ? to : parseTimeInput(to as string, effectiveFps);
-  }
-
-  const outputName = `${composition.name}${preview ? ".preview" : ""}`;
-  const outputPath = out ?? resolve("output", `${outputName}.mp4`);
+  const outputPath = parameters.outputPath.value;
   await mkdir(dirname(outputPath), { recursive: true });
 
   const renderOptions: RenderOptions = {
     composition: {
       ...composition,
-      width: effectiveResolution.width,
-      height: effectiveResolution.height,
-      fps: effectiveFps,
+      width: parameters.width.value,
+      height: parameters.height.value,
+      fps: parameters.fps.value,
     },
     outputPath,
     cacheDir,
     seed,
-    concurrency,
+    concurrency: parameters.concurrency.value,
     chunkSize: options.chunkSize ?? 8,
-    quality: quality ?? (preview ? "preview" : "final"),
+    memoryBudgetMb: parameters.memoryBudgetMb.value,
+    quality: parameters.quality.value,
     overwrite,
     fresh,
     noCache,
-    fromFrame,
-    toFrame,
+    fromFrame: parameters.frameWindow.value.from,
+    toFrame: parameters.frameWindow.value.to,
     silent: true,
+    fonts: options.fonts,
+    projectRoot: options.projectRoot,
+    mediaDir: options.mediaDir,
   };
 
   return createRenderJob(renderOptions);

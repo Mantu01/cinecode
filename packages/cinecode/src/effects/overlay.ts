@@ -3,7 +3,6 @@ import { readdir, stat } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
 import type { EffectInput, EffectProcessor } from "./engine.js";
 import { defineEffect, getData, putData } from "./engine.js";
-import { registerEffect } from "../extensions/index.js";
 import { noise2d } from "../core/random/index.js";
 
 export type OverlayBlendMode = "screen" | "add" | "multiply" | "overlay" | "soft-light" | "color-dodge";
@@ -212,4 +211,3 @@ export const overlayEffect: EffectProcessor = defineEffect({
   },
 });
 
-registerEffect(overlayEffect);

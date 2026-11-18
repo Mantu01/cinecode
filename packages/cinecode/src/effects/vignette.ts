@@ -1,5 +1,4 @@
 import type { EffectProcessor } from "./engine.js";
-import { registerEffect } from "../extensions/index.js";
 import { getData, putData, type EffectInput } from "./engine.js";
 import { parseColor } from "../renderer/color/parse.js";
 
@@ -190,4 +189,3 @@ export const vignetteEffect: EffectProcessor = {
   },
 };
 
-registerEffect(vignetteEffect);

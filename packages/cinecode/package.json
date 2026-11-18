@@ -57,12 +57,7 @@
     "CHANGELOG.md",
     "LICENSE"
   ],
-  "sideEffects": [
-    "./dist/esm/effects/*.js",
-    "./dist/esm/transitions/*.js",
-    "./dist/esm/audio/reverb/register.js",
-    "./dist/esm/renderer/postprocess/effects.js"
-  ],
+  "sideEffects": false,
   "publishConfig": {
     "access": "public",
     "provenance": true

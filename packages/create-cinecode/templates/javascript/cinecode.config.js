@@ -19,6 +19,7 @@ export default defineConfig({
   project: {
     entry: "./main.js",
     sourceDir: "./src",
+    mediaDir: "./media",
     outputDir: "./output",
     cacheDir: ".cinecode/cache",
   },

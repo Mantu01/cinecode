@@ -10,19 +10,6 @@ export interface TransitionContext {
   readonly seed: number;
 }
 
-export class UnknownTransitionError extends Error {
-  readonly transitionName: string;
-  readonly available: readonly string[];
-
-  constructor(name: string, available: readonly string[]) {
-    const suggestion = available.length > 0 ? `. Available: ${available.join(", ")}` : "";
-    super(`Unknown transition "${name}"${suggestion}`);
-    this.name = "UnknownTransitionError";
-    this.transitionName = name;
-    this.available = available;
-  }
-}
-
 export interface TransitionParamSpec {
   readonly default: unknown;
   readonly type: "number" | "string" | "boolean";

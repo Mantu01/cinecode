@@ -1,25 +1,12 @@
-import { BUILTIN_EFFECTS, type EffectInput, type EffectProcessor } from "../effects/engine.js";
-import { BUILTIN_TRANSITIONS, type TransitionContext, type TransitionProcessor } from "../transitions/engine.js";
+import { createBuiltinRegistry } from "./bootstrap.js";
+import { ExtensionRegistry, type AudioProcessorExtension, type ExtensionKind } from "./registry.js";
+import type { EffectProcessor } from "../effects/engine.js";
+import type { TransitionProcessor } from "../transitions/engine.js";
 import type { MediaResolver } from "../media/resolver-types.js";
 import { addMediaResolverToChain } from "../media/resolverChain.js";
 
-export type ExtensionKind =
-  | "codec"
-  | "effect"
-  | "transition"
-  | "audioProcessor"
-  | "mediaSource"
-  | "mediaResolver"
-  | "encoder"
-  | "decoder"
-  | "imageProcessor"
-  | "renderer"
-  | "command";
-
-export interface AudioProcessorExtension {
-  readonly name: string;
-  readonly process: (buffer: import("../audio/types.js").AudioBuffer, params: Readonly<Record<string, unknown>>) => import("../audio/types.js").AudioBuffer | Promise<import("../audio/types.js").AudioBuffer>;
-}
+export * from "./registry.js";
+export * from "./bootstrap.js";
 
 export interface MediaSourceResolution {
   readonly path: string;
@@ -39,88 +26,10 @@ export interface CodecExtension {
   readonly description?: string;
 }
 
-export interface ExtensionSlot<T> {
-  readonly kind: ExtensionKind;
-  register(name: string, implementation: T): void;
-  get(name: string): T | undefined;
-  has(name: string): boolean;
-  list(): readonly { readonly name: string; readonly implementation: T }[];
-  unregister(name: string): boolean;
-}
-
-function createSlot<T>(kind: ExtensionKind): ExtensionSlot<T> {
-  const entries = new Map<string, T>();
-  return {
-    kind,
-    register(name, implementation) {
-      if (!name) throw new Error(`Extension name for ${kind} must be a non-empty string`);
-      entries.set(name, implementation);
-    },
-    get: (name) => entries.get(name),
-    has: (name) => entries.has(name),
-    list: () => [...entries.entries()].map(([name, implementation]) => ({ name, implementation })),
-    unregister: (name) => entries.delete(name),
-  };
-}
-
-export interface ExtensionSummary {
-  readonly kind: ExtensionKind;
-  readonly name: string;
-  readonly implementation: unknown;
-}
-
-export class ExtensionRegistry {
-  private readonly slots = new Map<ExtensionKind, ExtensionSlot<unknown>>();
-
-  slot<T>(kind: ExtensionKind): ExtensionSlot<T> {
-    let slot = this.slots.get(kind);
-    if (!slot) {
-      slot = createSlot<unknown>(kind);
-      this.slots.set(kind, slot);
-    }
-    return slot as ExtensionSlot<T>;
-  }
-
-  register<T>(kind: ExtensionKind, name: string, implementation: T): void {
-    this.slot<T>(kind).register(name, implementation);
-  }
-
-  get<T>(kind: ExtensionKind, name: string): T | undefined {
-    return this.slot<T>(kind).get(name);
-  }
-
-  has(kind: ExtensionKind, name: string): boolean {
-    return this.slot<unknown>(kind).has(name);
-  }
-
-  unregister(kind: ExtensionKind, name: string): boolean {
-    return this.slot<unknown>(kind).unregister(name);
-  }
-
-  list<T>(kind: ExtensionKind): readonly { readonly name: string; readonly implementation: T }[] {
-    return this.slot<T>(kind).list();
-  }
-
-  listAll(): readonly ExtensionSummary[] {
-    const summaries: ExtensionSummary[] = [];
-    for (const [kind, slot] of this.slots) {
-      for (const { name, implementation } of slot.list()) {
-        summaries.push({ kind, name, implementation });
-      }
-    }
-    return summaries;
-  }
-
-  clear(kind?: ExtensionKind): void {
-    if (kind) this.slots.delete(kind);
-    else this.slots.clear();
-  }
-}
-
 let defaultRegistry: ExtensionRegistry | null = null;
 
 export function getExtensions(): ExtensionRegistry {
-  if (!defaultRegistry) defaultRegistry = new ExtensionRegistry();
+  if (!defaultRegistry) defaultRegistry = createBuiltinRegistry();
   return defaultRegistry;
 }
 
@@ -133,10 +42,15 @@ export function registerEffect(processor: EffectProcessor): void {
 }
 
 export function resolveEffect(name: string): EffectProcessor | undefined {
-  return (
-    getExtensions().slot<EffectProcessor>("effect").get(name) ??
-    BUILTIN_EFFECTS.find((effect) => effect.name === name)
-  );
+  return getExtensions().slot<EffectProcessor>("effect").get(name);
+}
+
+export function listEffects(): readonly string[] {
+  return getExtensions()
+    .slot<EffectProcessor>("effect")
+    .list()
+    .map((entry) => entry.name)
+    .sort();
 }
 
 export function registerTransition(processor: TransitionProcessor): void {
@@ -144,16 +58,15 @@ export function registerTransition(processor: TransitionProcessor): void {
 }
 
 export function resolveTransition(name: string): TransitionProcessor | undefined {
-  return (
-    getExtensions().slot<TransitionProcessor>("transition").get(name) ??
-    BUILTIN_TRANSITIONS.find((transition) => transition.name === name)
-  );
+  return getExtensions().slot<TransitionProcessor>("transition").get(name);
 }
 
 export function listTransitions(): readonly string[] {
-  const names = new Set<string>(BUILTIN_TRANSITIONS.map((transition) => transition.name));
-  for (const entry of getExtensions().slot<TransitionProcessor>("transition").list()) names.add(entry.name);
-  return [...names].sort();
+  return getExtensions()
+    .slot<TransitionProcessor>("transition")
+    .list()
+    .map((entry) => entry.name)
+    .sort();
 }
 
 export function registerAudioProcessor(processor: AudioProcessorExtension): void {
@@ -195,13 +108,3 @@ export function resolveCodec(name: string): CodecExtension | undefined {
 export function resolveExtension<T>(kind: ExtensionKind, name: string): T | undefined {
   return getExtensions().slot<T>(kind).get(name);
 }
-
-for (const effect of BUILTIN_EFFECTS) {
-  getExtensions().slot<EffectProcessor>("effect").register(effect.name, effect);
-}
-
-for (const transition of BUILTIN_TRANSITIONS) {
-  getExtensions().slot<TransitionProcessor>("transition").register(transition.name, transition);
-}
-
-export type { EffectInput, EffectProcessor, TransitionContext, TransitionProcessor };

@@ -190,13 +190,18 @@ export interface MainDef extends MainManifest {
  * @returns A MainDef wrapping the manifest
  */
 export function defineMain(manifest: MainManifest): MainDef {
-  return {
+  const def: MainDef = {
     kind: "main",
     images: manifest.images ?? [],
     audio: manifest.audio ?? [],
     scenes: manifest.scenes ?? [],
     timelines: manifest.timelines ?? [],
-    characters: manifest.characters ?? [],
-    motions: manifest.motions ?? [],
   };
+  if (manifest.characters !== undefined) {
+    (def as any).characters = manifest.characters;
+  }
+  if (manifest.motions !== undefined) {
+    (def as any).motions = manifest.motions;
+  }
+  return def;
 }

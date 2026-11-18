@@ -1,5 +1,4 @@
 import type { EffectProcessor } from "./engine.js";
-import { registerEffect } from "../extensions/index.js";
 import { getData, putData, type EffectInput } from "./engine.js";
 import { parseColor } from "../renderer/color/parse.js";
 import { rgbToHsv, hueDifference } from "./hsv.js";
@@ -77,4 +76,3 @@ export const chromaKeyEffect: EffectProcessor = {
   },
 };
 
-registerEffect(chromaKeyEffect);

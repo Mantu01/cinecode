@@ -22,11 +22,13 @@ function isInCinecodeBlock(lines: string[], index: number): boolean {
 }
 
 export interface GitignoreManagerOptions {
-  readonly sourceDir: string;
+  readonly sourceDir?: string;
+  readonly mediaDir?: string;
   readonly outputDir: string;
   readonly cacheDir: string;
   readonly projectRoot: string;
   readonly enabled: boolean;
+  readonly ignoreMedia?: boolean;
 }
 
 export async function ensureGitignoreEntries(options: GitignoreManagerOptions): Promise<string[]> {
@@ -49,7 +51,12 @@ export async function ensureGitignoreEntries(options: GitignoreManagerOptions): 
     existingLines = [];
   }
 
-  const requiredEntries = [normalizeEntry(options.outputDir), normalizeEntry(options.cacheDir)].filter(Boolean);
+  const entries = [normalizeEntry(options.outputDir), normalizeEntry(options.cacheDir)];
+  if (options.ignoreMedia && options.mediaDir) {
+    entries.push(normalizeEntry(options.mediaDir));
+  }
+  const forbidden = options.sourceDir ? normalizeEntry(options.sourceDir) : "";
+  const requiredEntries = entries.filter(e => Boolean(e) && e !== forbidden);
 
   const newLines = [...existingLines];
   let blockStartIndex = -1;
@@ -116,7 +123,12 @@ export async function removeGitignoreEntries(options: GitignoreManagerOptions): 
   const content = readFileSync(gitignorePath, "utf-8");
   const lines = content.split(/\r?\n/);
 
-  const requiredEntries = new Set([normalizeEntry(options.outputDir), normalizeEntry(options.cacheDir)].filter(Boolean));
+  const entries = [normalizeEntry(options.outputDir), normalizeEntry(options.cacheDir)];
+  if (options.ignoreMedia && options.mediaDir) {
+    entries.push(normalizeEntry(options.mediaDir));
+  }
+  const forbidden = options.sourceDir ? normalizeEntry(options.sourceDir) : "";
+  const requiredEntries = new Set(entries.filter(e => Boolean(e) && e !== forbidden));
 
   const newLines = lines.filter((line, index) => {
     const trimmed = line.trim();
@@ -169,7 +181,12 @@ export async function checkGitignoreEntries(options: GitignoreManagerOptions): P
     existingLines = [];
   }
 
-  const requiredEntries = [normalizeEntry(options.outputDir), normalizeEntry(options.cacheDir)].filter(Boolean);
+  const entries = [normalizeEntry(options.outputDir), normalizeEntry(options.cacheDir)];
+  if (options.ignoreMedia && options.mediaDir) {
+    entries.push(normalizeEntry(options.mediaDir));
+  }
+  const forbidden = options.sourceDir ? normalizeEntry(options.sourceDir) : "";
+  const requiredEntries = entries.filter(e => Boolean(e) && e !== forbidden);
 
   const present: string[] = [];
   const missing: string[] = [];

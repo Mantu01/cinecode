@@ -23,7 +23,7 @@ import type {
 } from "../core/types/index.js";
 import type { FrameConversion } from "../core/time/index.js";
 import { createConversion, createVfrConversion, frameToSeconds } from "../core/time/index.js";
-import { computeClipSpan, validateTimeline } from "../core/validation/index.js";
+import { computeClipSpan, validateComposition, compositionValidationError } from "../core/validation/index.js";
 import { extractFramesInMemory, type ExtractedFrame } from "../media/frames.js";
 import { calculateSourceFrame, type ConformParams } from "../media/conform.js";
 import type { Rgba, Gradient } from "./color/types.js";
@@ -42,9 +42,9 @@ import type { TextStyle } from "./text/engine.js";
 import { prepareText, checkMissingGlyphs } from "./text/engine.js";
 import type { CompositedLayer, Mask, Matte } from "./composite/engine.js";
 import { createCanvas, createContext, clearCanvas, compositeLayers } from "./composite/engine.js";
-import { createEffectInput, clearEffectCache } from "../effects/engine.js";
-import { resolveEffect, resolveTransition, listTransitions } from "../extensions/index.js";
-import { UnknownTransitionError } from "../transitions/engine.js";
+import { createEffectInput, clearTempCanvasPool } from "../effects/engine.js";
+import { createError, ErrorCode, recordDegradation, type ErrorLocation } from "../errors/index.js";
+import { getDefaultRenderRuntime, type RenderRuntime } from "./runtime.js";
 import { parseSvgSource } from "../svg/parser.js";
 import { drawSvg } from "../svg/renderer.js";
 import { resolveEmitterConfig } from "../particles/types.js";
@@ -91,7 +91,6 @@ import {
 import { loadCubeMap, loadEquirectangular } from "../model-3d/environment/cubeMap.js";
 import { createProceduralSkybox, renderSkybox } from "../model-3d/environment/skybox.js";
 import type { CubeTexture } from "../model-3d/environment/cubeMap.js";
-import { resolveGlobalEffect } from "./postprocess/resolve.js";
 import { createEffectGraphOptimizer, type EffectBatchEntry } from "./postprocess/batch.js";
 import {
   computeDirtyRect,
@@ -100,9 +99,31 @@ import {
   rectsOverlap,
   transformedAabb,
 } from "./layout/engine.js";
-import { clampResolutionScale, scaleComposition } from "./scale.js";
+import { clampResolutionScale } from "./scale.js";
 import { renderMultiCameraFrame } from "./multi-camera.js";
-import { evictOldest } from "./pool.js";
+import { evictOldest, ByteBoundedCache, getRendererCacheStats } from "./pool.js";
+
+export { getRendererCacheStats };
+
+/** Drops every renderer pool. Called between render jobs and on worker exit. */
+export function clearRendererCaches(): void {
+  imageCache.clear();
+  videoFrameCache.clear();
+  videoFrameOrigin.clear();
+  clearTempCanvasPool();
+  rgbaBufferCache.clear();
+  drawBufferCache.clear();
+  renderTargetCache.clear();
+  groupCanvasCache.clear();
+  transitionCanvasCache.clear();
+  transparentCanvasCache.clear();
+  particleCanvasCache.clear();
+  noiseTextureCache.clear();
+  skyboxCache.clear();
+  videoFrameCanvasPool.clear();
+  model3dRendererCache.clear();
+  scaledSurfaceCache.clear();
+}
 
 export interface RenderContext {
   readonly composition: Composition;
@@ -113,6 +134,7 @@ export interface RenderContext {
   readonly width: number;
   readonly height: number;
   readonly background: string | Rgba | Gradient;
+  readonly runtime?: RenderRuntime;
 }
 
 export interface RenderResult {
@@ -121,11 +143,13 @@ export interface RenderResult {
   readonly time: number;
 }
 
-const imageCache = new Map<string, Canvas>();
-const IMAGE_CACHE_MAX = 8;
+function canvasBytes(canvas: Canvas): number {
+  return canvas.width * canvas.height * 4;
+}
+
+/** Decoded image canvases, byte-bounded with LRU eviction. */
+const imageCache = new ByteBoundedCache<string, Canvas>("images", 64 * 1024 * 1024, canvasBytes);
 function rememberImage(src: string, canvas: Canvas): void {
-  imageCache.delete(src);
-  evictOldest(imageCache, IMAGE_CACHE_MAX);
   imageCache.set(src, canvas);
 }
 
@@ -136,7 +160,12 @@ function rememberImage(src: string, canvas: Canvas): void {
  * exhausting skia's native heap. Each worker thread now keeps one 1920×1080
  * RGBA buffer and reuses it across all video-frame draws in a chunk.
  */
-const rgbaBufferCache = new Map<string, Uint8ClampedArray>();
+/** Reusable RGBA read buffers, byte-bounded with LRU eviction. */
+const rgbaBufferCache = new ByteBoundedCache<string, Uint8ClampedArray>(
+  "rgba-buffers",
+  64 * 1024 * 1024,
+  (buffer) => buffer.byteLength,
+);
 
 function getRgbaBuffer(resolution: string, byteSize: number): Uint8ClampedArray {
   let buf = rgbaBufferCache.get(resolution);
@@ -154,9 +183,13 @@ function getRgbaBuffer(resolution: string, byteSize: number): Uint8ClampedArray 
  * they are drawn, so a handful of slots is enough and a full-length video can
  * never pin gigabytes of heap.
  */
-const VIDEO_FRAME_CACHE_MAX = 512;
-const videoFrameCache = new Map<string, ExtractedFrame>();
 const videoFrameOrigin = new Map<string, string>();
+const videoFrameCache = new ByteBoundedCache<string, ExtractedFrame>(
+  "video-frames",
+  256 * 1024 * 1024,
+  (frame) => frame.buffer.byteLength,
+  (key) => videoFrameOrigin.delete(key),
+);
 
 /** Module-level media cache for video frame extraction (set by pipeline). */
 let _mediaCache: import("../media/cache.js").MediaCache | null = null;
@@ -173,16 +206,8 @@ function videoFrameKey(src: string, sourceFrame: number): string {
 
 function rememberVideoFrame(src: string, sourceFrame: number, frame: ExtractedFrame): void {
   const key = videoFrameKey(src, sourceFrame);
-  videoFrameCache.delete(key);
-  if (videoFrameCache.size >= VIDEO_FRAME_CACHE_MAX) {
-    const oldest = videoFrameCache.keys().next().value;
-    if (oldest !== undefined) {
-      videoFrameCache.delete(oldest);
-      videoFrameOrigin.delete(oldest);
-    }
-  }
-  videoFrameCache.set(key, frame);
   videoFrameOrigin.set(key, src);
+  videoFrameCache.set(key, frame);
 }
 
 export function hasVideoFrameCached(src: string, sourceFrame: number): boolean {
@@ -264,18 +289,12 @@ export async function videoFrameRefsFor(
 }
 
 function recallVideoFrame(src: string, sourceFrame: number): ExtractedFrame | undefined {
-  const key = videoFrameKey(src, sourceFrame);
-  const cached = videoFrameCache.get(key);
-  if (!cached) return undefined;
-  // Refresh recency so LRU eviction drops the coldest frame first.
-  videoFrameCache.delete(key);
-  videoFrameCache.set(key, cached);
-  return cached;
+  return videoFrameCache.get(videoFrameKey(src, sourceFrame));
 }
 
 /** Most recently drawn frame for `src` — a safe fallback when a seek fails. */
 function latestVideoFrame(src: string): ExtractedFrame | undefined {
-  const keys = Array.from(videoFrameOrigin.keys()).reverse();
+  const keys = Array.from(videoFrameCache.keys()).reverse();
   for (const key of keys) {
     if (videoFrameOrigin.get(key) === src) {
       const frame = videoFrameCache.get(key);
@@ -407,9 +426,10 @@ export async function primeVideoFramesForRange(
  */
 interface CompositionIndex {
   readonly totalFrames: number;
-  /** frame -> clips active on that frame, in track/clip order. */
+  /** frame -> clips active on that frame, ordered by track, start time, declaration. */
   readonly activeByFrame: Map<number, VisualClip[]>;
-  readonly validated: boolean;
+  /** clip -> owning visual track index, used to resolve transition underlays. */
+  readonly trackByClip: Map<VisualClip, number>;
 }
 const indexCache = new WeakMap<object, CompositionIndex>();
 const EMPTY_CLIPS: VisualClip[] = [];
@@ -420,13 +440,19 @@ const EMPTY_CLIPS: VisualClip[] = [];
  * size-keyed pair is enough; reusing them across frames removes the
  * per-clip native allocation that previously exhausted skia's heap.
  */
-const drawBufferCache = new Map<string, [Canvas, Canvas]>();
 const MAX_POOL_SIZE = 8;
+const canvasPairBytes = (pair: [Canvas, Canvas]): number =>
+  canvasBytes(pair[0]) + canvasBytes(pair[1]);
+const POOL_CACHE_BYTES = 128 * 1024 * 1024;
+const drawBufferCache = new ByteBoundedCache<string, [Canvas, Canvas]>(
+  "draw-buffers",
+  POOL_CACHE_BYTES,
+  canvasPairBytes,
+);
 function getDrawBuffers(width: number, height: number): [Canvas, Canvas] {
   const key = `${width}x${height}`;
   let pair = drawBufferCache.get(key);
   if (!pair) {
-    evictOldest(drawBufferCache, MAX_POOL_SIZE);
     pair = [createCanvas(width, height), createCanvas(width, height)];
     drawBufferCache.set(key, pair);
   }
@@ -434,12 +460,15 @@ function getDrawBuffers(width: number, height: number): [Canvas, Canvas] {
 }
 
 /** Pooled full-screen canvas for renderFrame output — one per resolution. */
-const renderTargetCache = new Map<string, Canvas>();
+const renderTargetCache = new ByteBoundedCache<string, Canvas>(
+  "render-targets",
+  POOL_CACHE_BYTES,
+  canvasBytes,
+);
 function getRenderTarget(width: number, height: number): Canvas {
   const key = `${width}x${height}`;
   let c = renderTargetCache.get(key);
   if (!c) {
-    evictOldest(renderTargetCache, MAX_POOL_SIZE);
     c = createCanvas(width, height);
     renderTargetCache.set(key, c);
   }
@@ -447,12 +476,15 @@ function getRenderTarget(width: number, height: number): Canvas {
 }
 
 /** Pooled canvas for group clips — keyed by bounds size. */
-const groupCanvasCache = new Map<string, Canvas>();
+const groupCanvasCache = new ByteBoundedCache<string, Canvas>(
+  "group-canvases",
+  POOL_CACHE_BYTES,
+  canvasBytes,
+);
 function getGroupCanvas(width: number, height: number): Canvas {
   const key = `${width}x${height}`;
   let c = groupCanvasCache.get(key);
   if (!c) {
-    evictOldest(groupCanvasCache, MAX_POOL_SIZE);
     c = createCanvas(width, height);
     groupCanvasCache.set(key, c);
   }
@@ -467,59 +499,88 @@ interface FrameSurfaceState {
   readonly canvas: Canvas;
 }
 
-let lastFrameSurface: FrameSurfaceState | null = null;
-
 const DIRTY_RECT_AREA_LIMIT = 0.6;
-const ADAPTIVE_FULL_REDRAW_LIMIT = 3;
-let consecutiveFullRedraws = 0;
+
+/** Clip types whose bounds or pixels cannot be bounded conservatively per frame. */
+const UNBOUNDED_CLIP_TYPES = new Set([
+  "particle",
+  "noise",
+  "audioVisualizer",
+  "model3d",
+  "multiCamera",
+  "meshwarp",
+  "text3d",
+  "dataViz",
+  "gradient-mesh",
+  "sticker",
+  "svg",
+  "group",
+]);
+
+function isIncrementallySafe(clip: VisualClip): boolean {
+  return (
+    !UNBOUNDED_CLIP_TYPES.has(clip.type) &&
+    clip.transitionIn === undefined &&
+    clip.transitionOut === undefined &&
+    (clip.effects?.length ?? 0) === 0 &&
+    clip.keyframes === undefined &&
+    clip.mask === undefined &&
+    clip.matte === undefined &&
+    clip.dropShadow === undefined &&
+    clip.transform === undefined
+  );
+}
 
 function clipScreenRect(clip: VisualClip): Rect {
   const bounds = getClipBounds(clip);
   return transformedAabb(bounds, getClipTransform(clip, bounds.width, bounds.height));
 }
 
-function fillBackgroundRegion(
-  ctx: SKRSContext2D,
-  rect: Rect,
-  background: string | Rgba | Gradient,
-): void {
-  ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  if (typeof background === "string") {
-    ctx.fillStyle = background;
-    ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
-  } else if ("r" in background) {
-    ctx.fillStyle = `rgba(${background.r}, ${background.g}, ${background.b}, ${background.a})`;
-    ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
-  } else {
-    ctx.clearRect(rect.x, rect.y, rect.width, rect.height);
-  }
-  ctx.restore();
-}
-
 function hasSubtitleTracks(composition: Composition): boolean {
   return composition.rootTimeline.tracks.some((track) => track.kind === "subtitle");
 }
 
-const transitionCanvasCache = new Map<string, Canvas>();
-function getTransitionCanvas(width: number, height: number): Canvas {
+const transitionCanvasCache = new ByteBoundedCache<string, [Canvas, Canvas]>(
+  "transition-buffers",
+  POOL_CACHE_BYTES,
+  canvasPairBytes,
+);
+function getTransitionBuffers(width: number, height: number): [Canvas, Canvas] {
   const key = `${width}x${height}`;
-  let c = transitionCanvasCache.get(key);
-  if (!c) {
-    evictOldest(transitionCanvasCache, MAX_POOL_SIZE);
-    c = createCanvas(width, height);
-    transitionCanvasCache.set(key, c);
+  let pair = transitionCanvasCache.get(key);
+  if (!pair) {
+    pair = [createCanvas(width, height), createCanvas(width, height)];
+    transitionCanvasCache.set(key, pair);
   }
-  return c;
+  return pair;
+}
+
+const transparentCanvasCache = new ByteBoundedCache<string, Canvas>(
+  "transparent-canvases",
+  POOL_CACHE_BYTES,
+  canvasBytes,
+);
+function getTransparentCanvas(width: number, height: number): Canvas {
+  const key = `${width}x${height}`;
+  let canvas = transparentCanvasCache.get(key);
+  if (!canvas) {
+    canvas = createCanvas(width, height);
+    transparentCanvasCache.set(key, canvas);
+  }
+  clearCanvas(createContext(canvas), width, height);
+  return canvas;
 }
 
 /** Pooled canvas for particle clips — keyed by bounds size. */
-const particleCanvasCache = new Map<string, Canvas>();
+const particleCanvasCache = new ByteBoundedCache<string, Canvas>(
+  "particle-canvases",
+  POOL_CACHE_BYTES,
+  canvasBytes,
+);
 function getParticleCanvas(width: number, height: number): Canvas {
   const key = `${width}x${height}`;
   let c = particleCanvasCache.get(key);
   if (!c) {
-    evictOldest(particleCanvasCache, MAX_POOL_SIZE);
     c = createCanvas(width, height);
     particleCanvasCache.set(key, c);
   }
@@ -527,15 +588,17 @@ function getParticleCanvas(width: number, height: number): Canvas {
 }
 
 /** Cached generated noise textures keyed by params and 10fps time bucket. */
-const NOISE_CACHE_MAX = 32;
-const noiseTextureCache = new Map<string, Canvas>();
+const noiseTextureCache = new ByteBoundedCache<string, Canvas>(
+  "noise-textures",
+  64 * 1024 * 1024,
+  canvasBytes,
+);
 
 function getNoiseTexture(width: number, height: number, clip: NoiseClip, time: number): Canvas {
   const bucket = Math.floor(time * 10);
   const key = `${width}x${height}-${clip.params.kind}-${clip.params.dimensions}-${clip.params.scale}-${clip.params.offsetX ?? 0}-${clip.params.offsetY ?? 0}-${clip.params.animationSpeed ?? 0}-${clip.params.seed ?? 0}-${clip.params.outputType ?? "luminance"}-${bucket}`;
   let canvas = noiseTextureCache.get(key);
   if (canvas === undefined) {
-    evictOldest(noiseTextureCache, NOISE_CACHE_MAX);
     canvas = generateNoiseTexture(width, height, { ...clip.params, time: bucket / 10 });
     noiseTextureCache.set(key, canvas);
   }
@@ -595,12 +658,18 @@ export function compositionConversion(composition: Composition): FrameConversion
 function buildCompositionIndex(composition: Composition): CompositionIndex {
   const conversion = compositionConversion(composition);
   const activeByFrame = new Map<number, VisualClip[]>();
+  const trackByClip = new Map<VisualClip, number>();
   let totalFrames = 0;
 
-  for (const track of composition.rootTimeline.tracks) {
+  const tracks = composition.rootTimeline.tracks;
+  for (let trackIndex = 0; trackIndex < tracks.length; trackIndex++) {
+    const track = tracks[trackIndex]!;
     if (track.kind === "audio") continue;
-    for (const clip of track.clips) {
-      const span = computeClipSpan(clip as never, conversion);
+    const ordered = track.clips
+      .map((clip, order) => ({ clip, order, span: computeClipSpan(clip as never, conversion) }))
+      .sort((a, b) => a.span.startFrames - b.span.startFrames || a.order - b.order);
+    for (const { clip, span } of ordered) {
+      trackByClip.set(clip, trackIndex);
       if (span.endFrames > totalFrames) totalFrames = span.endFrames;
       for (let f = span.startFrames; f < span.endFrames; f++) {
         let bucket = activeByFrame.get(f);
@@ -623,7 +692,7 @@ function buildCompositionIndex(composition: Composition): CompositionIndex {
       composition.boundaryBehavior === "extend" ? Math.max(totalFrames, durFrames) : durFrames;
   }
 
-  return { totalFrames, activeByFrame, validated: false };
+  return { totalFrames, activeByFrame, trackByClip };
 }
 
 function getCompositionIndex(composition: Composition): CompositionIndex {
@@ -978,12 +1047,15 @@ function getMatte(clip: VisualClip, _width: number, _height: number): Matte | un
  * one per resolution — a 60s video at 30fps is 1800 allocations saved per
  * clip, and a composition with multiple video clips compounds this.
  */
-const videoFrameCanvasPool = new Map<string, Canvas>();
+const videoFrameCanvasPool = new ByteBoundedCache<string, Canvas>(
+  "video-frame-canvases",
+  POOL_CACHE_BYTES,
+  canvasBytes,
+);
 function getVideoFrameCanvas(width: number, height: number): Canvas {
   const key = `${width}x${height}`;
   let c = videoFrameCanvasPool.get(key);
   if (!c) {
-    evictOldest(videoFrameCanvasPool, MAX_POOL_SIZE);
     c = new Canvas(width, height);
     videoFrameCanvasPool.set(key, c);
   }
@@ -1596,12 +1668,15 @@ async function extractVideoFrameCanvas(
   return { canvas: frameCanvas, width: srcWidth, height: srcHeight };
 }
 
-const chromaKeyCanvasCache = new Map<string, Canvas>();
+const chromaKeyCanvasCache = new ByteBoundedCache<string, Canvas>(
+  "chroma-key-canvases",
+  POOL_CACHE_BYTES,
+  canvasBytes,
+);
 function getChromaKeyCanvas(width: number, height: number): Canvas {
   const key = `${width}x${height}`;
   let c = chromaKeyCanvasCache.get(key);
   if (!c) {
-    evictOldest(chromaKeyCanvasCache, MAX_POOL_SIZE);
     c = createCanvas(width, height);
     chromaKeyCanvasCache.set(key, c);
   }
@@ -2070,13 +2145,48 @@ function isAudioClip(clip: { type: string }): clip is AudioClip | SoundClip {
   return clip.type === "audio" || clip.type === "sound";
 }
 
+function clipLocation(
+  composition: Composition,
+  clip: VisualClip,
+  context: RenderContext,
+): ErrorLocation {
+  const tracks = composition.rootTimeline.tracks;
+  const index = tracks.findIndex((track) => (track.clips as readonly unknown[]).includes(clip));
+  return {
+    clip: clip.name ?? clip.type,
+    track: index >= 0 ? (tracks[index]?.name ?? `track ${index}`) : undefined,
+    time: `${context.time.toFixed(3)}s (frame ${context.frame})`,
+  };
+}
+
+function unknownExtensionError(
+  kind: "effect" | "transition",
+  name: string,
+  available: readonly string[],
+  location: ErrorLocation,
+) {
+  return createError(
+    ErrorCode.CC3007,
+    { kind, id: name, available: available.join(", ") || "none" },
+    { location },
+  );
+}
+
 function applyEffects(canvas: Canvas, clip: VisualClip, context: RenderContext): Canvas {
   if (!clip.effects || clip.effects.length === 0) return canvas;
+  const runtime = context.runtime ?? getDefaultRenderRuntime();
   let current = canvas;
   for (const effectRef of clip.effects) {
     if (!isEffectActive(effectRef, context)) continue;
-    const effect = resolveEffect(effectRef.name);
-    if (!effect) continue;
+    const effect = runtime.resolveEffect(effectRef.name);
+    if (!effect) {
+      throw unknownExtensionError(
+        "effect",
+        effectRef.name,
+        runtime.listEffects(),
+        clipLocation(context.composition, clip, context),
+      );
+    }
     const input = createEffectInput(current, createContext(current), context.time, context.seed);
     effect.apply(input, effectRef.params ?? {});
     current = input.canvas;
@@ -2084,46 +2194,123 @@ function applyEffects(canvas: Canvas, clip: VisualClip, context: RenderContext):
   return current;
 }
 
-function applyTransition(
-  fromCanvas: Canvas,
-  toCanvas: Canvas,
-  transitionRef: VisualClip["transitionIn"],
-  context: RenderContext,
-  width: number,
-  height: number,
-  clip: VisualClip,
-): Canvas {
-  if (!transitionRef) return toCanvas;
-  const transition = resolveTransition(transitionRef.name);
-  if (!transition) throw new UnknownTransitionError(transitionRef.name, listTransitions());
+interface ClipVisualInput {
+  readonly clipCanvas: Canvas;
+  readonly clip: VisualClip;
+  readonly context: RenderContext;
+  /** Previous active clip on the same track, or null for transparent. */
+  readonly underlying: Canvas | null;
+}
 
-  const conversion = context.conversion;
-  const configuredDuration = transitionRef.duration ?? transition.defaultDuration;
-  const duration =
-    configuredDuration !== undefined
-      ? typeof configuredDuration === "number"
-        ? configuredDuration * conversion.fpsFloat
-        : parseFloat(configuredDuration) * conversion.fpsFloat
-      : 30;
-  const clipStart = computeClipSpan({ ...clip, start: 0, duration: 0 } as VisualClip, conversion);
-  const progress = Math.min(1, Math.max(0, (context.frame - clipStart.startFrames) / duration));
+function transitionFrames(
+  transitionRef: NonNullable<VisualClip["transitionIn"]>,
+  transition: { readonly defaultDuration?: number },
+  conversion: RenderContext["conversion"],
+): number {
+  const configured = transitionRef.duration ?? transition.defaultDuration;
+  if (configured === undefined) return 30;
+  const seconds = typeof configured === "number" ? configured : parseFloat(configured);
+  return Math.max(0, seconds * conversion.fpsFloat);
+}
 
-  const resultCanvas = getTransitionCanvas(width, height);
-  const resultCtx = createContext(resultCanvas);
-  const transitionContext = {
-    progress,
-    from: fromCanvas,
-    to: toCanvas,
-    width,
-    height,
-    seed: context.seed,
+/**
+ * Produces a clip's visual for the current frame, including entry and exit
+ * transitions. Entry blends the underlying track state into the clip over the
+ * clip's opening; exit blends the clip into transparency over its closing, so
+ * compositing reveals whatever sits beneath and nothing leaks past the end.
+ */
+function evaluateClipVisual({
+  clipCanvas,
+  clip,
+  context,
+  underlying,
+}: ClipVisualInput): Canvas {
+  const inRef = clip.transitionIn;
+  const outRef = clip.transitionOut;
+  if (!inRef && !outRef) return clipCanvas;
+
+  const runtime = context.runtime ?? getDefaultRenderRuntime();
+  const span = computeClipSpan(clip, context.conversion);
+  const durationFrames = Math.max(1, span.endFrames - span.startFrames);
+  const resolve = (ref: NonNullable<VisualClip["transitionIn"]>) => {
+    const processor = runtime.resolveTransition(ref.name);
+    if (!processor) {
+      throw unknownExtensionError(
+        "transition",
+        ref.name,
+        runtime.listTransitions(),
+        clipLocation(context.composition, clip, context),
+      );
+    }
+    return processor;
   };
-  transition.apply(resultCtx, transitionContext, transitionRef.params ?? {});
+
+  const inProcessor = inRef ? resolve(inRef) : undefined;
+  const outProcessor = outRef ? resolve(outRef) : undefined;
+  let entryFrames = inRef && inProcessor ? transitionFrames(inRef, inProcessor, context.conversion) : 0;
+  let exitFrames = outRef && outProcessor ? transitionFrames(outRef, outProcessor, context.conversion) : 0;
+  if (entryFrames + exitFrames > durationFrames) {
+    const factor = durationFrames / (entryFrames + exitFrames);
+    entryFrames *= factor;
+    exitFrames *= factor;
+  }
+
+  const inEntry = entryFrames > 0 && context.frame < span.startFrames + entryFrames;
+  const exitStart = span.endFrames - exitFrames;
+  const inExit = exitFrames > 0 && context.frame >= exitStart;
+  if (!inEntry && !inExit) return clipCanvas;
+
+  const { width, height } = context;
+  const transparent = getTransparentCanvas(width, height);
+  const bufferPair = getTransitionBuffers(width, height);
+  const fromCanvas = inEntry ? (underlying ?? transparent) : clipCanvas;
+  const toCanvas = inEntry ? clipCanvas : transparent;
+  const resultCanvas = bufferPair[0] === fromCanvas || bufferPair[0] === toCanvas ? bufferPair[1] : bufferPair[0];
+  const progress = inEntry
+    ? Math.min(1, Math.max(0, (context.frame - span.startFrames) / entryFrames))
+    : Math.min(1, Math.max(0, (context.frame - exitStart) / exitFrames));
+
+  const resultCtx = createContext(resultCanvas);
+  clearCanvas(resultCtx, width, height);
+  const transition = inEntry ? inProcessor! : outProcessor!;
+  transition.apply(
+    resultCtx,
+    { progress, from: fromCanvas, to: toCanvas, width, height, seed: context.seed },
+    (inEntry ? inRef! : outRef!).params ?? {},
+  );
   return resultCanvas;
+}
+
+export interface RenderSessionState {
+  lastFrameSurface: FrameSurfaceState | null;
+  consecutiveFullRedraws: number;
+}
+
+export function createRenderSession(): RenderSessionState {
+  return { lastFrameSurface: null, consecutiveFullRedraws: 0 };
 }
 
 export interface RenderFrameOptions {
   readonly resolutionScale?: number;
+  readonly runtime?: RenderRuntime;
+  /** Per-render incremental state; omit to disable incremental drawing. */
+  readonly session?: RenderSessionState;
+}
+
+/** Scaled surface pool: full-resolution frames are drawn once, then scaled. */
+const scaledSurfaceCache = new ByteBoundedCache<string, Canvas>(
+  "scaled-surfaces",
+  POOL_CACHE_BYTES,
+  canvasBytes,
+);
+function getScaledSurface(width: number, height: number): Canvas {
+  const key = `${width}x${height}`;
+  let canvas = scaledSurfaceCache.get(key);
+  if (!canvas) {
+    canvas = createCanvas(width, height);
+    scaledSurfaceCache.set(key, canvas);
+  }
+  return canvas;
 }
 
 export async function renderFrame(
@@ -2134,17 +2321,34 @@ export async function renderFrame(
 ): Promise<RenderResult> {
   const scale =
     options.resolutionScale === undefined ? 1 : clampResolutionScale(options.resolutionScale);
-  const target = scale === 1 ? composition : scaleComposition(composition, scale);
-  return renderCompositionFrame(target, frame, seed);
+  const result = await renderCompositionFrame(
+    composition,
+    frame,
+    seed,
+    options.runtime ?? getDefaultRenderRuntime(),
+    options.session,
+  );
+  if (scale === 1) return result;
+  const width = Math.max(1, Math.round(composition.width * scale));
+  const height = Math.max(1, Math.round(composition.height * scale));
+  const scaled = getScaledSurface(width, height);
+  const ctx = createContext(scaled);
+  ctx.clearRect(0, 0, width, height);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(result.canvas, 0, 0, result.canvas.width, result.canvas.height, 0, 0, width, height);
+  return { ...result, canvas: scaled };
 }
 
 async function renderCompositionFrame(
   composition: Composition,
   frame: number,
   seed: number,
+  runtime: RenderRuntime,
+  session?: RenderSessionState,
 ): Promise<RenderResult> {
   // Clear effect cache each frame so parametric effects (DoF, bloom) stay fresh
-  clearEffectCache();
+  clearTempCanvasPool();
   const conversion = compositionConversion(composition);
   const time = frameToSeconds(frame, conversion);
   const backgroundPaint = corePaintToRenderer(composition.background);
@@ -2165,11 +2369,62 @@ async function renderCompositionFrame(
     width: composition.width,
     height: composition.height,
     background: backgroundForContext,
+    runtime,
   };
   if (composition.splitScreen) {
     return renderSplitScreen(composition, context, seed);
   }
-  return renderStandardFrame(composition, context, seed);
+  return renderStandardFrame(composition, context, seed, session);
+}
+
+function splitRegionClip(
+  composition: Composition,
+  region: { readonly track?: string; readonly clipIndex: number },
+  frame: number,
+  conversion: FrameConversion,
+  regionIndex: number,
+): VisualClip | undefined {
+  const tracks = composition.rootTimeline.tracks;
+  const trackIndex =
+    region.track !== undefined
+      ? tracks.findIndex((track) => track.name === region.track)
+      : region.clipIndex;
+  const track = tracks[trackIndex];
+  if (!track || track.kind === "audio" || track.kind === "subtitle") {
+    recordDegradation({
+      code: ErrorCode.CC3007,
+      what: "split-screen region source missing",
+      reason: region.track !== undefined ? `no track named "${region.track}"` : `no visual track at index ${region.clipIndex}`,
+      input: `region ${regionIndex}`,
+      instead: "the region renders empty",
+    });
+    return undefined;
+  }
+  const active = track.clips
+    .map((clip, order) => ({ clip, order, span: computeClipSpan(clip as never, conversion) }))
+    .filter((entry) => entry.span.startFrames <= frame && frame < entry.span.endFrames)
+    .sort((a, b) => a.span.startFrames - b.span.startFrames || a.order - b.order);
+  if (active.length === 0) {
+    recordDegradation({
+      code: ErrorCode.CC3007,
+      what: "split-screen region has no active clip",
+      reason: `track "${track.name ?? region.clipIndex}" is empty at frame ${frame}`,
+      input: `region ${regionIndex}`,
+      instead: "the region renders empty",
+    });
+    return undefined;
+  }
+  const selected = active[active.length - 1]!;
+  if (active.length > 1) {
+    recordDegradation({
+      code: ErrorCode.CC3007,
+      what: "split-screen region has several active clips",
+      reason: `track "${track.name ?? region.clipIndex}" has ${active.length} active clips at frame ${frame}`,
+      input: `region ${regionIndex}`,
+      instead: `topmost clip "${selected.clip.name ?? selected.clip.type}" was used`,
+    });
+  }
+  return selected.clip;
 }
 
 export async function renderSplitScreen(
@@ -2192,16 +2447,15 @@ export async function renderSplitScreen(
     config.padding ?? 0,
   );
   const frame = context.frame;
-  const index = getCompositionIndex(composition);
   const targetCanvas = getRenderTarget(composition.width, composition.height);
   const targetCtx = createContext(targetCanvas);
   clearCanvas(targetCtx, composition.width, composition.height);
   await applySkybox(targetCtx, composition);
-  const activeClips = [...(index.activeByFrame.get(frame) ?? EMPTY_CLIPS)];
   const [bufA] = getDrawBuffers(composition.width, composition.height);
 
-  for (const region of regions) {
-    const clip = activeClips[region.clipIndex];
+  for (let regionIndex = 0; regionIndex < regions.length; regionIndex++) {
+    const region = regions[regionIndex]!;
+    const clip = splitRegionClip(composition, region, frame, context.conversion, regionIndex);
     if (clip === undefined) continue;
     drawRegionShadow(targetCtx, region);
     const clipCanvas = bufA;
@@ -2209,10 +2463,11 @@ export async function renderSplitScreen(
     clearCanvas(clipCtx, composition.width, composition.height);
     await drawClip(clipCtx, clip, context, seed);
     const withEffects = applyEffects(clipCanvas, clip, context);
+    const finalCanvas = evaluateClipVisual({ clipCanvas: withEffects, clip, context, underlying: null });
     targetCtx.save();
     applyBlendMode(targetCtx, resolveBlendMode(clip.blend));
     targetCtx.globalAlpha = clip.opacity ?? 1;
-    drawSourceIntoRegion(targetCtx, withEffects, region);
+    drawSourceIntoRegion(targetCtx, finalCanvas, region);
     targetCtx.restore();
   }
 
@@ -2225,33 +2480,19 @@ async function renderStandardFrame(
   composition: Composition,
   context: RenderContext,
   seed: number,
+  session?: RenderSessionState,
 ): Promise<RenderResult> {
   const frame = context.frame;
-  const timeline = composition.rootTimeline;
-  // Validate once per composition (not per frame) — validation walks every
-  // clip/track and is identical across frames.
   const index = getCompositionIndex(composition);
-  if (!index.validated) {
-    const validation = validateTimeline(timeline, {
-      conversion: context.conversion,
-      compositionWidth: composition.width,
-      compositionHeight: composition.height,
-      durationFrames: index.totalFrames,
-      boundaryBehavior: composition.boundaryBehavior,
-    });
-    for (const issue of validation) {
-      console.warn(`[${issue.code}] ${issue.message}`);
-    }
-    (index as { validated: boolean }).validated = true;
-  }
 
   const targetCanvas = getRenderTarget(composition.width, composition.height);
   const targetCtx = createContext(targetCanvas);
 
   const activeClips = index.activeByFrame.get(frame) ?? EMPTY_CLIPS;
   const currentRects = activeClips.map(clipScreenRect);
-  const previousSurface = lastFrameSurface;
+  const previousSurface = session?.lastFrameSurface ?? null;
   const incrementalAllowed =
+    session !== undefined &&
     previousSurface !== null &&
     previousSurface.composition === (composition as unknown as object) &&
     previousSurface.canvas === targetCanvas &&
@@ -2259,9 +2500,7 @@ async function renderStandardFrame(
     composition.skybox === undefined &&
     (composition.postProcessing?.effects?.length ?? 0) === 0 &&
     !hasSubtitleTracks(composition) &&
-    activeClips.every(
-      (clip) => clip.transitionIn === undefined && clip.transitionOut === undefined,
-    );
+    activeClips.every(isIncrementallySafe);
   const dirtyRect =
     incrementalAllowed && previousSurface
       ? computeDirtyRect(
@@ -2277,19 +2516,16 @@ async function renderStandardFrame(
     !isFullFrameRect(dirtyRect, composition.width, composition.height) &&
     rectArea(dirtyRect) <= composition.width * composition.height * DIRTY_RECT_AREA_LIMIT;
 
-  if (useIncremental) {
-    consecutiveFullRedraws = 0;
-  } else {
-    consecutiveFullRedraws += 1;
-    if (consecutiveFullRedraws === ADAPTIVE_FULL_REDRAW_LIMIT && previousSurface) {
-      console.log(
-        "[cinecode] adaptive redraw: full-frame clear after consecutive dirty-rect misses",
-      );
-    }
+  if (session) {
+    if (useIncremental) session.consecutiveFullRedraws = 0;
+    else session.consecutiveFullRedraws += 1;
   }
 
   if (useIncremental && dirtyRect) {
-    fillBackgroundRegion(targetCtx, dirtyRect, context.background);
+    targetCtx.save();
+    targetCtx.setTransform(1, 0, 0, 1, 0, 0);
+    targetCtx.clearRect(dirtyRect.x, dirtyRect.y, dirtyRect.width, dirtyRect.height);
+    targetCtx.restore();
   } else {
     clearCanvas(targetCtx, composition.width, composition.height);
     await applySkybox(targetCtx, composition);
@@ -2305,10 +2541,19 @@ async function renderStandardFrame(
   // content always lives in the *other* buffer, which we don't clear.
   const [bufA, bufB] = getDrawBuffers(composition.width, composition.height);
   let drawBuffer: Canvas = bufA;
-  let previousLayerCanvas: Canvas | null = null;
+  let underlying: Canvas | null = null;
+  let currentTrack = -1;
 
   for (const clip of activeClips) {
-    if (compositeClip && !rectsOverlap(clipScreenRect(clip), compositeClip)) continue;
+    const trackIndex = index.trackByClip.get(clip) ?? 0;
+    if (trackIndex !== currentTrack) {
+      currentTrack = trackIndex;
+      underlying = null;
+    }
+    if (compositeClip && !rectsOverlap(clipScreenRect(clip), compositeClip)) {
+      underlying = null;
+      continue;
+    }
     const clipCanvas = drawBuffer;
     const clipCtx = createContext(clipCanvas);
     clearCanvas(clipCtx, composition.width, composition.height);
@@ -2316,19 +2561,7 @@ async function renderStandardFrame(
     const withEffects = applyEffects(clipCanvas, clip, context);
     const opacity = clip.opacity ?? 1;
     const blendMode = resolveBlendMode(clip.blend);
-
-    let finalCanvas = withEffects;
-    if (clip.transitionIn && previousLayerCanvas) {
-      finalCanvas = applyTransition(
-        previousLayerCanvas,
-        withEffects,
-        clip.transitionIn,
-        context,
-        composition.width,
-        composition.height,
-        clip,
-      );
-    }
+    const finalCanvas = evaluateClipVisual({ clipCanvas: withEffects, clip, context, underlying });
 
     const mask = getMask(clip, composition.width, composition.height);
     const matte = getMatte(clip, composition.width, composition.height);
@@ -2355,19 +2588,21 @@ async function renderStandardFrame(
       compositeClip ?? undefined,
     );
 
-    previousLayerCanvas = finalCanvas;
-    // Swap buffers so the next clip's clear doesn't clobber previousLayerCanvas.
+    underlying = finalCanvas;
+    // Swap buffers so the next clip's clear doesn't clobber the underlying layer.
     drawBuffer = drawBuffer === bufA ? bufB : bufA;
   }
 
   await renderSubtitleTracks(targetCtx, composition, context, seed);
   applyPostProcessing(targetCtx, composition, context, seed);
-  lastFrameSurface = {
-    composition: composition as unknown as object,
-    frame,
-    rects: currentRects,
-    canvas: targetCanvas,
-  };
+  if (session) {
+    session.lastFrameSurface = {
+      composition: composition as unknown as object,
+      frame,
+      rects: currentRects,
+      canvas: targetCanvas,
+    };
+  }
   return { canvas: targetCanvas, frame, time: context.time };
 }
 
@@ -2384,8 +2619,14 @@ function applyPostProcessing(
   const entries: EffectBatchEntry[] = [];
   for (const definition of effects) {
     if (definition.enabled === false) continue;
-    const processor = resolveGlobalEffect(definition.name);
-    if (!processor) continue;
+    const runtime = context.runtime ?? getDefaultRenderRuntime();
+    const processor = runtime.resolveEffect(definition.name);
+    if (!processor) {
+      throw unknownExtensionError("effect", definition.name, runtime.listEffects(), {
+        clip: "postProcessing",
+        time: `${context.time.toFixed(3)}s (frame ${context.frame})`,
+      });
+    }
     const params = definition.params ?? {};
     entries.push({
       name: definition.name,
@@ -2408,6 +2649,8 @@ export async function renderStill(
   frame: number,
   seed: number = 0,
 ): Promise<Canvas> {
+  const validation = validateComposition(composition);
+  if (!validation.valid) throw compositionValidationError(validation);
   return (await renderFrame(composition, frame, seed)).canvas;
 }
 

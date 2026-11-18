@@ -7,6 +7,8 @@ import type {
   RenderConfig,
   VideoCodec,
 } from "./types/config.js";
+import { STILL_FORMATS } from "./output-plan.js";
+import { createError, ErrorCode } from "../errors/codes.js";
 
 /** Which physical encoder family a codec runs on. */
 export type EncoderBackend = "software" | "nvenc" | "videotoolbox" | "qsv";
@@ -206,9 +208,15 @@ export interface ResolveImageEncodingOptions {
 /** Resolves still-image encoding, defaulting to lossless PNG at 1x. */
 export function resolveImageEncoding(options: ResolveImageEncodingOptions = {}): ImageEncoding {
   const requested = options.format ?? options.images?.defaultFormat ?? "png";
-  const format = requested === "svg" ? "png" : requested;
+  if (requested === "svg") {
+    throw createError(
+      ErrorCode.CC1008,
+      { format: "svg", supported: STILL_FORMATS.join(", ") },
+      { fixHint: "SVG is a vector export, not a raster still: run `cinecode export-svg` instead." },
+    );
+  }
   return {
-    format,
+    format: requested,
     quality: Math.max(1, Math.min(100, Math.round(options.quality ?? options.images?.quality ?? 90))),
     scaleFactor: Math.max(0.1, options.scaleFactor ?? options.images?.scaleFactor ?? 1),
   };

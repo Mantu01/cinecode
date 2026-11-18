@@ -43,6 +43,11 @@ const referencePath = path.resolve(pkg, "..", "..", "docs/config-reference.md");
 if (!existsSync(referencePath) || readFileSync(referencePath, "utf8") !== generateReferenceMarkdown()) {
   fail("docs/config-reference.md is stale; run pnpm generate:schema");
 }
+const { formatReferenceMarkdown } = await import(pathToFileURL(path.join(dist, "esm/core/output-plan.js")).href);
+const formatsPath = path.resolve(pkg, "..", "..", "docs/output-formats.md");
+if (!existsSync(formatsPath) || readFileSync(formatsPath, "utf8") !== formatReferenceMarkdown()) {
+  fail("docs/output-formats.md is stale; run pnpm generate:schema");
+}
 
 const binEntry = path.join(dist, "esm", "cli", "main.js");
 const binSource = readFileSync(binEntry, "utf8");

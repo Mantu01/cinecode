@@ -1,6 +1,5 @@
 import type { EffectInput, EffectProcessor } from "./engine.js";
 import { defineEffect, getData, putData } from "./engine.js";
-import { registerEffect } from "../extensions/index.js";
 import { deriveSeed } from "../core/random/index.js";
 
 export type FilmGrainType = "monochrome" | "color" | "highlight-weighted";
@@ -110,4 +109,3 @@ export const filmGrainEffect: EffectProcessor = defineEffect({
   },
 });
 
-registerEffect(filmGrainEffect);

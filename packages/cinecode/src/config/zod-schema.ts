@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { OUTPUT_FORMATS } from "../core/output-plan.js";
 
 export const RESOLUTION_DIMENSIONS = {
   "720p": { width: 1280, height: 720 },
@@ -13,9 +14,7 @@ export const SCHEMA_VERSION = 2 as const;
 export const SCHEMA_VERSIONS = [1, SCHEMA_VERSION] as const;
 export const ASPECT_RATIOS = ["16:9", "9:16", "1:1", "4:3", "21:9"] as const;
 export const VIDEO_CODECS = ["h264", "h265", "av1", "prores", "vp9", "ffv1", "utvideo"] as const;
-export const RENDER_FORMATS = [
-  "mp4", "webm", "prores", "mkv", "avi", "gif", "apng", "png", "jpg", "webp", "avif", "pdf", "webm-alpha", "prores-alpha",
-] as const;
+export const RENDER_FORMATS = OUTPUT_FORMATS;
 export const QUALITY_SETTINGS = ["draft", "preview", "medium", "final", "lossless", "low", "high"] as const;
 export const ENCODER_PRESETS = ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"] as const;
 export const HARDWARE_ACCELERATION = ["auto", "nvenc", "videotoolbox", "qsv", "off"] as const;
@@ -45,6 +44,7 @@ export const ConcurrencySchema = z.union([z.number().int().positive(), z.literal
 export const ProjectInputSchema = z.object({
   entry: z.string().min(1).optional(),
   sourceDir: z.string().min(1).optional(),
+  mediaDir: z.string().min(1).optional(),
   outputDir: z.string().min(1).optional(),
   cacheDir: z.string().min(1).optional(),
 }).strict();
@@ -97,6 +97,7 @@ export const RenderInputSchema = z.object({
   hardwareAcceleration: HardwareAccelerationSchema.optional(),
   concurrency: ConcurrencySchema.optional(),
   chunkSize: z.number().int().positive().optional(),
+  memoryBudgetMb: z.number().int().positive().optional(),
   alpha: z.boolean().optional(),
   twoPass: z.boolean().optional(),
   platformPreset: PlatformPresetSchema.optional(),
@@ -138,8 +139,10 @@ export const CinecodeConfigInputSchema = z.object({
   images: ImageInputSchema.optional(),
   dev: DevInputSchema.optional(),
   sourceDir: z.string().optional(),
+  mediaDir: z.string().optional(),
   outputDir: z.string().optional(),
   cacheDir: z.string().optional(),
+  allowCoLocatedMedia: z.boolean().optional(),
   cloudMedia: z.array(CloudMediaEntrySchema).optional(),
   render: RenderInputSchema.optional(),
   audio: AudioInputSchema.optional(),
@@ -157,6 +160,7 @@ export const CinecodeConfigInputSchema = z.object({
 export const ProjectConfigSchema = z.object({
   entry: z.string().min(1),
   sourceDir: z.string().min(1),
+  mediaDir: z.string().min(1),
   outputDir: z.string().min(1),
   cacheDir: z.string().min(1),
 }).strict();
@@ -204,8 +208,10 @@ export const NormalizedConfigSchema = CinecodeConfigInputSchema.extend({
   images: ImageConfigSchema,
   dev: DevConfigSchema,
   sourceDir: z.string().min(1),
+  mediaDir: z.string().min(1),
   outputDir: z.string().min(1),
   cacheDir: z.string().min(1),
+  allowCoLocatedMedia: z.boolean().optional(),
   cloudMedia: z.array(CloudMediaEntrySchema),
   render: RenderConfigSchema,
   audio: AudioConfigSchema,
@@ -286,4 +292,72 @@ export function validateConfigWithZod(config: unknown): ZodValidationResult {
 
 export function validateNormalizedConfigWithZod(config: unknown): ZodValidationResult {
   return toValidationResult(NormalizedConfigSchema.safeParse(config));
+}
+
+export const ManifestDurationSchema = z.union([z.number().finite().positive(), z.string().min(1)]);
+export const ManifestDimensionSchema = z.number().int().min(2).max(16384);
+export const ManifestFpsSchema = z.number().positive().max(120);
+
+const ManifestEntryBaseSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1).optional(),
+  file: z.string().min(1).optional(),
+  tags: z.array(z.string()).optional(),
+  description: z.string().optional(),
+}).strict();
+
+export const ManifestImageEntrySchema = ManifestEntryBaseSchema.extend({
+  width: ManifestDimensionSchema.optional(),
+  height: ManifestDimensionSchema.optional(),
+  format: ImageFormatSchema.optional(),
+  quality: z.number().int().min(1).max(100).optional(),
+  scaleFactor: z.number().positive().optional(),
+  background: HexColorSchema.optional(),
+  seed: z.number().optional(),
+}).strict();
+
+export const ManifestAudioEntrySchema = ManifestEntryBaseSchema.extend({
+  kind: z.enum(["voice", "music", "sfx", "other"]).optional(),
+  src: z.string().min(1).optional(),
+  sampleRate: z.number().int().positive().optional(),
+  channels: AudioChannelsSchema.optional(),
+  gain: z.number().finite().nonnegative().optional(),
+  duration: ManifestDurationSchema.optional(),
+  format: z.enum(["wav", "mp3", "flac", "aac"]).optional(),
+}).strict();
+
+const ManifestVisualEntrySchema = ManifestEntryBaseSchema.extend({
+  duration: ManifestDurationSchema.optional(),
+  width: ManifestDimensionSchema.optional(),
+  height: ManifestDimensionSchema.optional(),
+  fps: ManifestFpsSchema.optional(),
+  background: HexColorSchema.optional(),
+}).strict();
+
+export const ManifestSceneEntrySchema = ManifestVisualEntrySchema.strict();
+
+export const ManifestTimelineEntrySchema = ManifestVisualEntrySchema.extend({
+  format: RenderFormatSchema.optional(),
+  codec: VideoCodecSchema.optional(),
+  quality: QualitySettingSchema.optional(),
+  sceneRefs: z.array(z.string().min(1)).optional(),
+  audioRef: z.array(z.string().min(1)).optional(),
+}).strict();
+
+export const ManifestReservedEntrySchema = ManifestEntryBaseSchema.extend({
+  props: z.record(z.string(), z.unknown()).optional(),
+}).strict();
+
+export const ManifestSchema = z.object({
+  kind: z.literal("main").optional(),
+  images: z.array(ManifestImageEntrySchema).optional(),
+  audio: z.array(ManifestAudioEntrySchema).optional(),
+  scenes: z.array(ManifestSceneEntrySchema).optional(),
+  timelines: z.array(ManifestTimelineEntrySchema).optional(),
+  characters: z.array(ManifestReservedEntrySchema).optional(),
+  motions: z.array(ManifestReservedEntrySchema).optional(),
+}).strict();
+
+export function validateManifestShape(manifest: unknown): ZodValidationResult {
+  return toValidationResult(ManifestSchema.safeParse(manifest));
 }

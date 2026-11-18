@@ -17,4 +17,8 @@ writeFileSync(outputPath, generateSchemaJson(), "utf-8");
 const docsDir = resolve(packageRoot, "..", "..", "docs");
 mkdirSync(docsDir, { recursive: true });
 writeFileSync(resolve(docsDir, "config-reference.md"), generateReferenceMarkdown(), "utf-8");
+const { formatReferenceMarkdown } = await import(
+  pathToFileURL(resolve(packageRoot, "dist/esm/core/output-plan.js")).href
+);
+writeFileSync(resolve(docsDir, "output-formats.md"), formatReferenceMarkdown(), "utf-8");
 console.log(`schema: wrote ${outputPath}`);

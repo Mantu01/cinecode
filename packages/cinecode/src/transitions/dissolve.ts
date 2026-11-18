@@ -1,7 +1,6 @@
 import { Canvas } from "@napi-rs/canvas";
 import type { SKRSContext2D } from "@napi-rs/canvas";
 import { defineTransition, type TransitionContext, type TransitionProcessor } from "./engine.js";
-import { registerTransition } from "../extensions/index.js";
 
 export interface DissolveOptions {
   readonly mask?: Canvas;
@@ -91,4 +90,3 @@ export const dissolveTransition: TransitionProcessor = defineTransition({
   },
 });
 
-registerTransition(dissolveTransition);

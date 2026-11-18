@@ -34,6 +34,7 @@ export interface MachineErrorRecord {
   readonly location?: ErrorLocation;
   readonly fixHint?: string;
   readonly cause?: string;
+  readonly issues?: readonly unknown[];
 }
 
 export interface MachineReport {

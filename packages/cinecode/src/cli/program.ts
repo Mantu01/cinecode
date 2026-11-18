@@ -154,6 +154,7 @@ function describeFailure(error: unknown): Failure {
     };
   }
   if (isCinecodeError(error)) {
+    const rawIssues = (error as { issues?: readonly CinecodeError[] }).issues;
     return {
       exitCode: exitCodeForError(error.code),
       error: {
@@ -163,6 +164,14 @@ function describeFailure(error: unknown): Failure {
         location: error.location,
         fixHint: error.fixHint,
         cause: error.cause instanceof Error ? error.cause.message : undefined,
+        issues: Array.isArray(rawIssues)
+          ? rawIssues.map((issue) => ({
+              code: issue.code,
+              message: issue.message,
+              location: issue.location,
+              fixHint: issue.fixHint,
+            }))
+          : undefined,
       },
       errorObject: error,
     };
@@ -233,8 +242,9 @@ export async function runCli(argv: readonly string[] = process.argv, options: Ru
   const program = createProgram();
   const noColor = raw.includes("--no-color");
   const previousNoColor = process.env.NO_COLOR;
+  const previousVerbose = process.env.CINECODE_VERBOSE;
   const machine = raw.includes("--json");
-  const stdoutWrite = process.stdout.write.bind(process.stdout) as (text: string) => void;
+  const stdoutWrite = options.stdout ?? (process.stdout.write.bind(process.stdout) as (text: string) => void);
   let captured = "";
   let restored = false;
   const restoreStdout = (): void => {
@@ -301,6 +311,7 @@ export async function runCli(argv: readonly string[] = process.argv, options: Ru
 
     program.hook("preAction", async (_thisCommand, actionCommand) => {
       const opts = actionCommand.opts();
+      if (opts.verbose === true) process.env.CINECODE_VERBOSE = "1";
       if (applied.length > 0 && opts.verbose === true) console.error(`cinecode: alias ${applied.join(", ")}`);
       if (opts.json === true) {
         const { setJsonMode } = await import("../observability/logger.js");
@@ -329,6 +340,8 @@ export async function runCli(argv: readonly string[] = process.argv, options: Ru
       if (previousNoColor === undefined) delete process.env.NO_COLOR;
       else process.env.NO_COLOR = previousNoColor;
     }
+    if (previousVerbose === undefined) delete process.env.CINECODE_VERBOSE;
+    else process.env.CINECODE_VERBOSE = previousVerbose;
   }
 }
 

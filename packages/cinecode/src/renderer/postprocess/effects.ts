@@ -1,9 +1,5 @@
 import type { EffectInput, EffectProcessor } from "../../effects/engine.js";
 import { defineEffect, getData, putData } from "../../effects/engine.js";
-import { registerEffect } from "../../extensions/index.js";
-import { vignetteEffect } from "../../effects/vignette.js";
-import { colorGradingEffect } from "../../effects/color-grading.js";
-import { filmGrainEffect } from "../../effects/film-grain.js";
 
 export interface BulgeParams {
   readonly strength?: number;
@@ -61,12 +57,3 @@ export const bulgeEffect: EffectProcessor = defineEffect({
     });
   },
 });
-
-registerEffect(bulgeEffect);
-
-export const GLOBAL_POST_PROCESS_EFFECTS: readonly EffectProcessor[] = [
-  vignetteEffect,
-  colorGradingEffect,
-  filmGrainEffect,
-  bulgeEffect,
-];

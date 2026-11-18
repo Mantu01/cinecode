@@ -1,8 +1,8 @@
 import { Command } from "commander";
 import { createWriteStream } from "node:fs";
-import { mkdir, stat } from "node:fs/promises";
-import { resolve } from "node:path";
-import { createHash } from "node:crypto";
+import { mkdir, stat, unlink, rename } from "node:fs/promises";
+import { resolve, relative, join, dirname } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
 import { ensureGitignoreEntries } from "../config/gitignore.js";
 import { createError, ErrorCode } from "../errors/index.js";
 import { runReport } from "./run-report.js";
@@ -14,65 +14,138 @@ interface DownloadOptions {
   config?: string;
   root?: string;
   verbose?: boolean;
+  timeoutMs?: number;
 }
 
-async function downloadFile(
+const DEFAULT_TIMEOUT_MS = 30_000;
+const MAX_DOWNLOAD_SIZE_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB guard
+const MAX_RETRIES = 3;
+
+export async function downloadFileAtomic(
   url: string,
   destPath: string,
   expectedHash?: string,
-  onProgress?: (downloaded: number, total: number) => void
+  options: { timeoutMs?: number; mediaDir?: string; sourceDir?: string } = {},
+  onProgress?: (downloaded: number, total: number) => void,
 ): Promise<void> {
-  const response = await fetch(url, {
-    redirect: "follow",
-  });
+  const mediaDir = options.mediaDir ? resolve(options.mediaDir) : dirname(resolve(destPath));
+  const sourceDir = options.sourceDir ? resolve(options.sourceDir) : undefined;
+  const resolvedDest = resolve(destPath);
 
-  if (!response.ok) {
-    throw createError(ErrorCode.CC6002, { url, reason: `HTTP ${response.status}: ${response.statusText}` });
+  // Downloader guardrail: never target authored source directory
+  if (sourceDir && (resolvedDest === sourceDir || resolvedDest.startsWith(sourceDir + "/") || resolvedDest.startsWith(sourceDir + "\\"))) {
+    throw createError(ErrorCode.CC1010, {
+      path: resolvedDest,
+      reason: `Downloader refusing to target authored source directory "${sourceDir}". Media must be saved to media root.`,
+    });
   }
 
-  const total = parseInt(response.headers.get("content-length") ?? "0", 10);
-  let downloaded = 0;
+  await mkdir(dirname(resolvedDest), { recursive: true });
 
-  await mkdir(resolve(destPath, ".."), { recursive: true });
+  const tempName = `.${randomUUID().slice(0, 8)}.${Date.now()}.tmp`;
+  const tempPath = join(dirname(resolvedDest), tempName);
 
-  const fileStream = createWriteStream(destPath, { flags: "w" });
-  const hash = expectedHash ? createHash("sha256") : null;
+  let attempt = 0;
+  let lastError: unknown;
 
-  if (response.body) {
-    const reader = response.body.getReader();
+  while (attempt < MAX_RETRIES) {
+    attempt++;
+    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error(`Download timed out after ${timeoutMs}ms`)), timeoutMs);
+
+    let downloaded = 0;
+    const hash = expectedHash ? createHash("sha256") : null;
+    let fileStream: ReturnType<typeof createWriteStream> | undefined;
 
     try {
+      const response = await fetch(url, {
+        redirect: "follow",
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw createError(ErrorCode.CC6002, { url, reason: `HTTP ${response.status}: ${response.statusText}` });
+      }
+
+      const contentLengthHeader = response.headers.get("content-length");
+      const total = contentLengthHeader ? parseInt(contentLengthHeader, 10) : 0;
+      if (total > MAX_DOWNLOAD_SIZE_BYTES) {
+        throw createError(ErrorCode.CC6002, {
+          url,
+          reason: `File size ${total} bytes exceeds maximum allowed download size of ${MAX_DOWNLOAD_SIZE_BYTES} bytes`,
+        });
+      }
+
+      if (!response.body) {
+        throw createError(ErrorCode.CC6002, { url, reason: "No response body received" });
+      }
+
+      fileStream = createWriteStream(tempPath, { flags: "w" });
+      const reader = response.body.getReader();
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        await new Promise<void>((resolvePromise, reject) => {
-          fileStream.write(value, err => {
-            if (err) reject(err);
-            else resolvePromise();
-          });
-        });
+
         downloaded += value.length;
+        if (downloaded > MAX_DOWNLOAD_SIZE_BYTES) {
+          throw createError(ErrorCode.CC6002, {
+            url,
+            reason: `Download exceeded maximum limit of ${MAX_DOWNLOAD_SIZE_BYTES} bytes`,
+          });
+        }
+
+        await new Promise<void>((res, rej) => {
+          fileStream!.write(value, err => (err ? rej(err) : res()));
+        });
+
         if (hash) hash.update(value);
         if (onProgress) onProgress(downloaded, total);
       }
-    } finally {
-      fileStream.end();
+
+      await new Promise<void>((res, rej) => {
+        fileStream!.on("finish", res);
+        fileStream!.on("error", rej);
+        fileStream!.end();
+      });
+      fileStream = undefined;
+
+      // Verify hash if specified
+      if (expectedHash) {
+        const actualHash = hash!.digest("hex");
+        if (actualHash.toLowerCase() !== expectedHash.toLowerCase()) {
+          throw createError(ErrorCode.CC6003, { url, expected: expectedHash, actual: actualHash });
+        }
+      }
+
+      // Atomic rename into place
+      await rename(tempPath, resolvedDest);
+      clearTimeout(timer);
+      return;
+    } catch (err) {
+      clearTimeout(timer);
+      if (fileStream) {
+        fileStream.destroy();
+      }
+      await unlink(tempPath).catch(() => {});
+      lastError = err;
+
+      // Do not retry on explicit hash mismatch or size limit
+      if (typeof (err as any)?.code === "string" && (err as any).code === ErrorCode.CC6003) {
+        throw err;
+      }
+
+      if (attempt < MAX_RETRIES) {
+        const backoff = 100 * (2 ** (attempt - 1));
+        await new Promise(r => setTimeout(r, backoff));
+      }
     }
-  } else {
-    throw createError(ErrorCode.CC6002, { url, reason: "No response body" });
   }
 
-  await new Promise<void>((resolvePromise, reject) => {
-    fileStream.on("finish", resolvePromise);
-    fileStream.on("error", reject);
-  });
-
-  if (expectedHash) {
-    const actualHash = hash!.digest("hex");
-    if (actualHash !== expectedHash.toLowerCase()) {
-      throw createError(ErrorCode.CC6003, { url, expected: expectedHash, actual: actualHash });
-    }
-  }
+  await unlink(tempPath).catch(() => {});
+  if (lastError instanceof Error) throw lastError;
+  throw createError(ErrorCode.CC6002, { url, reason: String(lastError) });
 }
 
 function formatProgress(downloaded: number, total: number): string {
@@ -112,33 +185,39 @@ export async function mediaDownloadCommand(options: DownloadOptions): Promise<vo
   reportResolution(resolution, options.verbose === true);
   const config = resolution.config;
 
+  const mediaDir = resolve(resolution.root, config.mediaDir);
+  const sourceDir = resolve(resolution.root, config.sourceDir);
+
   if (!config.gitignore) {
     console.warn("gitignore is disabled; downloaded media will not be ignored");
   } else {
     await ensureGitignoreEntries({
-      sourceDir: config.sourceDir,
+      mediaDir: config.mediaDir,
       outputDir: config.outputDir ?? "output",
       cacheDir: config.cacheDir ?? ".cinecode/cache",
       projectRoot: resolution.root,
       enabled: true,
+      ignoreMedia: false,
     });
   }
 
-  const cloudMedia = (config.cloudMedia ?? []).filter(m => !options.only || m.name === options.only || getFileNameFromUrl(m.url) === options.only);
+  const cloudMedia = (config.cloudMedia ?? []).filter(
+    m => !options.only || m.name === options.only || getFileNameFromUrl(m.url) === options.only,
+  );
 
   if (cloudMedia.length === 0) {
     console.log("No cloud media entries to download");
     return;
   }
 
-  console.log(`Downloading ${cloudMedia.length} file(s) to ${resolve(resolution.root, config.sourceDir)}...`);
+  console.log(`Downloading ${cloudMedia.length} file(s) to ${mediaDir}...`);
   console.log("");
 
   const results: Array<{ name: string; status: "ok" | "skipped" | "failed"; error?: string }> = [];
 
   for (const entry of cloudMedia) {
     const fileName = entry.name ?? getFileNameFromUrl(entry.url);
-    const destPath = resolve(resolution.root, config.sourceDir, fileName);
+    const destPath = resolve(mediaDir, fileName);
 
     try {
       await stat(destPath);
@@ -160,13 +239,19 @@ export async function mediaDownloadCommand(options: DownloadOptions): Promise<vo
 
     let lastProgressLine = "";
     try {
-      await downloadFile(entry.url, destPath, entry.sha256, (downloaded, total) => {
-        const line = formatProgress(downloaded, total);
-        if (line !== lastProgressLine) {
-          process.stdout.write(`\r  ${fileName}: ${line}`);
-          lastProgressLine = line;
-        }
-      });
+      await downloadFileAtomic(
+        entry.url,
+        destPath,
+        entry.sha256,
+        { mediaDir, sourceDir, timeoutMs: options.timeoutMs },
+        (downloaded, total) => {
+          const line = formatProgress(downloaded, total);
+          if (line !== lastProgressLine) {
+            process.stdout.write(`\r  ${fileName}: ${line}`);
+            lastProgressLine = line;
+          }
+        },
+      );
       process.stdout.write("\r\x1b[K");
       console.log(`\u2713  ${fileName} - done`);
       results.push({ name: fileName, status: "ok" });
@@ -188,13 +273,16 @@ export async function mediaDownloadCommand(options: DownloadOptions): Promise<vo
   console.log(`Summary: ${ok} downloaded, ${skipped} skipped, ${failed} failed`);
 
   if (failed > 0) {
-    throw createError(ErrorCode.CC6002, { url: `${failed} cloud media file(s)`, reason: results.filter(r => r.status === "failed").map(r => `${r.name}: ${r.error}`).join("; ") });
+    throw createError(ErrorCode.CC6002, {
+      url: `${failed} cloud media file(s)`,
+      reason: results.filter(r => r.status === "failed").map(r => `${r.name}: ${r.error}`).join("; "),
+    });
   }
 }
 
 export function createMediaDownloadCommand(): Command {
   const cmd = new Command("media:download")
-    .description("Download cloud media files into source directory")
+    .description("Download cloud media files into media directory")
     .option("--force", "Re-download existing files", false)
     .option("--only <name>", "Download only the specified entry")
     .action(async (options: DownloadOptions, command: Command) => {

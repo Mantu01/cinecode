@@ -24,6 +24,7 @@ import {
 import { formatTime } from "../pipeline/progress.js";
 import { createError, ErrorCode } from "../errors/index.js";
 import { runReport } from "./run-report.js";
+import { resolveRenderParameters } from "./precedence.js";
 
 export type GenerateKind = "audio" | "image" | "scene" | "timeline" | "all";
 
@@ -147,22 +148,51 @@ async function generateVideoTarget(
     ? await composeScene(project, target.entry as SceneEntry)
     : await assembleTimelineComposition(project, target.entry.id);
 
+  const { parameters } = resolveRenderParameters({
+    flags: {
+      out: options.out,
+      concurrency: options.concurrency,
+    },
+    selection: {
+      id: target.entry.id,
+      name: target.entry.name,
+      width: (target.entry as any).width,
+      height: (target.entry as any).height,
+      fps: (target.entry as any).fps,
+      format: (target.entry as any).format,
+      codec: (target.entry as any).codec,
+      quality: (target.entry as any).quality,
+      duration: (target.entry as any).duration ?? composition.duration,
+    },
+    project: {
+      root: project.rootDir,
+      config: project.config,
+      mode: "project",
+      selection: `${target.kind} ${target.entry.id}`,
+    },
+  });
+
   const subdir = target.kind === "scene" ? OUTPUT_SUBDIRS.scenes : OUTPUT_SUBDIRS.videos;
-  const format = (target.entry as TimelineEntry).format ?? config.render?.format ?? "mp4";
   const outDir = options.out ? resolve(options.out) : join(resolveOutputDir(config), subdir);
   await ensureDir(outDir);
-  const outputPath = await resolveOutputPath(join(outDir, `${target.entry.id}.${format}`), options.overwrite ?? false);
+  const outputPath = await resolveOutputPath(join(outDir, `${target.entry.id}.${parameters.format.value}`), options.overwrite ?? false);
 
   if (options.dryRun) return outputPath;
 
   const job = startCompositionRender({
-    composition,
+    composition: {
+      ...composition,
+      width: parameters.width.value,
+      height: parameters.height.value,
+      fps: parameters.fps.value,
+    },
     outputPath,
     config,
     seed: options.seed ?? 0,
-    concurrency: options.concurrency,
-    quality: (target.entry as TimelineEntry).quality,
+    concurrency: parameters.concurrency.value,
+    quality: parameters.quality.value,
     silent: options.silent ?? false,
+    format: parameters.format.value,
   });
 
   await job.promise;

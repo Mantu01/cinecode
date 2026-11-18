@@ -1,5 +1,5 @@
 import type { AudioBuffer } from "../types.js";
-import { registerAudioProcessor, type AudioProcessorExtension } from "../../extensions/index.js";
+import type { AudioProcessorExtension } from "../../extensions/registry.js";
 import { reverbEffect, type ReverbParams } from "./effect.js";
 import { chamber, hall, plate, roomSmall, spring } from "./synthesize.js";
 
@@ -22,5 +22,3 @@ export const reverbProcessor: AudioProcessorExtension = {
   name: "reverb",
   process: (buffer, params) => processReverb(buffer, params),
 };
-
-registerAudioProcessor(reverbProcessor);

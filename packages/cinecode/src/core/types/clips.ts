@@ -132,6 +132,10 @@ export interface MediaProps {
 
 export interface AudioLikeProps {
   readonly trimStart?: number | string;
+  readonly trimEnd?: number | string;
+  readonly speed?: number;
+  readonly reverse?: boolean;
+  readonly loop?: boolean;
   readonly volume?: number;
   readonly fadeIn?: number | string;
   readonly fadeOut?: number | string;

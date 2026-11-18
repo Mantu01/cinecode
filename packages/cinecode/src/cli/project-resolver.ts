@@ -4,8 +4,7 @@ import type { CinecodeConfig, Composition } from "../core/types/index.js";
 import { getDefaultConfig, loadConfig } from "../config/schema.js";
 import { resolveProjectLocation, type ConfigSource } from "../config/project.js";
 import { createMediaCache } from "../media/cache.js";
-import { createMediaResolver } from "../media/resolver.js";
-import type { MediaCatalog } from "../media/resolver.js";
+import { createMediaResolver, type MediaCatalog, type MediaIndex } from "../media/index.js";
 import { createError, ErrorCode, isCinecodeError } from "../errors/index.js";
 import { recordDegradation } from "../errors/degradations.js";
 import {
@@ -14,11 +13,14 @@ import {
   findEntry,
   loadManifestProject,
   resolveEntryFile,
+  validateManifestDocument,
   type ManifestProject,
+  type ManifestValidationResult,
 } from "../manifest/index.js";
 import { mediaIgnore } from "./shared.js";
 import { loadComposition, selectComposition } from "./composition-loader.js";
 import { runReport } from "./run-report.js";
+import { validateComposition, type CompositionValidation } from "../core/validation/index.js";
 
 export type ProjectMode = "project" | "file";
 export type SelectionKind = "timeline" | "scene" | "composition" | "all" | "none";
@@ -30,6 +32,7 @@ export interface ProjectSelection {
 }
 
 export interface MediaAccess {
+  readonly index: MediaIndex;
   readonly catalog: MediaCatalog;
   readonly cache: ReturnType<typeof createMediaCache>;
   readonly root: string;
@@ -43,6 +46,7 @@ export interface ProjectResolution {
   readonly source: ConfigSource | "standalone";
   readonly manifestPath: string;
   readonly manifest: ManifestProject | null;
+  readonly validation?: ManifestValidationResult;
   readonly selection: ProjectSelection;
   /** Compositions loaded from an explicit file; empty in project mode. */
   readonly compositions: readonly Composition[];
@@ -52,6 +56,10 @@ export interface ProjectResolution {
   readonly selected: () => Promise<readonly Composition[]>;
   /** Every timeline and scene in the manifest, for project-wide validation. */
   readonly all: () => Promise<readonly Composition[]>;
+  /** Shared timeline validation for every composition, cached per invocation. */
+  readonly validateCompositions: () => Promise<readonly CompositionValidation[]>;
+  /** Populated by validateCompositions() so every command reads the same result. */
+  readonly compositionValidation?: readonly CompositionValidation[];
 }
 
 export interface ResolveProjectOptions {
@@ -173,10 +181,12 @@ async function loadProjectConfig(options: ResolveProjectOptions): Promise<{
 
 /** One resolution per invocation; repeated reads reuse the same promises. */
 export class ProjectResolver {
+  private readonly moduleCache = new Map<string, unknown>();
   private pending: Promise<ProjectResolution> | undefined;
   private mediaPending: Promise<MediaAccess> | undefined;
   private selectedPending: Promise<readonly Composition[]> | undefined;
   private allPending: Promise<readonly Composition[]> | undefined;
+  private validationPending: Promise<readonly CompositionValidation[]> | undefined;
   private resolved: ProjectResolution | undefined;
 
   constructor(private readonly options: ResolveProjectOptions) {}
@@ -201,18 +211,34 @@ export class ProjectResolver {
     return this.allPending;
   }
 
+  validateCompositions(): Promise<readonly CompositionValidation[]> {
+    this.validationPending ??= (async () => {
+      const results = (await this.all()).map((composition) => validateComposition(composition));
+      if (this.resolved) {
+        (this.resolved as { compositionValidation?: readonly CompositionValidation[] }).compositionValidation = results;
+      }
+      return results;
+    })();
+    return this.validationPending;
+  }
+
   private async buildMedia(): Promise<MediaAccess> {
     const project = await this.resolve();
     const cache = createMediaCache(resolve(project.root, project.config.cacheDir));
     await cache.initialize();
     const catalog = createMediaResolver({
       sourceDir: resolve(project.root, project.config.sourceDir),
+      mediaDir: resolve(project.root, project.config.mediaDir),
+      projectRoot: project.root,
+      allowCoLocatedMedia: project.config.allowCoLocatedMedia,
       cache,
       cloudMedia: project.config.cloudMedia,
       ignore: mediaIgnore(project.config),
+      manifest: project.manifest?.manifest,
+      compositions: project.compositions,
     });
     await catalog.initialize();
-    return { catalog, cache, root: project.root };
+    return { index: catalog.index, catalog, cache, root: project.root };
   }
 
   private async buildSelected(): Promise<readonly Composition[]> {
@@ -269,6 +295,7 @@ export class ProjectResolver {
         media: () => this.media(),
         selected: () => this.selected(),
         all: () => this.all(),
+        validateCompositions: () => this.validateCompositions(),
       };
       this.resolved = resolution;
       return resolution;
@@ -299,6 +326,20 @@ export class ProjectResolver {
       });
     }
 
+    const validation = await validateManifestDocument(project.rawManifest ?? project.manifest, {
+      rootDir: location.root,
+      manifestPath: project.entryPath,
+      config,
+      moduleCache: this.moduleCache,
+    });
+    project = { ...project, validation, moduleCache: this.moduleCache };
+
+    if (!validation.valid && validation.errors.length > 0) {
+      const first = validation.errors[0]!;
+      (first as any).issues = validation.errors;
+      throw first;
+    }
+
     const manifest = project.manifest;
     const populated = [manifest.timelines, manifest.scenes, manifest.images, manifest.audio].some(
       (entries) => (entries?.length ?? 0) > 0,
@@ -318,11 +359,13 @@ export class ProjectResolver {
       source: location.source,
       manifestPath: project.entryPath,
       manifest: project,
+      validation,
       selection: selectFromProject(project, options),
       compositions: [],
       media: () => this.media(),
       selected: () => this.selected(),
       all: () => this.all(),
+      validateCompositions: () => this.validateCompositions(),
     };
     this.resolved = resolution;
     return resolution;
@@ -342,6 +385,18 @@ export function describeResolution(resolution: ProjectResolution): Record<string
     config: resolution.configPath || null,
     source: resolution.source,
     manifest: resolution.manifestPath,
+    ...(resolution.compositionValidation
+      ? {
+          timelineValidation: {
+            valid: resolution.compositionValidation.every((result) => result.valid),
+            compositions: resolution.compositionValidation.map((result) => ({
+              composition: result.composition,
+              errors: result.errors.length,
+              warnings: result.warnings.length,
+            })),
+          },
+        }
+      : {}),
     selection: {
       kind: resolution.selection.kind,
       id: resolution.selection.id ?? null,

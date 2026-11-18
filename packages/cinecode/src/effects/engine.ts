@@ -1,10 +1,15 @@
 import { Canvas } from "@napi-rs/canvas";
 import type { SKRSContext2D, ImageData } from "@napi-rs/canvas";
 import { random } from "../core/random/index.js";
-import { createHash } from "node:crypto";
 
-/** Pool of temporary canvases for effect processing. Prevents repeated allocations. */
-const tempCanvasPool = new Map<string, Canvas>();
+import { ByteBoundedCache } from "../renderer/pool.js";
+
+/** Pool of temporary canvases for effect processing, byte-bounded with LRU. */
+const tempCanvasPool = new ByteBoundedCache<string, Canvas>(
+  "effect-canvases",
+  128 * 1024 * 1024,
+  (canvas) => canvas.width * canvas.height * 4,
+);
 
 export function getTempCanvas(width: number, height: number): Canvas {
   const key = `${width}x${height}`;
@@ -16,59 +21,9 @@ export function getTempCanvas(width: number, height: number): Canvas {
   return canvas;
 }
 
-/** Fast canvas fingerprint: samples 16 pixels (4x4 grid) for an 8-char hash. */
-function fastCanvasHash(canvas: Canvas): string {
-  const ctx = canvas.getContext("2d");
-  const w = canvas.width;
-  const h = canvas.height;
-  const stepX = Math.max(1, Math.floor(w / 4));
-  const stepY = Math.max(1, Math.floor(h / 4));
-  let hashInput = Buffer.alloc(0);
-  for (let sy = 0; sy < 4; sy++) {
-    for (let sx = 0; sx < 4; sx++) {
-      const x = Math.min(sx * stepX, w - 1);
-      const y = Math.min(sy * stepY, h - 1);
-      const pixel = ctx.getImageData(x, y, 1, 1).data;
-      hashInput = Buffer.concat([hashInput, Buffer.from([pixel[0]!, pixel[1]!, pixel[2]!, pixel[3]!])]);
-    }
-  }
-  return createHash("md5").update(hashInput).digest("hex").slice(0, 8);
-}
-
-const effectCache = new Map<string, Canvas>();
-const EFFECT_CACHE_MAX = 2048;
-
-export function clearEffectCache(): void {
-  effectCache.clear();
-}
-
-/**
- * Caches expensive effect results keyed by input canvas hash + effect name + params.
- * Avoids recomputation when the same frame is processed multiple times.
- */
-export function applyCachedEffect(
-  input: EffectInput,
-  effectName: string,
-  params: Record<string, unknown>,
-  processor: (input: EffectInput, params: Record<string, unknown>) => void,
-): void {
-  const hash = fastCanvasHash(input.canvas);
-  const key = `${hash}:${effectName}:${JSON.stringify(params)}`;
-  const cached = effectCache.get(key);
-  if (cached) {
-    input.ctx.drawImage(cached, 0, 0);
-    return;
-  }
-
-  processor(input, params);
-
-  if (effectCache.size >= EFFECT_CACHE_MAX) {
-    const oldest = effectCache.keys().next().value;
-    if (oldest) effectCache.delete(oldest);
-  }
-  const copy = new (input.canvas.constructor as new(w: number, h: number) => Canvas)(input.width, input.height);
-  copy.getContext("2d").drawImage(input.canvas, 0, 0);
-  effectCache.set(key, copy);
+/** Drops every pooled effect canvas; called between render jobs. */
+export function clearTempCanvasPool(): void {
+  tempCanvasPool.clear();
 }
 
 export interface EffectInput {

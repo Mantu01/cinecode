@@ -1,5 +1,4 @@
 import type { EffectProcessor } from "./engine.js";
-import { registerEffect } from "../extensions/index.js";
 import { getData, putData, type EffectInput } from "./engine.js";
 import { gaussianBlur } from "./engine.js";
 
@@ -68,5 +67,3 @@ export const gaussianBlurEffect: EffectProcessor = {
   },
 };
 
-registerEffect(boxBlurEffect);
-registerEffect(gaussianBlurEffect);

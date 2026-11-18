@@ -1,6 +1,5 @@
 import type { SKRSContext2D } from "@napi-rs/canvas";
 import { defineTransition, type TransitionContext, type TransitionProcessor } from "./engine.js";
-import { registerTransition } from "../extensions/index.js";
 
 export function fadeToColor(
   ctx: SKRSContext2D,
@@ -43,5 +42,3 @@ export const fadeToWhiteTransition: TransitionProcessor = defineTransition({
   process: (ctx, context) => fadeToWhite(ctx, context),
 });
 
-registerTransition(fadeTransition);
-registerTransition(fadeToWhiteTransition);

@@ -90,12 +90,12 @@ function runFfmpeg(args: readonly string[]): Promise<number> {
 }
 
 export async function encodeTwoPass(options: TwoPassOptions): Promise<EncoderResult> {
-  const passLogFile = `${options.rawPath.replace(/\.bgra$/, "")}-pass`;
+  const passLogFile = `${options.rawPath.replace(/\.rgba$/, "")}-pass`;
   const bitrateKbps = options.bitrateKbps ?? estimateBitrateKbps(options.width, options.height, options.fps, options.crf);
   const input = [
     "-v", "error", "-y",
     "-f", "rawvideo",
-    "-pix_fmt", "bgra",
+    "-pix_fmt", "rgba",
     "-s", `${options.width}x${options.height}`,
     "-r", String(options.fps),
     "-i", options.rawPath,

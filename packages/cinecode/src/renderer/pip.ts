@@ -7,6 +7,9 @@ export interface SplitRegion {
   readonly y: number;
   readonly width: number;
   readonly height: number;
+  /** Source track name. Takes precedence over `clipIndex`. */
+  readonly track?: string;
+  /** Legacy source track index, used by the layout presets. */
   readonly clipIndex: number;
   readonly fit?: RegionFit;
   readonly padding?: number;
@@ -19,6 +22,7 @@ export interface ResolvedRegion {
   readonly y: number;
   readonly width: number;
   readonly height: number;
+  readonly track?: string;
   readonly clipIndex: number;
   readonly fit: RegionFit;
   readonly roundedCorners: number;
@@ -54,6 +58,7 @@ export function resolveRegions(
       y,
       width: clamp(rawWidth, 1, totalWidth - x),
       height: clamp(rawHeight, 1, totalHeight - y),
+      track: region.track,
       clipIndex: region.clipIndex,
       fit: region.fit ?? "cover",
       roundedCorners: Math.max(0, region.roundedCorners ?? 0),

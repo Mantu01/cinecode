@@ -26,6 +26,7 @@ export interface LoadConfigOptions {
 export const DEFAULT_PROJECT: ProjectConfig = {
   entry: "./main.ts",
   sourceDir: "./src",
+  mediaDir: "./media",
   outputDir: "./output",
   cacheDir: ".cinecode/cache",
 };
@@ -68,6 +69,7 @@ const DEFAULT_CONFIG: CinecodeConfig = {
   images: DEFAULT_IMAGES,
   dev: DEFAULT_DEV,
   sourceDir: DEFAULT_PROJECT.sourceDir,
+  mediaDir: DEFAULT_PROJECT.mediaDir,
   outputDir: DEFAULT_PROJECT.outputDir,
   cacheDir: DEFAULT_PROJECT.cacheDir,
   cloudMedia: [],
@@ -206,6 +208,11 @@ export function normalizeConfig(raw: Record<string, unknown>): CinecodeConfig {
     (raw.sourceDir as string | undefined) ??
     DEFAULT_PROJECT.sourceDir;
 
+  const mediaDir =
+    rawProject.mediaDir ??
+    (raw.mediaDir as string | undefined) ??
+    DEFAULT_PROJECT.mediaDir;
+
   const outputDir =
     rawProject.outputDir ??
     (raw.outputDir as string | undefined) ??
@@ -215,6 +222,9 @@ export function normalizeConfig(raw: Record<string, unknown>): CinecodeConfig {
     rawProject.cacheDir ??
     (raw.cacheDir as string | undefined) ??
     DEFAULT_PROJECT.cacheDir;
+
+  const allowCoLocatedMedia =
+    (raw.allowCoLocatedMedia as boolean | undefined) ?? false;
 
   // Resolution may come from the v2 `video` block, a legacy `render.resolution`
   // preset, or a raw composition's width/height.
@@ -244,7 +254,7 @@ export function normalizeConfig(raw: Record<string, unknown>): CinecodeConfig {
     rawVideo.defaultDuration ??
     (raw.duration as number | string | undefined);
 
-  const project: ProjectConfig = { entry, sourceDir, outputDir, cacheDir };
+  const project: ProjectConfig = { entry, sourceDir, mediaDir, outputDir, cacheDir };
 
   const video: VideoConfig = {
     width,
@@ -265,6 +275,7 @@ export function normalizeConfig(raw: Record<string, unknown>): CinecodeConfig {
     hardwareAcceleration: rawRender.hardwareAcceleration ?? DEFAULT_RENDER.hardwareAcceleration!,
     concurrency: rawRender.concurrency ?? (raw.concurrency as number | "auto" | undefined),
     chunkSize: rawRender.chunkSize,
+    memoryBudgetMb: rawRender.memoryBudgetMb,
     alpha: rawRender.alpha,
     twoPass: rawRender.twoPass,
     platformPreset: rawRender.platformPreset,
@@ -289,8 +300,10 @@ export function normalizeConfig(raw: Record<string, unknown>): CinecodeConfig {
       metricsPort: rawDev.metricsPort ?? DEFAULT_DEV.metricsPort,
     },
     sourceDir,
+    mediaDir,
     outputDir,
     cacheDir,
+    allowCoLocatedMedia,
     cloudMedia: (raw.cloudMedia as CinecodeConfig["cloudMedia"]) ?? DEFAULT_CONFIG.cloudMedia,
     render,
     audio: {

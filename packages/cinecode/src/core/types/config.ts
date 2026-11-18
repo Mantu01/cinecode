@@ -16,14 +16,14 @@ import type {
   ProjectConfigSchema,
   QualitySettingSchema,
   RenderConfigSchema,
-  RenderFormatSchema,
   ResolutionVariantInputSchema,
   VideoCodecSchema,
   VideoConfigSchema,
 } from "../../config/zod-schema.js";
+import type { RenderFormat } from "../output-plan.js";
 
+export type { RenderFormat };
 export type AspectRatio = z.infer<typeof AspectRatioSchema>;
-export type RenderFormat = z.infer<typeof RenderFormatSchema>;
 export type AlphaRenderFormat = Extract<RenderFormat, "webm-alpha" | "prores-alpha">;
 export type PlatformPresetName = z.infer<typeof PlatformPresetSchema>;
 export type ResolutionVariant = z.infer<typeof ResolutionVariantInputSchema>;

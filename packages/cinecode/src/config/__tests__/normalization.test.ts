@@ -8,7 +8,6 @@ import { collectSchemaFields } from "../json-schema.js";
 import { explicitConfigPaths, loadConfig, normalizeConfig } from "../schema.js";
 import { REMOVED_CONFIG_KEYS, validateAuthoringConfig } from "../validator.js";
 import { SCHEMA_VERSION } from "../zod-schema.js";
-import { CURRENT_SCHEMA_VERSION } from "../migration/engine.js";
 import { ErrorCode } from "../../errors/index.js";
 import { buildVideoEncoderArgs } from "../../encoder/index.js";
 
@@ -16,13 +15,15 @@ const FULL: Record<string, unknown> = {
   $schema: "./cinecode.schema.json",
   extends: "./base.json",
   schemaVersion: 2,
-  project: { entry: "./main.ts", sourceDir: "./src", outputDir: "./output", cacheDir: "./.cache" },
+  project: { entry: "./main.ts", sourceDir: "./src", mediaDir: "./media", outputDir: "./output", cacheDir: "./.cache" },
   video: { width: 1280, height: 720, fps: 24, defaultDuration: 12, background: "#112233" },
   images: { defaultFormat: "webp", quality: 80, scaleFactor: 2 },
   dev: { port: 4100, host: "127.0.0.1", open: true, hmr: false, metricsPort: 4101 },
   sourceDir: "./src",
+  mediaDir: "./media",
   outputDir: "./output",
   cacheDir: "./.cache",
+  allowCoLocatedMedia: true,
   cloudMedia: [{ url: "https://example.com/a.png", name: "a", sha256: "abc" }],
   render: {
     fps: 24,
@@ -155,7 +156,6 @@ test("every removed key is rejected with its replacement", () => {
 
 test("a future schema version is refused with the supported version", async () => {
   assert.equal(SCHEMA_VERSION, 2);
-  assert.equal(CURRENT_SCHEMA_VERSION, SCHEMA_VERSION);
   const dir = mkdtempSync(join(tmpdir(), "cinecode-version-"));
   const file = join(dir, "cinecode.config.json");
   writeFileSync(file, JSON.stringify({ schemaVersion: 3 }));

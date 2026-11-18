@@ -1,7 +1,8 @@
 import type { Canvas } from "@napi-rs/canvas";
 import type { Composition } from "../core/types/index.js";
-import { renderFrame } from "./engine.js";
-import { clampResolutionScale, qualityFromScale, scaleComposition, type QualityLevel, type ResolutionScale } from "./scale.js";
+import { createRenderSession, renderFrame, type RenderSessionState } from "./engine.js";
+import { createRenderRuntime, type RenderRuntime } from "./runtime.js";
+import { clampResolutionScale, qualityFromScale, type QualityLevel, type ResolutionScale } from "./scale.js";
 
 export const EXPENSIVE_EFFECTS: readonly string[] = [
   "bloom",
@@ -36,8 +37,8 @@ function isExpensive(name: string): boolean {
   return EXPENSIVE_EFFECTS.some((effect) => normalized === effect || normalized.includes(effect));
 }
 
-export function buildFastPreviewComposition(composition: Composition, scale: number, bypassEffects = true): Composition {
-  const scaled = scaleComposition(composition, clampResolutionScale(scale));
+export function buildFastPreviewComposition(composition: Composition, _scale: number, bypassEffects = true): Composition {
+  const scaled = composition;
   if (!bypassEffects) return scaled;
   const tracks = scaled.rootTimeline.tracks.map((track) => ({
     ...track,
@@ -68,6 +69,8 @@ export class PreviewEngine {
   private scale: ResolutionScale;
   private readonly seed: number;
   private readonly bypassEffects: boolean;
+  private readonly runtime: RenderRuntime = createRenderRuntime(undefined, "preview");
+  private readonly session: RenderSessionState = createRenderSession();
 
   constructor(composition: Composition, options: FastPreviewOptions = {}) {
     this.composition = composition;
@@ -91,7 +94,11 @@ export class PreviewEngine {
   async render(frame: number): Promise<PreviewRenderResult> {
     const started = Date.now();
     const fast = buildFastPreviewComposition(this.composition, this.scale, this.bypassEffects);
-    const result = await renderFrame(fast, frame, this.seed);
+    const result = await renderFrame(fast, frame, this.seed, {
+      runtime: this.runtime,
+      resolutionScale: this.scale,
+      session: this.session,
+    });
     return {
       canvas: result.canvas,
       frame: result.frame,

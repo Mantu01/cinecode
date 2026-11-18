@@ -1,6 +1,5 @@
 import type { EffectInput, EffectProcessor } from "./engine.js";
 import { defineEffect, getData, putData } from "./engine.js";
-import { registerEffect } from "../extensions/index.js";
 import { loadCubeLut, loadCubeLutSync, parseCubeLut, type CubeLut } from "./lut-cube-parser.js";
 
 export type { CubeLut } from "./lut-cube-parser.js";
@@ -246,4 +245,3 @@ export const lutEffect: EffectProcessor = defineEffect({
   },
 });
 
-registerEffect(lutEffect);

@@ -62,6 +62,82 @@ npx cinecode render --all --props ./cinecode.config.ts --overwrite
 
 See [`example/basic-api`](../../example/basic-api/) for a complete runnable project.
 
+## Transition semantics
+
+A transition blends a clip with the state on its own track. Timing is measured
+from the clip's declared start and end in composition time.
+
+| Field | Blends from | Blends to | Window |
+| --- | --- | --- | --- |
+| `transitionIn` | previous active clip on the track, or transparent | the clip | first `duration` seconds of the clip |
+| `transitionOut` | the clip | transparent | last `duration` seconds of the clip |
+
+- When entry and exit durations exceed the clip length, both scale down
+  proportionally so they never overlap.
+- A clip alone on a track fades in from transparent, which reveals the
+  composition background or lower tracks.
+- For three or more overlapping clips, the underlay is the previous active clip
+  on the same track. Clips render in track order, then start time, then
+  declaration order, so the last declared clip sits on top.
+- Masks, mattes and opacity apply to the blended result; nothing renders after
+  the clip's end.
+
+## Audio clip semantics
+
+Audio clips (`audio`, `sound`, `tts`) are processed in one fixed order: resolve
+the source and conform its sample rate, trim, apply speed, reverse, loop to the
+clip duration, apply fades, then apply the 3D position. Gain, pan and sidechain
+ducking are applied by the mixer, so reordering the fields never changes the
+output.
+
+| Field | Behavior |
+| --- | --- |
+| `start`, `duration` | Clip placement in composition time; a clip never runs past the composition duration, which also bounds looping memory. |
+| `trimStart`, `trimEnd` | Keeps the source range between both offsets. Both use composition time conversion, so timecodes follow the composition frame rate. Trimming past the source duration fails with the clip id. |
+| `speed` | Resamples the trimmed source, so `2` halves its duration and `0.5` doubles it. TTS speed is applied by the speech engine and is not applied twice. |
+| `reverse` | Reverses the trimmed, resampled source sample by sample; fades still follow playback order. |
+| `loop` | Repeats the processed source to the clip duration. The seam policy is a folded 10 ms crossfade: the source tail is blended into its head, so a loop has no click and no gap. |
+| `fadeIn`, `fadeOut` | Linear fades over the final playback buffer, after trim, speed, reverse and loop. |
+| `volume` | Track gain applied by the mixer. |
+| `pan` | Constant-power stereo pan; mono output reports a degradation instead of silently dropping it. |
+| `position3d` | Distance attenuation, low-pass and stereo placement (attenuation only on mono output, reported as a degradation). |
+| `sidechainFrom` | Names the audio track that ducks this clip. A missing or silent source track fails with the referencing clip id. |
+| `muted` | Mutes the clip or its whole track. |
+| `src`, `buffer`, `stem`, `stemModel` | File source, inline decoded buffer, and optional stem separation over the file source. |
+| `text`, `voice`, `language`, `engine` | Text-to-speech input, voice, language and backend. |
+
+## Mixing
+
+The mixer works in fixed 4096-frame blocks, so working memory stays proportional
+to the block size and track count, never the composition length. Peak detection,
+normalization and limiting are single-pass block scans over a running scalar.
+The limiter delays the signal by 1 ms through a ring buffer, ramps gain down over
+that look-ahead window, releases over 100 ms, and clamps to a 0.95 ceiling.
+
+Mixing reports the tracks mixed, muted and excluded, the peak before and after
+limiting, and whether the result is silent. A track holding NaN or infinite
+samples is excluded and reported as a degradation instead of poisoning the mix.
+
+### Output audio
+
+- An audio stream is muxed only when the mix peak is above -60 dBFS (`0.001`), or
+  when `forceAudio` is set. Otherwise the encoded video is copied through, so a
+  composition without audible audio has no audio stream.
+- The video stream drives the output duration. An audio bed shorter than the
+  video is padded with silence and a longer one is trimmed; both are reported.
+- Codec, bitrate, bit depth and layout are validated before rendering starts:
+  aac/ac3/eac3/flac into mp4 or mov, opus into webm, pcm_s24le into mov, and a
+  lossless codec rejects an explicit bitrate.
+- PCM is streamed to the encoder in 8192-frame blocks (32-bit float by default,
+  24-bit for lossless requests) instead of building a whole WAV in memory.
+- Mono becomes stereo by duplicating the sample across both pan legs; stereo
+  becomes mono by averaging the channels. Downmixes are reported as degradations
+  and every conversion is listed in the mix report.
+- The muxed file is probed afterwards: stream count, codec and duration must
+  match, otherwise the render fails and the staged artifact is removed.
+- A mix failure is a coded error; `allowSilentAudio` opts into a silent result
+  and records a degradation.
+
 ## Feature highlights
 
 - Declarative compositions with tracks, sequences, groups, and split-screen layouts

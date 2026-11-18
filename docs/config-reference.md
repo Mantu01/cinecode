@@ -8,9 +8,10 @@ Unknown keys are rejected at every level. Array item fields use `[]`.
 | `$schema` | string | — | no |
 | `extends` | string | — | no |
 | `schemaVersion` | 1 or 2 | `1`, `2` | no |
-| `project` | object (entry, sourceDir, outputDir, cacheDir) | — | no |
+| `project` | object (entry, sourceDir, mediaDir, outputDir, cacheDir) | — | no |
 | `project.entry` | string | — | no |
 | `project.sourceDir` | string | — | no |
+| `project.mediaDir` | string | — | no |
 | `project.outputDir` | string | — | no |
 | `project.cacheDir` | string | — | no |
 | `video` | object (width, height, fps, defaultDuration, background) | — | no |
@@ -30,17 +31,19 @@ Unknown keys are rejected at every level. Array item fields use `[]`.
 | `dev.hmr` | boolean | — | no |
 | `dev.metricsPort` | integer | — | no |
 | `sourceDir` | string | — | no |
+| `mediaDir` | string | — | no |
 | `outputDir` | string | — | no |
 | `cacheDir` | string | — | no |
+| `allowCoLocatedMedia` | boolean | — | no |
 | `cloudMedia` | array<object (url, name, sha256)> | — | no |
 | `cloudMedia[]` | object (url, name, sha256) | — | no |
 | `cloudMedia[].url` | string | — | yes |
 | `cloudMedia[].name` | string | — | no |
 | `cloudMedia[].sha256` | string | — | no |
-| `render` | object (fps, resolution, format, quality, codec, crf, preset, hardwareAcceleration, concurrency, chunkSize, alpha, twoPass, platformPreset, bitrate, colorManagement) | — | no |
+| `render` | object (fps, resolution, format, quality, codec, crf, preset, hardwareAcceleration, concurrency, chunkSize, memoryBudgetMb, alpha, twoPass, platformPreset, bitrate, colorManagement) | — | no |
 | `render.fps` | number | — | no |
 | `render.resolution` | string (pattern) | — | no |
-| `render.format` | "mp4" \| "webm" \| "prores" \| "mkv" \| "avi" \| "gif" \| "apng" \| "png" \| "jpg" \| "webp" \| "avif" \| "pdf" \| "webm-alpha" \| "prores-alpha" | `"mp4"`, `"webm"`, `"prores"`, `"mkv"`, `"avi"`, `"gif"`, `"apng"`, `"png"`, `"jpg"`, `"webp"`, `"avif"`, `"pdf"`, `"webm-alpha"`, `"prores-alpha"` | no |
+| `render.format` | "mp4" \| "webm" \| "prores" \| "mkv" \| "avi" \| "gif" \| "apng" \| "png" \| "jpg" \| "webp" \| "pdf" \| "webm-alpha" \| "prores-alpha" | `"mp4"`, `"webm"`, `"prores"`, `"mkv"`, `"avi"`, `"gif"`, `"apng"`, `"png"`, `"jpg"`, `"webp"`, `"pdf"`, `"webm-alpha"`, `"prores-alpha"` | no |
 | `render.quality` | "draft" \| "preview" \| "medium" \| "final" \| "lossless" \| "low" \| "high" | `"draft"`, `"preview"`, `"medium"`, `"final"`, `"lossless"`, `"low"`, `"high"` | no |
 | `render.codec` | "h264" \| "h265" \| "av1" \| "prores" \| "vp9" \| "ffv1" \| "utvideo" | `"h264"`, `"h265"`, `"av1"`, `"prores"`, `"vp9"`, `"ffv1"`, `"utvideo"` | no |
 | `render.crf` | integer | — | no |
@@ -48,6 +51,7 @@ Unknown keys are rejected at every level. Array item fields use `[]`.
 | `render.hardwareAcceleration` | "auto" \| "nvenc" \| "videotoolbox" \| "qsv" \| "off" | `"auto"`, `"nvenc"`, `"videotoolbox"`, `"qsv"`, `"off"` | no |
 | `render.concurrency` | integer or "auto" | `"auto"` | no |
 | `render.chunkSize` | integer | — | no |
+| `render.memoryBudgetMb` | integer | — | no |
 | `render.alpha` | boolean | — | no |
 | `render.twoPass` | boolean | — | no |
 | `render.platformPreset` | "youtube-1080p" \| "youtube-4k" \| "tiktok" \| "instagram-reels" \| "instagram-post" \| "twitter" \| "custom" | `"youtube-1080p"`, `"youtube-4k"`, `"tiktok"`, `"instagram-reels"`, `"instagram-post"`, `"twitter"`, `"custom"` | no |

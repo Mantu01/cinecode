@@ -127,16 +127,6 @@ export interface MediaFormatPreset {
 }
 
 export const MEDIA_FORMAT_PRESETS: Readonly<Record<string, MediaFormatPreset>> = {
-  "avif-still": {
-    name: "avif-still",
-    label: "AVIF Still",
-    description: "AV1 still image, 10-bit HDR capable, quality 24/63.",
-    format: "avif",
-    crf: 24,
-    stillImage: true,
-    alpha: true,
-    extension: ".avif",
-  },
   "webp-still": {
     name: "webp-still",
     label: "WebP Still",

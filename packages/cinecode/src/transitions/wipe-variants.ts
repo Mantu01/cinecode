@@ -1,6 +1,5 @@
 import type { SKRSContext2D } from "@napi-rs/canvas";
 import { defineTransition, type TransitionContext, type TransitionProcessor } from "./engine.js";
-import { registerTransition } from "../extensions/index.js";
 
 export type DiagonalDirection =
   | "top-left-to-bottom-right"
@@ -86,5 +85,3 @@ export const curveWipeTransition: TransitionProcessor = defineTransition({
   process: (ctx, context, params) => curveWipe(ctx, context, params.curveAmount as number),
 });
 
-registerTransition(diagonalWipeTransition);
-registerTransition(curveWipeTransition);

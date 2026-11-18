@@ -64,7 +64,7 @@ function shell(command, args, options = {}) {
 
 function npm(args, cwd, cacheDir) {
   const cache = cacheDir ? ["--cache", cacheDir] : [];
-  return shell("npm", [...args, "--no-audit", "--no-fund", "--loglevel", "error", ...cache], { cwd });
+  return shell("npm", [...args, "--prefer-offline", "--no-audit", "--no-fund", "--loglevel", "error", ...cache], { cwd });
 }
 
 function parseVersion(version) {
@@ -211,7 +211,7 @@ record("one-frame render produces output", () => {
   writeFileSync(path.join(projectDir, "composition.js"), FIXTURE);
   const out = path.join(projectDir, "out", "frame.png");
   mkdirSync(path.dirname(out), { recursive: true });
-  const render = shell(binPath(projectDir, "cinecode"), ["still", "--props", "./composition.js", "-f", "0", "-o", out], { cwd: projectDir });
+  const render = shell(binPath(projectDir, "cinecode"), ["still", "--file", "./composition.js", "-f", "0", "-o", out], { cwd: projectDir });
   assert(render.status === 0, `render exited ${render.status}: ${(render.stderr || render.stdout).trim().slice(0, 400)}`);
   assert(existsSync(out), "render exited zero without producing an output file");
   const { width, height } = pngSize(out);
@@ -254,7 +254,7 @@ record("scaffolded templates load", () => {
   writeFileSync(manifestPath, JSON.stringify(scaffoldManifest, null, 2));
   const install = npm(["install", "--no-package-lock"], target, cacheDir);
   assert(install.status === 0, `scaffolded install failed: ${(install.stderr || install.stdout).trim().slice(0, 300)}`);
-  const plan = shell(binPath(target, "cinecode"), ["render", "--dry-run", "--props", "./cinecode.config.ts"], { cwd: target });
+  const plan = shell(binPath(target, "cinecode"), ["render", "--dry-run", "--all", "--config", "./cinecode.config.ts"], { cwd: target });
   assert(plan.status === 0, `scaffolded render plan failed: ${(plan.stderr || plan.stdout).trim().slice(0, 400)}`);
   assert(plan.stdout.includes("main"), `render plan did not list the template timeline: ${plan.stdout.trim().slice(0, 200)}`);
   return "config, manifest and scene modules loaded";

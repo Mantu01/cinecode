@@ -1,6 +1,5 @@
 import type { SKRSContext2D } from "@napi-rs/canvas";
 import type { EffectProcessor, EffectInput } from "./engine.js";
-import { registerEffect } from "../extensions/index.js";
 import { parseColor } from "../renderer/color/parse.js";
 
 export interface FilmBorderParams {
@@ -232,5 +231,3 @@ export const anamorphicFlareEffect: EffectProcessor = {
   },
 };
 
-registerEffect(filmBorderEffect);
-registerEffect(anamorphicFlareEffect);

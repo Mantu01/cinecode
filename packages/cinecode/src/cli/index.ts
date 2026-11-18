@@ -27,6 +27,7 @@ export { createTtsCommand, ttsCommand, type TtsCliOptions } from "./tts.js";
 export { createPluginCommand } from "./plugin.js";
 export { createTelemetryCommand } from "./telemetry.js";
 export { createDiffCommand } from "./diff.js";
+export * from "./precedence.js";
 export { createStoryCommand } from "./story.js";
 export { createExportSvgCommand } from "./export-svg.js";
 export { createAuditCommand } from "./audit.js";

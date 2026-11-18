@@ -10,7 +10,8 @@ children carry the effect. Field paths match `docs/config-reference.md`.
 | `schemaVersion` | `schemaVersion` | Loader accepts 1-2 and refuses newer versions explicitly. |
 | `project` | container | Groups project paths. |
 | `project.entry` | `entry`, `project.entry` | Manifest loader and `check` resolve the entry module. |
-| `project.sourceDir` | `sourceDir`, `project.sourceDir` | Media index root. |
+| `project.sourceDir` | `sourceDir`, `project.sourceDir` | Authored source code root. |
+| `project.mediaDir` | `mediaDir`, `project.mediaDir` | Media assets root (video/image/audio/font/LUT). |
 | `project.outputDir` | `outputDir`, `project.outputDir` | Render output root. |
 | `project.cacheDir` | `cacheDir`, `project.cacheDir` | Render, media and resume cache root. |
 | `video` | container | Groups composition geometry. |
@@ -29,9 +30,11 @@ children carry the effect. Field paths match `docs/config-reference.md`.
 | `dev.open` | `dev.open` | Opens the dev URL in a browser. |
 | `dev.hmr` | `dev.hmr` | Enables hot reload. |
 | `dev.metricsPort` | `dev.metricsPort` | Prometheus metrics port. |
-| `sourceDir` | `sourceDir` | Media index root. |
+| `sourceDir` | `sourceDir` | Authored source code root. |
+| `mediaDir` | `mediaDir` | Media assets root. |
 | `outputDir` | `outputDir` | Render output root. |
 | `cacheDir` | `cacheDir` | Cache root. |
+| `allowCoLocatedMedia` | `allowCoLocatedMedia` | Allows media resolution fallback to sourceDir. |
 | `cloudMedia` | `cloudMedia` | Cloud media entries offered to the resolver. |
 | `cloudMedia[]` | `cloudMedia[]` | One downloadable media entry. |
 | `cloudMedia[].url` | `cloudMedia[].url` | Download source. |
@@ -48,6 +51,7 @@ children carry the effect. Field paths match `docs/config-reference.md`.
 | `render.hardwareAcceleration` | `render.hardwareAcceleration` | Encoder backend selection. |
 | `render.concurrency` | `render.concurrency` | Worker count. |
 | `render.chunkSize` | `render.chunkSize` | Frames per render chunk. |
+| `render.memoryBudgetMb` | `render.memoryBudgetMb` | Byte budget for queued frames plus in-flight chunks; `--memory-budget` overrides, otherwise derived from available memory. |
 | `render.alpha` | `render.alpha` | Pipeline alpha output plan. |
 | `render.twoPass` | `render.twoPass` | Two-pass rate analysis before the final encode. |
 | `render.platformPreset` | `render.platformPreset` | Encoder defaults, output fit and file-size compliance. |

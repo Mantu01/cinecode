@@ -14,6 +14,7 @@ export interface ValidationIssue {
   position?: SourcePosition;
   clipName?: string;
   trackName?: string;
+  timecode?: string;
 }
 
 export const AUTHORING_CODES = {

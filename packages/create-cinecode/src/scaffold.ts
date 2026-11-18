@@ -103,22 +103,11 @@ function generateScaffoldPlan(options: ScaffoldOptions): ScaffoldPlan {
   }
 
   const folders = [
-    "src/timelines",
-    "src/scenes",
-    "src/images",
-    "src/audio",
-    "src/components",
-    "src/animations",
-    "src/effects",
-    "src/transitions",
-    "src/sounds",
-    "src/fonts",
     "media",
     "output",
-    ".cinecode/cache",
   ].map((dir) => resolve(targetDir, dir));
 
-  const gitignoreEntries = ["media", "output", ".cinecode/cache"];
+  const gitignoreEntries = ["output", ".cinecode/cache"];
 
   const gitInit = !noGit && !existsSync(resolve(targetDir, ".git"));
 

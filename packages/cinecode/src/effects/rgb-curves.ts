@@ -1,6 +1,5 @@
 import type { EffectInput, EffectProcessor } from "./engine.js";
 import { defineEffect, getData, putData } from "./engine.js";
-import { registerEffect } from "../extensions/index.js";
 
 export interface CurvePoint {
   readonly x: number;
@@ -76,4 +75,3 @@ function parseCurvePoints(flat: number[]): CurvePoint[] {
   return points.sort((a, b) => a.x - b.x);
 }
 
-registerEffect(rgbCurvesEffect);

@@ -2,7 +2,6 @@ import { createCanvas, type Canvas } from "@napi-rs/canvas";
 import { noise2d } from "../core/random/index.js";
 import type { EffectInput, EffectProcessor } from "./engine.js";
 import { defineEffect } from "./engine.js";
-import { registerEffect } from "../extensions/index.js";
 import { blendOverlayCanvas } from "./overlay.js";
 
 export type FilmAgingLevel = "light" | "moderate" | "heavy";
@@ -123,4 +122,3 @@ export const filmScratchEffect: EffectProcessor = defineEffect({
   },
 });
 
-registerEffect(filmScratchEffect);

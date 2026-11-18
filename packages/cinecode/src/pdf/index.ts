@@ -1,5 +1,4 @@
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
-import type { Composition } from "../core/types/index.js";
 
 export interface PdfOptions {
   readonly width?: number;
@@ -38,6 +37,19 @@ export interface PdfPageContent {
   readonly shape?: PdfShapeContent;
 }
 
+export interface PdfDocumentOptions {
+  readonly width: number;
+  readonly height: number;
+  readonly dpi?: number;
+  readonly title?: string;
+}
+
+export interface PdfBuildResult {
+  readonly buffer: Buffer;
+  readonly pages: number;
+  readonly title: string;
+}
+
 function hexToRgb(hex: string): ReturnType<typeof rgb> {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
   if (!result) return rgb(0, 0, 0);
@@ -49,30 +61,90 @@ function hexToRgb(hex: string): ReturnType<typeof rgb> {
 }
 
 /**
- * Generates a multi-page PDF from rendered frame buffers.
- * Each frame becomes one page in the output PDF.
- * Uses pdf-lib (no native deps, pure JS).
+ * Incremental PDF assembly: each rendered frame is embedded as a page as soon
+ * as it arrives, so no frame sequence is buffered. Metadata describes the
+ * document (title, page count, page size), not its byte count.
  */
+export class PdfDocumentBuilder {
+  private readonly doc: PDFDocument;
+  private readonly options: Required<Pick<PdfDocumentOptions, "width" | "height" | "dpi" | "title">>;
+
+  private constructor(doc: PDFDocument, options: Required<PdfDocumentOptions>) {
+    this.doc = doc;
+    this.options = options;
+  }
+
+  static async create(options: PdfDocumentOptions): Promise<PdfDocumentBuilder> {
+    const doc = await PDFDocument.create();
+    return new PdfDocumentBuilder(doc, {
+      width: options.width,
+      height: options.height,
+      dpi: options.dpi ?? 150,
+      title: options.title ?? "Cinecode document",
+    });
+  }
+
+  /** Raw document, so vector-only compositions can append native pages. */
+  get document(): PDFDocument {
+    return this.doc;
+  }
+
+  get pageCount(): number {
+    return this.doc.getPageCount();
+  }
+
+  get pageSize(): { readonly width: number; readonly height: number } {
+    return { width: this.options.width, height: this.options.height };
+  }
+
+  async addPngFrame(png: Buffer): Promise<void> {
+    const page = this.doc.addPage([this.options.width, this.options.height]);
+    await renderPdfContent(page, {
+      type: "canvas",
+      data: png,
+      width: this.options.width,
+      height: this.options.height,
+    }, { width: this.options.width, height: this.options.height, dpi: this.options.dpi });
+  }
+
+  async addContentPage(contents: readonly PdfPageContent[]): Promise<void> {
+    const page = this.doc.addPage([this.options.width, this.options.height]);
+    for (const content of contents) {
+      await renderPdfContent(page, content, {
+        width: this.options.width,
+        height: this.options.height,
+        dpi: this.options.dpi,
+      });
+    }
+  }
+
+  async finish(options: { readonly author?: string } = {}): Promise<PdfBuildResult> {
+    const pages = this.doc.getPageCount();
+    this.doc.setTitle(this.options.title);
+    this.doc.setProducer("Cinecode");
+    this.doc.setCreator("Cinecode");
+    if (options.author) this.doc.setAuthor(options.author);
+    this.doc.setSubject(
+      `${pages} page${pages === 1 ? "" : "s"} at ${this.options.width}x${this.options.height}px`,
+    );
+    this.doc.setCreationDate(new Date(0));
+    this.doc.setModificationDate(new Date(0));
+    return { buffer: Buffer.from(await this.doc.save()), pages, title: this.options.title };
+  }
+}
+
+/** Generates a multi-page PDF from prepared page contents, one page each. */
 export async function generatePdf(
   pages: PdfPageContent[][],
   options: PdfOptions = {},
 ): Promise<Buffer> {
-  const {
-    width = 612,
-    height = 792,
-    dpi = 150,
-  } = options;
-
-  const pdfDoc = await PDFDocument.create();
-
-  for (const pageContents of pages) {
-    const page = pdfDoc.addPage([width, height]);
-    for (const content of pageContents) {
-      await renderPdfContent(page, content, { width, height, dpi });
-    }
-  }
-
-  return Buffer.from(await pdfDoc.save());
+  const builder = await PdfDocumentBuilder.create({
+    width: options.width ?? 612,
+    height: options.height ?? 792,
+    dpi: options.dpi,
+  });
+  for (const contents of pages) await builder.addContentPage(contents);
+  return (await builder.finish()).buffer;
 }
 
 async function renderPdfContent(
@@ -93,10 +165,7 @@ async function renderPdfContent(
       const y = (ctx.height - drawHeight) / 2 + (content.y ?? 0);
 
       let img: import("pdf-lib").PDFImage;
-      // png buffer (4-byte RGBA from rawbgra transport — need to convert to RGB for embed)
-      // pdf-lib's embedPng accepts raw PNG bytes directly.
-      if (content.data.length > 8 &&
-          content.data.readUInt32BE(0) === 0x89504e47) {
+      if (content.data.length > 8 && content.data.readUInt32BE(0) === 0x89504e47) {
         img = await page.doc.embedPng(content.data);
       } else {
         img = await page.doc.embedJpg(content.data);

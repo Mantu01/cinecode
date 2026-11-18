@@ -106,6 +106,14 @@ export interface BeforeMixHookData {
 export interface AfterMixHookData extends BeforeMixHookData {
   readonly durationMs: number;
   readonly peakLevel: number;
+  readonly peakAfterLimit?: number;
+  readonly silent?: boolean;
+  readonly channelConversions?: readonly {
+    readonly id: string;
+    readonly from: number;
+    readonly to: number;
+    readonly kind: "upmix" | "downmix";
+  }[];
 }
 
 export interface ProgressHookData {

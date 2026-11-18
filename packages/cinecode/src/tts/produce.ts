@@ -20,12 +20,13 @@ export function clearTtsCache(): void {
 
 export async function synthesizeTts(clip: TtsClip): Promise<AudioBuffer> {
   const engineName: TtsEngineName = clip.engine ?? "system";
-  const key = `${engineName}|${clip.voice ?? ""}|${clip.speed ?? 1}|${clip.language ?? "en-US"}|${clip.text}`;
+  const key = `${engineName}|${clip.voice ?? ""}|${clip.speed ?? 1}|${clip.pitch ?? 0}|${clip.language ?? "en-US"}|${clip.text}`;
   const cached = synthesisCache.get(key);
   if (cached) return cached;
 
   const options: TtsOptions = {
     speed: clip.speed,
+    pitch: clip.pitch,
     language: clip.language,
     voice: clip.voice,
     volume: clip.volume,

@@ -1,6 +1,5 @@
 import type { SKRSContext2D } from "@napi-rs/canvas";
 import { defineTransition, type TransitionContext, type TransitionProcessor } from "./engine.js";
-import { registerTransition } from "../extensions/index.js";
 
 export type SpinDirection = "clockwise" | "counterclockwise";
 
@@ -50,4 +49,3 @@ export const spinTransitionProcessor: TransitionProcessor = defineTransition({
     ),
 });
 
-registerTransition(spinTransitionProcessor);

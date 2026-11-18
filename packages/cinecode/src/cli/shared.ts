@@ -98,6 +98,8 @@ export function resolveEncoding(
   return resolveVideoEncoding({ render: renderConfig, quality: overrides.quality });
 }
 
+import { normalizeColorManagement, type ColorManagementInput } from "./precedence.js";
+
 export interface StartRenderOptions {
   readonly composition: Composition;
   readonly outputPath: string;
@@ -105,6 +107,7 @@ export interface StartRenderOptions {
   readonly seed?: number;
   readonly concurrency?: number | "auto";
   readonly chunkSize?: number;
+  readonly memoryBudgetMb?: number;
   readonly overwrite?: boolean;
   readonly fresh?: boolean;
   readonly noCache?: boolean;
@@ -116,6 +119,21 @@ export interface StartRenderOptions {
   readonly toFrame?: number;
   readonly silent?: boolean;
   readonly onProgress?: ProgressHandler;
+  readonly twoPass?: boolean;
+  readonly alpha?: boolean;
+  readonly bitrateKbps?: number;
+  readonly forceAudio?: boolean;
+  readonly audioCodec?: import("../audio/muxer.js").AudioMuxCodec;
+  readonly audioBitrateKbps?: number;
+  readonly colorManagement?: ColorManagementInput;
+  readonly allowInvalidTimeline?: boolean;
+  readonly gifQuality?: number;
+  readonly gifDither?: "floyd-steinberg" | "sierra-2" | "atkinson" | "none";
+  readonly gifMaxFrames?: number;
+  readonly fonts?: readonly import("../core/types/index.js").FontEntry[];
+  readonly projectRoot?: string;
+  readonly mediaDir?: string;
+  readonly strictFonts?: boolean;
 }
 
 /** Wires a composition into the multi-worker render pipeline. */
@@ -133,6 +151,7 @@ export function startCompositionRender(options: StartRenderOptions): RenderJob {
     seed: options.seed ?? 0,
     concurrency,
     chunkSize: options.chunkSize ?? options.config.render?.chunkSize ?? 32,
+    memoryBudgetMb: options.memoryBudgetMb ?? options.config.render?.memoryBudgetMb,
     encoding,
     quality: options.quality,
     format: options.format ?? options.config.render?.format ?? "mp4",
@@ -144,10 +163,21 @@ export function startCompositionRender(options: StartRenderOptions): RenderJob {
     toFrame: options.toFrame,
     silent: options.silent ?? false,
     onProgress: options.onProgress,
-    twoPass: options.config.render?.twoPass === true,
-    alpha: options.config.render?.alpha === true,
-    bitrateKbps: options.config.render?.bitrate,
-    colorManagement: options.config.render?.colorManagement,
+    twoPass: options.twoPass ?? (options.config.render?.twoPass === true),
+    alpha: options.alpha ?? (options.config.render?.alpha === true),
+    bitrateKbps: options.bitrateKbps ?? options.config.render?.bitrate,
+    forceAudio: options.forceAudio,
+    audioCodec: options.audioCodec,
+    audioBitrateKbps: options.audioBitrateKbps,
+    colorManagement: normalizeColorManagement(options.colorManagement ?? options.config.render?.colorManagement),
+    allowInvalidTimeline: options.allowInvalidTimeline,
+    gifQuality: options.gifQuality,
+    gifDither: options.gifDither,
+    gifMaxFrames: options.gifMaxFrames,
+    fonts: options.fonts,
+    projectRoot: options.projectRoot,
+    mediaDir: options.mediaDir,
+    strictFonts: options.strictFonts,
   });
 
   const preset = resolvePlatformPreset(options.config.render?.platformPreset);

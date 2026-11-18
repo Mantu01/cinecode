@@ -1,5 +1,4 @@
 import type { EffectProcessor } from "./engine.js";
-import { registerEffect } from "../extensions/index.js";
 import { getData, putData, type EffectInput } from "./engine.js";
 
 export interface RgbAdjustment {
@@ -109,4 +108,3 @@ export const colorGradingEffect: EffectProcessor = {
   },
 };
 
-registerEffect(colorGradingEffect);

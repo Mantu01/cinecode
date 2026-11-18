@@ -6,6 +6,7 @@ import { createError, ErrorCode, type CinecodeError, formatError } from "../erro
 import { createProjectResolver, reportResolution, type MediaAccess } from "./project-resolver.js";
 import { allClips } from "../core/types/tracks.js";
 import { runReport } from "./run-report.js";
+import type { ValidationIssue } from "../core/validation/index.js";
 
 export interface ValidateOptions {
   config?: string;
@@ -92,6 +93,16 @@ async function checkProps(compositions: Composition[]): Promise<CinecodeError[]>
   return errors;
 }
 
+function validationIssueError(issue: ValidationIssue, file: string): CinecodeError {
+  const error = createError(ErrorCode.CC1013, { count: 1 }, {
+    location: { file, clip: issue.clipName, track: issue.trackName, time: issue.timecode },
+    fixHint: issue.hint,
+  });
+  (error as { code: ErrorCode }).code = issue.code as ErrorCode;
+  error.message = issue.message;
+  return error;
+}
+
 export async function validateCommand(options: ValidateOptions): Promise<void> {
   const resolver = createProjectResolver({ root: options.root, config: options.config });
   const resolution = await resolver.resolve();
@@ -101,14 +112,23 @@ export async function validateCommand(options: ValidateOptions): Promise<void> {
   const config: CinecodeConfig = resolution.config;
   const validation = validateConfig(config, resolvedConfigPath);
   const compositions = await resolver.all();
+  const timelineResults = await resolver.validateCompositions();
+  const timelineErrors = timelineResults.flatMap((result) =>
+    result.errors.map((issue) => validationIssueError(issue, resolvedConfigPath)),
+  );
+  const timelineWarnings = timelineResults.flatMap((result) =>
+    result.warnings.map((issue) => validationIssueError(issue, resolvedConfigPath)),
+  );
 
   const determinismErrors = await checkCompositionDeterminism([...compositions], resolvedConfigPath);
   const mediaErrors = await checkMediaFiles(await resolution.media());
   const fontErrors = await checkFonts(config);
   const propErrors = await checkProps([...compositions]);
 
-  const allErrors = [...validation.errors, ...determinismErrors, ...mediaErrors, ...fontErrors, ...propErrors];
-  const allWarnings = [...validation.warnings];
+  const manifestErrors = resolution.validation?.errors ?? [];
+  const manifestWarnings = resolution.validation?.warnings ?? [];
+  const allErrors = [...validation.errors, ...manifestErrors, ...timelineErrors, ...determinismErrors, ...mediaErrors, ...fontErrors, ...propErrors];
+  const allWarnings = [...validation.warnings, ...manifestWarnings, ...timelineWarnings];
 
   if (options.fix) {
     const added = await ensureGitignoreEntries({

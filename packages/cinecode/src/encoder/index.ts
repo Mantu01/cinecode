@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import type { RenderFormat, QualityPreset, VideoCodec } from "../core/types/config.js";
 import type { EncoderBackend, VideoEncoding } from "../core/quality.js";
 import { normalizeQuality, resolveVideoEncoding } from "../core/quality.js";
+import { frameInputPixFmt, outputPlanFor, type OutputPlan } from "../core/output-plan.js";
 
 export interface EncoderOptions {
   readonly fps: number;
@@ -82,16 +83,14 @@ function svtPreset(preset: string): number {
  */
 export type ResolvedContainer = "mp4" | "webm" | "prores" | "mkv" | "avi" | "apng";
 
-export function resolveContainerFormat(format: RenderFormat | undefined, codec: VideoCodec): ResolvedContainer {
-  if (format === "webm" || format === "webm-alpha") return "webm";
-  if (format === "prores" || format === "prores-alpha") return "prores";
-  if (format === "mp4") return "mp4";
-  if (format === "mkv") return "mkv";
-  if (format === "avi") return "avi";
-  if (format === "apng") return "apng";
-  if (codec === "ffv1" || codec === "utvideo") return "mkv";
-  if (codec === "vp9" || codec === "av1") return "webm";
-  if (codec === "prores") return "prores";
+/** Container comes from the output plan table, never from an ad-hoc guess. */
+export function resolveContainerFormat(format: RenderFormat | undefined): ResolvedContainer {
+  const plan = outputPlanFor(format);
+  if (plan.container === "matroska") return "mkv";
+  if (plan.container === "mov") return "prores";
+  if (plan.container === "mp4" || plan.container === "webm" || plan.container === "avi" || plan.container === "apng") {
+    return plan.container;
+  }
   return "mp4";
 }
 
@@ -99,39 +98,26 @@ export function validateCodecContainer(
   format: RenderFormat | undefined,
   codec: VideoCodec,
 ): string | null {
-  const container = resolveContainerFormat(format, codec);
-  if (codec === "ffv1" && container !== "mkv") {
-    const label = container === "prores" ? "MOV" : container.toUpperCase();
-    return `FFV1 codec is not supported in ${label} containers. Use MKV instead.`;
+  const plan = outputPlanFor(format);
+  if (plan.codecs.length === 0) {
+    return `${plan.format} carries no video codec; omit --codec for ${plan.description.toLowerCase()}.`;
   }
-  if (codec === "utvideo" && container !== "avi" && container !== "mkv") {
-    return `Ut Video codec is not supported in ${container.toUpperCase()} containers. Use AVI or MKV instead.`;
-  }
-  if (codec === "prores" && container !== "prores") {
-    return `ProRes codec requires a MOV container, got ${container.toUpperCase()}.`;
-  }
-  if (codec === "vp9" && container !== "webm") {
-    return `VP9 codec is not supported in ${container.toUpperCase()} containers. Use WebM instead.`;
-  }
-  if (format === "apng" && codec !== "h264") {
-    return "APNG is an image sequence container. Omit the video codec or use PNG frames.";
+  if (!plan.codecs.includes(codec)) {
+    return `codec "${codec}" is not supported in ${plan.format}; use one of ${plan.codecs.join(", ")}.`;
   }
   return null;
 }
 
-export function supportsAlpha(format: RenderFormat | undefined, codec: VideoCodec): boolean {
-  if (format === "webm-alpha" || format === "prores-alpha") return true;
-  return format === "png" || codec === "prores" && format === "prores";
-}
-
 export function buildVideoEncoderArgs(options: EncoderOptions): string[] {
-  const { crf, preset, pixFmt } = options;
+  const { crf, preset } = options;
   const codec = options.codec ?? "h264";
   const hdr = options.hdr;
   const backend = options.backend ?? "software";
   const requested = options.format;
-  const alpha = options.alpha === true || requested === "webm-alpha" || requested === "prores-alpha";
-  const format = resolveContainerFormat(requested, codec);
+  const plan: OutputPlan = outputPlanFor(requested);
+  const alpha = options.alpha === true || plan.defaultAlpha === true;
+  const pixFmt = alpha ? (plan.alphaPixFmt ?? options.pixFmt) : options.pixFmt;
+  const format = resolveContainerFormat(requested);
 
   const video: string[] = [];
   const pass = options.pass;
@@ -143,10 +129,10 @@ export function buildVideoEncoderArgs(options: EncoderOptions): string[] {
     : [];
 
   if (alpha && (format === "webm" || codec === "vp9")) {
-    video.push("-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-row-mt", "1", "-auto-alt-ref", "0");
+    video.push("-c:v", "libvpx-vp9", "-pix_fmt", pixFmt, "-row-mt", "1", "-auto-alt-ref", "0");
     if (bitrateArgs.length === 0) video.push("-crf", String(crf), "-b:v", "0");
   } else if (alpha && format === "prores") {
-    video.push("-c:v", "prores_ks", "-profile:v", "4", "-pix_fmt", "yuva444p10le", "-vendor", "apl0");
+    video.push("-c:v", "prores_ks", "-profile:v", "4", "-pix_fmt", pixFmt, "-vendor", "apl0");
   } else if (codec === "prores") {
     video.push("-c:v", "prores_ks", "-profile:v", "3", "-pix_fmt", pixFmt);
   } else if (backend === "nvenc") {
@@ -236,13 +222,19 @@ export class VideoEncoder {
     });
   }
 
+  /** Alpha-aware stdin pixel format matching the canonical RGBA transport. */
+  private inputPixFmt(): "rgba" | "rgb0" {
+    const plan = outputPlanFor(this.options.format);
+    return frameInputPixFmt(this.options.alpha === true || plan.defaultAlpha === true);
+  }
+
   async start(): Promise<void> {
     await mkdir(this.options.tempDir, { recursive: true });
 
     const args = [
       "-v", "error", "-y",
       "-f", "rawvideo",
-      "-pix_fmt", "bgr0",
+      "-pix_fmt", this.inputPixFmt(),
       "-s", `${this.options.width}x${this.options.height}`,
       "-r", String(this.options.fps),
       "-i", "-",
@@ -433,17 +425,28 @@ export {
   stitchVideos,
   splitVideo,
   generateThumbnail,
+  encodeStillImage,
+  encodeAnimatedPng,
+  encodeAnimatedWebp,
   writeFrameSequence,
   encodeAnimatedGif,
   writeSpriteSheet,
+  type FrameSource,
   type FfmpegResult,
   type ConvertOptions,
   type StitchOptions,
   type SplitSegment,
   type SplitOptions,
   type ThumbnailOptions,
+  type StillImageFormat,
+  type StillImageOptions,
   type FrameSequenceOptions,
+  type FrameSequenceResult,
+  type AnimatedPngOptions,
+  type AnimatedPngResult,
+  type AnimatedWebpOptions,
   type AnimatedGifOptions,
+  type AnimatedGifResult,
   type SpriteSheetOptions,
   type SpriteSheetResult,
 } from "./outputs.js";

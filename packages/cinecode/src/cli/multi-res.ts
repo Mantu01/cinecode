@@ -6,6 +6,7 @@ import { selectComposition } from "./composition-loader.js";
 import { resolveCacheDir, resolveOutputDir } from "./shared.js";
 import { createProjectResolver, reportResolution } from "./project-resolver.js";
 import { parseVariantLabel, renderMultiResolution } from "../pipeline/multiResolution.js";
+import { resolveRenderParameters, describeExplainReport } from "./precedence.js";
 
 interface MultiResOptions {
   composition?: string;
@@ -34,9 +35,30 @@ export function createMultiResCommand(): Command {
       reportResolution(resolution, merged.dryRun === true);
       const config = resolution.config;
       const composition = selectComposition([...resolution.compositions], options.composition);
+      const { parameters, explain } = resolveRenderParameters({
+        flags: {
+          out: options.out,
+          concurrency: options.concurrency ? parseInt(options.concurrency, 10) : undefined,
+        },
+        selection: {
+          name: composition.name,
+          width: composition.width,
+          height: composition.height,
+          fps: composition.fps,
+        },
+        project: {
+          root: resolution.root,
+          configPath: resolution.configPath,
+          manifestPath: resolution.manifestPath,
+          mode: resolution.mode,
+          selection: `composition ${composition.name}`,
+          config,
+        },
+      });
+      runReport.result({ explain: describeExplainReport(explain) });
       const variants = options.variants.split(",").map((label) => parseVariantLabel(label.trim())).filter(Boolean);
       const outputDir = options.out ? resolve(options.out) : resolveOutputDir(config);
-      const concurrency = options.concurrency ? Number.parseInt(options.concurrency, 10) : 4;
+      const concurrency = parameters.concurrency.value === "auto" ? 4 : parameters.concurrency.value;
 
       const result = await renderMultiResolution({
         composition,
@@ -44,9 +66,9 @@ export function createMultiResCommand(): Command {
         outputDir,
         cacheDir: resolveCacheDir(config),
         seed: options.seed ?? 0,
-        concurrency: Number.isFinite(concurrency) ? concurrency : 4,
+        concurrency,
         overwrite: false,
-        format: config.render?.format ?? "mp4",
+        format: parameters.format.value,
       });
 
       for (const variant of result.variants) {

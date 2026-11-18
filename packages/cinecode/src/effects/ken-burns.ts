@@ -1,6 +1,5 @@
 import type { EffectInput, EffectProcessor } from "./engine.js";
 import { defineEffect, getData, putData } from "./engine.js";
-import { registerEffect } from "../extensions/index.js";
 import { cubicBezier } from "../core/easing/curve.js";
 
 export type KenBurnsInterpolation = "bilinear" | "bicubic";
@@ -217,4 +216,3 @@ export const kenBurnsEffect: EffectProcessor = defineEffect({
   },
 });
 
-registerEffect(kenBurnsEffect);

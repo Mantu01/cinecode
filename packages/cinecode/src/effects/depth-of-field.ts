@@ -1,7 +1,6 @@
 import { Canvas } from "@napi-rs/canvas";
 import type { EffectInput, EffectProcessor } from "./engine.js";
 import { defineEffect, getTempCanvas } from "./engine.js";
-import { registerEffect } from "../extensions/index.js";
 import { calculateCoC, type DepthBuffer } from "../model-3d/depth-pass.js";
 
 export type BokehShape = "circular" | "hexagonal" | "octagonal";
@@ -151,4 +150,3 @@ export const depthOfFieldEffect: EffectProcessor = defineEffect({
   },
 });
 
-registerEffect(depthOfFieldEffect);

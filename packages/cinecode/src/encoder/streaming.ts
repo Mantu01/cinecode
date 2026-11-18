@@ -4,6 +4,7 @@ import { mkdir, rm } from "node:fs/promises";
 import ffmpegStatic from "@ffmpeg-installer/ffmpeg";
 import type { RenderFormat } from "../core/types/config.js";
 import type { VideoEncoding } from "../core/quality.js";
+import { frameInputPixFmt, outputPlanFor } from "../core/output-plan.js";
 import { buildVideoEncoderArgs, type EncoderOptions, type EncoderResult } from "./index.js";
 
 export interface FrameRingBufferOptions {
@@ -133,7 +134,7 @@ export class StreamingEncoder {
 
   private buildArgs(): string[] {
     const format = this.options.format;
-    const alpha = this.options.alpha === true || format === "webm-alpha" || format === "prores-alpha";
+    const alpha = this.options.alpha === true || outputPlanFor(format).defaultAlpha === true;
     const encoderOptions: EncoderOptions = {
       fps: this.options.fps,
       width: this.options.width,
@@ -155,7 +156,7 @@ export class StreamingEncoder {
       "-v", "error",
       "-y",
       "-f", "rawvideo",
-      "-pix_fmt", "bgr0",
+      "-pix_fmt", frameInputPixFmt(alpha),
       "-s", `${this.options.width}x${this.options.height}`,
       "-r", String(this.options.fps),
       "-i", "-",

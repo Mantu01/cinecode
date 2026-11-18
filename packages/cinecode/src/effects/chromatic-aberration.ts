@@ -1,6 +1,5 @@
 import type { EffectInput, EffectProcessor } from "./engine.js";
 import { defineEffect, getData, putData } from "./engine.js";
-import { registerEffect } from "../extensions/index.js";
 
 export interface ChromaticAberrationCenter {
   readonly x: number;
@@ -113,4 +112,3 @@ export const chromaticAberrationEffect: EffectProcessor = defineEffect({
   },
 });
 
-registerEffect(chromaticAberrationEffect);

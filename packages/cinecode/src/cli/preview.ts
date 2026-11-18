@@ -65,6 +65,7 @@ export function createPreviewCommand(): Command {
     .option("--overwrite", "Overwrite existing output file", false)
     .option("--dry-run", "Print render plan without rendering", false)
     .option("--seed <number>", "Random seed", (v) => parseInt(v, 10))
+    .option("--explain", "Print resolved parameters and their origins without rendering", false)
     .option("--open", "Open preview in system default player", false)
     .action(async (options: PreviewCliOptions) => {
       await previewCommand(options);

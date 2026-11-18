@@ -6,7 +6,7 @@ import { readFile, stat } from "node:fs/promises";
 import type { Composition } from "../core/types/index.js";
 import { validateConfig as validateConfigShape } from "../config/validator.js";
 import { createConversion, type FrameConversion } from "../core/time/index.js";
-import { validateTimeline, scanSourceForNonDeterminism } from "../core/validation/index.js";
+import { scanSourceForNonDeterminism } from "../core/validation/index.js";
 import { validateKeyframes } from "../core/keyframes/index.js";
 import { allClips } from "../core/types/tracks.js";
 import { checkMissingGlyphs } from "../renderer/text/engine.js";
@@ -119,15 +119,14 @@ export async function runCheck(project: ProjectResolution): Promise<CheckReport>
     });
   }
 
+  const timelineResults = await project.validateCompositions();
   for (const composition of compositions) {
     if (typeof composition?.fps !== "number" || composition.fps <= 0) continue;
     const conversion: FrameConversion = createConversion(composition.fps);
-    const issues = validateTimeline(composition.rootTimeline, {
-      conversion,
-      compositionWidth: composition.width,
-      compositionHeight: composition.height,
-    });
-    for (const issue of issues) errors.push(issueFromValidation(issue, "authoring"));
+    const result = timelineResults.find((entry) => entry.composition === composition.name);
+    for (const issue of [...(result?.errors ?? []), ...(result?.warnings ?? [])]) {
+      (issue.severity === "error" ? errors : warnings).push(issueFromValidation(issue, "authoring"));
+    }
 
     for (const clip of allClips(composition.rootTimeline)) {
       const kfProps = (clip as { keyframes?: readonly (readonly [string, readonly (readonly [number, unknown])[]])[] }).keyframes;
@@ -228,20 +227,31 @@ export async function runCheck(project: ProjectResolution): Promise<CheckReport>
     });
   }
 
-  // --- fonts (loadable) ---
-  for (const font of config.fonts ?? []) {
-    try {
-      await stat(font.src);
-    } catch {
-      warnings.push({
-        code: ErrorCode.CC3006,
-        severity: "warning",
-        message: `Font file not found: ${font.src} (family "${font.family}")`,
-        category: "fonts",
-        file: font.src,
-        fixHint: "Verify the font path in your config",
-      });
-    }
+  // --- fonts (registered in the real backend) ---
+  const { registerProjectFonts } = await import("../renderer/text/fonts.js");
+  const fontResult = registerProjectFonts(config.fonts, {
+    projectRoot: project.root,
+    mediaDir: config.mediaDir ?? "media",
+  });
+  for (const font of fontResult.errors) {
+    errors.push({
+      code: ErrorCode.CC3006,
+      severity: "error",
+      message: font.message,
+      category: "fonts",
+      file: font.path,
+      fixHint: "Fix the font entry path or use a supported .ttf/.otf/.ttc file inside the media root",
+    });
+  }
+  for (const font of fontResult.warnings) {
+    warnings.push({
+      code: ErrorCode.CC3006,
+      severity: "warning",
+      message: font.message,
+      category: "fonts",
+      file: font.path,
+      fixHint: "Remove the duplicate family entry; the first configured face wins",
+    });
   }
 
   const categories = emptyCategories();
