@@ -1,4 +1,7 @@
 import { createError, ErrorCode } from "../errors/codes.js";
+import { getExtensions, ExtensionRegistry } from "../extensions/index.js";
+import type { EffectProcessor } from "../effects/engine.js";
+import type { TransitionProcessor } from "../transitions/engine.js";
 import { HOOK_NAMES } from "./types.js";
 import type {
   CinecodePlugin,
@@ -7,8 +10,11 @@ import type {
   HookName,
   HookRunResult,
   PluginContext,
+  PluginConflict,
   RegisteredPlugin,
 } from "./types.js";
+
+const NON_FATAL_HOOKS = new Set<HookName>(["onProgress", "onWarning", "onError"]);
 
 type InlineHook = { readonly plugin: string; readonly handler: (data: unknown) => void | Promise<void> };
 const FRAME_HOOK_TIMEOUT_MS = 100;
@@ -40,6 +46,7 @@ export class PluginRegistry {
   private readonly inlineHooks = new Map<HookName, InlineHook[]>();
   private readonly features = new Map<string, RegisteredFeature>();
   private readonly namespacedFeatures = new Map<string, unknown>();
+  private readonly conflicts: PluginConflict[] = [];
 
   constructor(options: PluginRegistryOptions = {}) {
     this.options = options;
@@ -48,6 +55,10 @@ export class PluginRegistry {
 
   setPrecedence(precedence: readonly string[]): void {
     this.precedence = precedence;
+  }
+
+  getConflicts(): readonly PluginConflict[] {
+    return this.conflicts;
   }
 
   registerFeature(name: string, pluginName: string, handler: unknown): void {
@@ -73,13 +84,18 @@ export class PluginRegistry {
 
     if (newIdx !== -1 && (existingIdx === -1 || newIdx < existingIdx)) {
       this.features.set(name, { pluginName, handler });
+      this.conflicts.push({ feature: name, winningPlugin: pluginName, losingPlugin: existing.pluginName, reason: "precedence" });
+      console.warn(`[CC7005] Precedence conflict: Identifier '${name}' registered by both '${existing.pluginName}' and '${pluginName}'. Selected '${pluginName}' by precedence.`);
       return;
     }
 
     if (existingIdx !== -1 && (newIdx === -1 || existingIdx < newIdx)) {
+      this.conflicts.push({ feature: name, winningPlugin: existing.pluginName, losingPlugin: pluginName, reason: "precedence" });
+      console.warn(`[CC7005] Precedence conflict: Identifier '${name}' registered by both '${existing.pluginName}' and '${pluginName}'. Retained '${existing.pluginName}' by precedence.`);
       return;
     }
 
+    this.conflicts.push({ feature: name, winningPlugin: existing.pluginName, losingPlugin: pluginName, reason: "registration-order" });
     console.warn(`[CC7005] High-priority conflict: Identifier '${name}' registered by both '${existing.pluginName}' and '${pluginName}'. Use disambiguation syntax '${pluginName}/${name}'.`);
   }
 
@@ -90,7 +106,7 @@ export class PluginRegistry {
     return this.features.get(identifier)?.handler;
   }
 
-  register(plugin: CinecodePlugin, options: Record<string, unknown> = {}): RegisteredPlugin {
+  register(plugin: CinecodePlugin, options: Record<string, unknown> = {}, source?: string): RegisteredPlugin {
     const name = plugin.manifest?.name;
     if (!name || typeof name !== "string") {
       throw createError(ErrorCode.CC8002, { plugin: String(name ?? "unknown"), reason: "manifest.name must be a non-empty string" });
@@ -115,7 +131,7 @@ export class PluginRegistry {
       }
     }
 
-    const registered: RegisteredPlugin = { plugin, options, state: "registered", errors: [] };
+    const registered: RegisteredPlugin = { plugin, options, source, state: "registered", errors: [] };
     this.plugins.set(name, registered);
     this.optionsByPlugin.set(name, options);
     return registered;
@@ -179,13 +195,34 @@ export class PluginRegistry {
     return registered;
   }
 
-  async init(): Promise<void> {
+  async init(extensionRegistry: ExtensionRegistry = getExtensions()): Promise<void> {
     for (const entry of this.plugins.values()) {
       if (entry.state !== "registered") continue;
+      if (entry.plugin.effects) {
+        for (const effect of entry.plugin.effects) {
+          this.registerFeature(effect.name, entry.plugin.manifest.name, effect);
+          if (this.getFeature(effect.name) === effect) {
+            extensionRegistry.slot<EffectProcessor>("effect").register(effect.name, effect);
+          }
+          extensionRegistry.slot<EffectProcessor>("effect").register(`${entry.plugin.manifest.name}/${effect.name}`, effect);
+          extensionRegistry.slot<EffectProcessor>("effect").register(`${entry.plugin.manifest.name}:${effect.name}`, effect);
+        }
+      }
+      if (entry.plugin.transitions) {
+        for (const transition of entry.plugin.transitions) {
+          this.registerFeature(transition.name, entry.plugin.manifest.name, transition);
+          if (this.getFeature(transition.name) === transition) {
+            extensionRegistry.slot<TransitionProcessor>("transition").register(transition.name, transition);
+          }
+          extensionRegistry.slot<TransitionProcessor>("transition").register(`${entry.plugin.manifest.name}/${transition.name}`, transition);
+          extensionRegistry.slot<TransitionProcessor>("transition").register(`${entry.plugin.manifest.name}:${transition.name}`, transition);
+        }
+      }
       entry.state = "initializing";
-      const context = this.contextFor(entry);
+      const context = this.contextFor(entry, extensionRegistry);
       try {
         await entry.plugin.setup?.(context);
+        await entry.plugin.init?.(context);
         entry.state = "active";
       } catch (error) {
         entry.state = "failed";
@@ -226,12 +263,16 @@ export class PluginRegistry {
       } catch (error) {
         const err = error instanceof Error ? error : new Error(String(error));
         failures.push({ plugin: pluginName, error: err });
+        const isNonFatal = NON_FATAL_HOOKS.has(hook);
         const wrapped = createError(
           ErrorCode.CC8003,
           { plugin: pluginName, hook, reason: err.message },
-          { severity: "warning", fixHint: "The plugin hook failed; other plugins and the render continued. Fix or disable the plugin." }
+          { severity: isNonFatal ? "warning" : "error", fixHint: "Inspect plugin code or disable the plugin." }
         );
         this.options.onError?.(wrapped, pluginName, hook);
+        if (!isNonFatal) {
+          throw wrapped;
+        }
       }
     };
 
@@ -243,6 +284,7 @@ export class PluginRegistry {
           await invoke(entry.plugin.manifest.name, handler);
         } catch (error) {
           (entry.errors as Error[]).push(error instanceof Error ? error : new Error(String(error)));
+          throw error;
         }
       }
     }
@@ -274,11 +316,27 @@ export class PluginRegistry {
     }
   }
 
-  private contextFor(entry: RegisteredPlugin): PluginContext {
+  private contextFor(entry: RegisteredPlugin, extensionRegistry: ExtensionRegistry = getExtensions()): PluginContext {
     return {
       options: entry.options,
       log: (message: string) => {
         console.log(`[plugin:${entry.plugin.manifest.name}] ${message}`);
+      },
+      registerEffect: (effect: EffectProcessor) => {
+        this.registerFeature(effect.name, entry.plugin.manifest.name, effect);
+        if (this.getFeature(effect.name) === effect) {
+          extensionRegistry.slot<EffectProcessor>("effect").register(effect.name, effect);
+        }
+        extensionRegistry.slot<EffectProcessor>("effect").register(`${entry.plugin.manifest.name}/${effect.name}`, effect);
+        extensionRegistry.slot<EffectProcessor>("effect").register(`${entry.plugin.manifest.name}:${effect.name}`, effect);
+      },
+      registerTransition: (transition: TransitionProcessor) => {
+        this.registerFeature(transition.name, entry.plugin.manifest.name, transition);
+        if (this.getFeature(transition.name) === transition) {
+          extensionRegistry.slot<TransitionProcessor>("transition").register(transition.name, transition);
+        }
+        extensionRegistry.slot<TransitionProcessor>("transition").register(`${entry.plugin.manifest.name}/${transition.name}`, transition);
+        extensionRegistry.slot<TransitionProcessor>("transition").register(`${entry.plugin.manifest.name}:${transition.name}`, transition);
       },
     };
   }

@@ -1,7 +1,7 @@
 import { authoringIssue, AUTHORING_CODES } from "../validation/errors.js";
 import type { AnimatableValue } from "../types/animatable.js";
 import type { EasingDescriptor } from "../types/easing.js";
-import { type FrameConversion, timeInputToFrames } from "../time/convert.js";
+import { type FrameConversion, timeInputToFrames, createConversion } from "../time/convert.js";
 import { mixColors, parseColor } from "../easing/colors.js";
 import { interpolateKeyframeValue, keyframeProgress } from "./interpolate.js";
 import type { KeyframeInterpolationInput } from "./types.js";
@@ -126,3 +126,57 @@ export function sampleHexString(hex: string): { r: number; g: number; b: number 
 }
 
 export { timeInputToFrames };
+
+export function resolveClipKeyframes<T extends Record<string, any>>(clip: T, frame: number, fps: number): T {
+  if (!clip.keyframes) return clip;
+  const rawKeyframes = clip.keyframes;
+  const entries: [string, readonly unknown[]][] = Array.isArray(rawKeyframes)
+    ? (rawKeyframes as unknown as [string, readonly unknown[]][])
+    : Object.entries(rawKeyframes);
+  if (entries.length === 0) return clip;
+
+  const conversion = createConversion(fps);
+  const clipStart = typeof clip.start === "number"
+    ? Math.round(clip.start * fps)
+    : typeof clip.start === "string"
+      ? timeInputToFrames(clip.start, conversion)
+      : 0;
+  const localFrame = frame - clipStart;
+  const ctx: InterpolationContext = { conversion, fps };
+
+  const overrides: Record<string, unknown> = {};
+  for (const [prop, tuples] of entries) {
+    if (!Array.isArray(tuples) || tuples.length === 0) continue;
+    const engineKfs = tuples.map((t: any) => {
+      const atTime = typeof t[0] === "number" ? t[0] : 0;
+      const atFrames = typeof t[0] === "number" && t[0] <= 1000 && !Number.isInteger(t[0])
+        ? Math.round(t[0] * fps)
+        : typeof t[0] === "string"
+          ? timeInputToFrames(t[0], conversion)
+          : Math.round(atTime * (atTime <= 60 ? fps : 1));
+      return createEngineKeyframe(atFrames, t[1], t[2]);
+    });
+    const sorted = sortKeyframes(engineKfs);
+    overrides[prop] = interpolateProperty(sorted, localFrame, ctx);
+  }
+
+  const result = { ...clip } as any;
+  for (const [prop, value] of Object.entries(overrides)) {
+    if (prop.includes(".")) {
+      const parts = prop.split(".");
+      let current = result;
+      for (let i = 0; i < parts.length - 1; i++) {
+        current[parts[i]!] = { ...current[parts[i]!] };
+        current = current[parts[i]!];
+      }
+      current[parts[parts.length - 1]!] = value;
+    } else if (prop === "x" || prop === "y" || prop === "rotation") {
+      result.transform = { ...result.transform, [prop]: value };
+    } else if (prop === "scale") {
+      result.transform = { ...result.transform, scaleX: value, scaleY: value };
+    } else {
+      result[prop] = value;
+    }
+  }
+  return result;
+}

@@ -253,7 +253,7 @@ export const OUTPUT_PLANS: Readonly<Record<RenderFormat, OutputPlan>> = {
 };
 
 export const ALPHA_FORMATS = OUTPUT_FORMATS.filter((format) => OUTPUT_PLANS[format].alpha);
-export const STILL_FORMATS = OUTPUT_FORMATS.filter((format) => OUTPUT_PLANS[format].strategy === "still");
+export const STILL_FORMATS: readonly RenderFormat[] = ["png", "jpg", "webp"];
 export const STREAM_FORMATS = OUTPUT_FORMATS.filter((format) => OUTPUT_PLANS[format].strategy === "stream");
 
 export function outputPlanFor(format: RenderFormat | undefined): OutputPlan {

@@ -1,4 +1,3 @@
-import { globalTracer } from "../observability/tracing.js";
 import { logger } from "../observability/logger.js";
 
 export interface DrainOptions {
@@ -56,8 +55,6 @@ export class GracefulDrainManager {
         logger.info("drain", "Finalizing container output stream...");
         await this.options.onFinalizeContainer();
       }
-
-      await globalTracer.flush();
 
       if (this.options.onTerminateWorkers) {
         await this.options.onTerminateWorkers();

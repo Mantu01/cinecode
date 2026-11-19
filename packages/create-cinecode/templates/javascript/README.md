@@ -10,6 +10,11 @@ video is written as code:
   audio bed, scene and timeline by id, each pointing at an isolated file under
   `src/`.
 
+## Runtime & Authoring Contract
+
+- **Node.js Requirement:** Node `>=22.18.0`.
+- **Authoring Contract:** Native type stripping. Erasable TypeScript syntax is accepted (types, interfaces, type aliases). Non-erasable constructs (enums, namespaces) are not supported. Use explicit file extensions (`.{{CONFIG_EXT}}`) in relative imports.
+
 ## Commands
 
 | Command | What it does |
@@ -31,6 +36,15 @@ video is written as code:
 | `npm run clean` | Delete the render cache |
 | `npm run media:list` | List local media files |
 | `npm run media:download` | Download configured cloud media |
+| `npm run typecheck` | Type-check project source |
+| `npm run lint` | Lint project source |
+| `npm run format` | Verify formatting |
+
+## Fast Authoring Model
+
+Animate properties, do not emit a clip per frame.
+
+Instead of generating a slice of video for every frame with loops, define persistent visual clips with `keyframes`. For example, create a single text clip spanning the full scene duration and attach an opacity or transform keyframe track that interpolates from start to finish. The renderer interpolates keyframes smoothly on the fly, reducing composition data by over 99% and avoiding unnecessary object allocation.
 
 ## Quality
 

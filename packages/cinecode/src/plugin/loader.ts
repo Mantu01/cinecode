@@ -9,6 +9,7 @@ import { PluginRegistry } from "./registry.js";
 export interface LoadPluginOptions {
   readonly options?: Record<string, unknown>;
   readonly registry?: PluginRegistry;
+  readonly rootDir?: string;
 }
 
 export interface PackagePluginInfo {
@@ -121,6 +122,16 @@ function validatePlugin(plugin: unknown, source: string): CinecodePlugin {
     throw createError(ErrorCode.CC8001, { plugin: resolved.manifest.name, reason: "hooks must be an object" });
   }
 
+  if (resolved.manifest.permissions && !Array.isArray(resolved.manifest.permissions)) {
+    throw createError(ErrorCode.CC8001, { plugin: resolved.manifest.name, reason: "manifest.permissions must be an array of strings" });
+  }
+  if (resolved.manifest.minEngineVersion && !isCompatibleVersion(`>=${resolved.manifest.minEngineVersion}`, "1.0.0")) {
+    throw createError(ErrorCode.CC8001, {
+      plugin: resolved.manifest.name,
+      reason: `requires Cinecode >=${resolved.manifest.minEngineVersion}, but running 1.0.0`,
+    });
+  }
+
   const deprecation = checkPluginDeprecation(resolved.manifest as any);
   if (deprecation.isDeprecated || deprecation.isIncompatible) {
     console.warn(formatDeprecationNotice(resolved.manifest as any, deprecation));
@@ -141,7 +152,8 @@ export function parsePluginModule(mod: unknown, source: string): CinecodePlugin 
 }
 
 export async function loadPluginFromFile(filePath: string, options: LoadPluginOptions = {}): Promise<CinecodePlugin> {
-  const resolved = isAbsolute(filePath) ? filePath : resolve(process.cwd(), filePath);
+  const base = options.rootDir ?? process.cwd();
+  const resolved = isAbsolute(filePath) ? filePath : resolve(base, filePath);
   if (!existsSync(resolved)) {
     throw createError(ErrorCode.CC8001, { plugin: filePath, reason: `file not found: ${resolved}` });
   }
@@ -152,7 +164,7 @@ export async function loadPluginFromFile(filePath: string, options: LoadPluginOp
     throw createError(ErrorCode.CC8001, { plugin: filePath, reason: error instanceof Error ? error.message : String(error) });
   }
   const plugin = parsePluginModule(mod, filePath);
-  options.registry?.register(plugin, options.options ?? {});
+  options.registry?.register(plugin, options.options ?? {}, resolved);
   return plugin;
 }
 
@@ -164,7 +176,7 @@ export async function loadPluginFromPackage(packageName: string, options: LoadPl
     throw createError(ErrorCode.CC8001, { plugin: packageName, reason: error instanceof Error ? error.message : String(error) });
   }
   const plugin = parsePluginModule(mod, packageName);
-  options.registry?.register(plugin, options.options ?? {});
+  options.registry?.register(plugin, options.options ?? {}, packageName);
   return plugin;
 }
 
@@ -234,7 +246,7 @@ export async function loadPluginsFromConfig(
   const loaded: CinecodePlugin[] = [];
   for (const entry of entries ?? []) {
     if (entry.enabled === false) continue;
-    const plugin = await loadPlugin(entry.source, { options: entry.options ?? {}, registry });
+    const plugin = await loadPlugin(entry.source, { options: entry.options ?? {}, registry, rootDir: options.rootDir });
     loaded.push(plugin);
   }
 

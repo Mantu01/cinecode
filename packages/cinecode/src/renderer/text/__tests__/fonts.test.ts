@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { copyFileSync, mkdirSync, mkdtempSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { test } from "node:test";
@@ -8,7 +8,13 @@ import { Canvas } from "@napi-rs/canvas";
 import type { FontEntry } from "../../../core/types/index.js";
 import { describeRegisteredFonts, registerProjectFonts } from "../fonts.js";
 
-const projectRoot = resolve(process.cwd(), "../..");
+let projectRoot = process.cwd();
+while (
+  projectRoot !== resolve(projectRoot, "..") &&
+  !existsSync(resolve(projectRoot, "example/sql/assets/fonts/SpaceGrotesk-Bold.ttf"))
+) {
+  projectRoot = resolve(projectRoot, "..");
+}
 const mediaDir = "example/sql/assets/fonts";
 const family = "Cinecode Test Grotesk";
 const source = "SpaceGrotesk-Bold.ttf";

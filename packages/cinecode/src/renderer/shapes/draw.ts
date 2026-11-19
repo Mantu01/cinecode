@@ -120,12 +120,17 @@ export function drawPolygon(
   const { ctx } = context;
   const transform = { ...createDefaultTransform(), ...params.transform };
   if (points.length < 3) return;
-  const xs = points.map((p) => p.x);
-  const ys = points.map((p) => p.y);
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
+  let minX = points[0]!.x;
+  let maxX = points[0]!.x;
+  let minY = points[0]!.y;
+  let maxY = points[0]!.y;
+  for (let i = 1; i < points.length; i++) {
+    const p = points[i]!;
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
   const width = maxX - minX;
   const height = maxY - minY;
   ctx.save();

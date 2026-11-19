@@ -36,8 +36,8 @@ export const REMOVED_CONFIG_KEYS: Readonly<Record<string, string>> = {
   "audio.normalize": "Removed; apply audio processing in the timeline mixer.",
   "audio.limiter": "Removed; apply audio processing in the timeline mixer.",
   "audio.sidechains": "Removed; apply audio processing in the timeline mixer.",
-  security: "Removed; plugin verification is controlled by the marketplace client.",
-  telemetry: "Removed; use `cinecode telemetry`.",
+  security: "Removed; plugin verification is controlled by local capabilities.",
+  telemetry: "Removed in Phase 32; telemetry has been removed.",
   pluginPermissions: "Removed; sandbox permissions are configured per plugin.",
 };
 

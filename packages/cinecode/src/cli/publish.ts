@@ -7,142 +7,87 @@ import { createError, ErrorCode } from "../errors/index.js";
 import { runReport } from "./run-report.js";
 
 export interface PublishOptions {
-  provider?: "aws" | "gcs" | "local";
-  bucket?: string;
-  region?: string;
   dest?: string;
 }
 
 export interface PublishResult {
   success: boolean;
   target: string;
+  contentType?: string;
   message: string;
 }
 
-interface LocalPublishConfig {
-  destination?: string;
+const MIME_MAP: Record<string, string> = {
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".mov": "video/quicktime",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".svg": "image/svg+xml",
+  ".json": "application/json",
+  ".wav": "audio/wav",
+  ".mp3": "audio/mpeg",
+};
+
+export function detectContentType(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  return MIME_MAP[ext] ?? "application/octet-stream";
 }
 
 function respectIgnore(projectDir: string, relativePath: string): boolean {
   return loadCinecodeIgnore(projectDir).shouldIgnore(relativePath);
 }
 
-async function uploadToS3(outputPath: string, options: PublishOptions): Promise<PublishResult> {
-  const bucket = options.bucket ?? process.env.CINECODE_S3_BUCKET;
-  if (!bucket) {
-    return { success: false, target: outputPath, message: "S3 bucket missing — pass --bucket or set CINECODE_S3_BUCKET" };
-  }
-  const mod = await importS3Client();
-  if (!mod) {
-    return { success: false, target: outputPath, message: "@aws-sdk/client-s3 is not installed — run: pnpm add @aws-sdk/client-s3 --filter=cinecode" };
-  }
-  const client = new mod.S3Client({ region: options.region ?? process.env.AWS_REGION });
-  const key = path.basename(outputPath);
-  await client.send(new mod.PutObjectCommand({
-    Bucket: bucket,
-    Key: key,
-    Body: fs.readFileSync(outputPath),
-    ContentType: "video/mp4",
-  }));
-  const region = options.region ?? process.env.AWS_REGION ?? "us-east-1";
-  const url = `https://${bucket}.s3.${region}.amazonaws.com/${key}`;
-  return { success: true, target: url, message: `Uploaded '${key}' to S3 bucket '${bucket}'` };
-}
-
-interface S3LikeClient {
-  send(command: unknown): Promise<unknown>;
-}
-
-interface S3LikeModule {
-  S3Client: new (config: { region?: string }) => S3LikeClient;
-  PutObjectCommand: new (input: { Bucket: string; Key: string; Body: Buffer; ContentType: string }) => unknown;
-}
-
-async function importS3Client(): Promise<S3LikeModule | null> {
-  const specifier = "@aws-sdk/client-s3";
-  try {
-    return (await import(specifier)) as unknown as S3LikeModule;
-  } catch {
-    return null;
-  }
-}
-
-interface GcsLikeModule {
-  Storage: new () => { bucket(name: string): { upload(path: string, options: { destination: string; contentType: string }): Promise<unknown> } };
-}
-
-async function importGcsStorage(): Promise<GcsLikeModule | null> {
-  const specifier = "@google-cloud/storage";
-  try {
-    return (await import(specifier)) as unknown as GcsLikeModule;
-  } catch {
-    return null;
-  }
-}
-
-async function uploadToGcs(outputPath: string, options: PublishOptions): Promise<PublishResult> {
-  const bucket = options.bucket ?? process.env.CINECODE_GCS_BUCKET;
-  if (!bucket) {
-    return { success: false, target: outputPath, message: "GCS bucket missing — pass --bucket or set CINECODE_GCS_BUCKET" };
-  }
-  const mod = await importGcsStorage();
-  if (!mod) {
-    return { success: false, target: outputPath, message: "@google-cloud/storage is not installed — run: pnpm add @google-cloud/storage --filter=cinecode" };
-  }
-  const key = path.basename(outputPath);
-  await new mod.Storage().bucket(bucket).upload(outputPath, { destination: key, contentType: "video/mp4" });
-  const url = `https://storage.googleapis.com/${bucket}/${key}`;
-  return { success: true, target: url, message: `Uploaded '${key}' to GCS bucket '${bucket}'` };
-}
-
-async function publishLocally(outputPath: string, options: PublishOptions): Promise<PublishResult> {
-  const configPath = path.join(process.cwd(), ".cinecode-publish.json");
-  let destination = options.dest;
-  if (!destination && fs.existsSync(configPath)) {
-    try {
-      const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as LocalPublishConfig;
-      destination = config.destination;
-    } catch {
-      void 0;
-    }
-  }
-  if (!destination) {
-    return { success: false, target: outputPath, message: "Local provider needs --dest or .cinecode-publish.json {\"destination\": \"...\"}" };
-  }
-  const target = path.resolve(destination, path.basename(outputPath));
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.copyFileSync(outputPath, target);
-  return { success: true, target, message: `Copied output to ${target}` };
-}
-
 export async function publishOutput(outputPath: string, options: PublishOptions = {}): Promise<PublishResult> {
   if (!fs.existsSync(outputPath)) {
     return { success: false, target: outputPath, message: `Output file not found: ${outputPath}` };
   }
-  const projectDir = path.dirname(path.resolve(outputPath));
-  if (respectIgnore(projectDir, path.basename(outputPath))) {
+  const resolvedOutput = path.resolve(outputPath);
+  const projectDir = path.dirname(resolvedOutput);
+  if (respectIgnore(projectDir, path.basename(resolvedOutput))) {
     return { success: false, target: outputPath, message: "Output matches .cinecodeignore patterns — publish refused" };
   }
-  switch (options.provider ?? "local") {
-    case "aws":
-      return uploadToS3(outputPath, options);
-    case "gcs":
-      return uploadToGcs(outputPath, options);
-    default:
-      return publishLocally(outputPath, options);
+
+  const configPath = path.join(process.cwd(), ".cinecode-publish.json");
+  let destination = options.dest;
+  if (!destination && fs.existsSync(configPath)) {
+    try {
+      const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as { destination?: string };
+      destination = config.destination;
+    } catch {
+      // ignore
+    }
   }
+  if (!destination) {
+    return { success: false, target: outputPath, message: "Local publish needs --dest or .cinecode-publish.json {\"destination\": \"...\"}" };
+  }
+
+  const targetDir = path.resolve(destination);
+  fs.mkdirSync(targetDir, { recursive: true });
+  const target = path.join(targetDir, path.basename(outputPath));
+  const contentType = detectContentType(target);
+
+  // Atomic write via temp file in same directory + rename
+  const tempPath = `${target}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+  try {
+    fs.copyFileSync(outputPath, tempPath);
+    fs.renameSync(tempPath, target);
+  } catch (err) {
+    try { fs.unlinkSync(tempPath); } catch { /* ignore */ }
+    return { success: false, target, message: `Failed atomic write: ${String(err)}` };
+  }
+
+  return { success: true, target, contentType, message: `Published output to ${target} (${contentType})` };
 }
 
 export function createPublishCommand(): Command {
   return new Command("publish")
-    .description("Publish a rendered output to S3, GCS, or a local destination")
+    .description("Publish a rendered output locally to a destination directory")
     .argument("<outputPath>", "Rendered output file to publish")
-    .option("--provider <provider>", "Publish provider: aws | gcs | local", "local")
-    .option("--bucket <bucket>", "Target bucket (or env CINECODE_S3_BUCKET / CINECODE_GCS_BUCKET)")
-    .option("--region <region>", "AWS region (or env AWS_REGION)")
     .option("--dest <dir>", "Local destination directory")
     .action(async (outputPath: string, options: PublishOptions) => {
-      console.log(`Publishing '${outputPath}' via ${options.provider ?? "local"} provider...`);
+      console.log(`Publishing '${outputPath}' locally...`);
       const result = await publishOutput(outputPath, options);
       runReport.result({ success: result.success, target: result.target, message: result.message });
       if (result.success) {

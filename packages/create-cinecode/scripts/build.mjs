@@ -20,6 +20,8 @@ const startedAt = Date.now();
 
 cleanDir(dist);
 
+execFileSync(process.execPath, [path.join(here, "generate-templates.mjs")], { cwd: pkg, stdio: "inherit" });
+
 execFileSync(
   process.execPath,
   [path.resolve(pkg, "..", "..", "node_modules", "typescript", "bin", "tsc"), "-p", "tsconfig.build.json"],

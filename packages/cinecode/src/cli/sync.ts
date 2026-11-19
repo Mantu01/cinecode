@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { readdir, stat } from "node:fs/promises";
+import { readdir, stat, unlink } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
 import type { Composition } from "../core/types/index.js";
 import { createError, ErrorCode } from "../errors/index.js";
@@ -36,6 +36,7 @@ export interface SyncOptions {
   readonly useDefaultIgnores?: boolean;
   readonly dryRun?: boolean;
   readonly deleteOrphans?: boolean;
+  readonly confirmed?: boolean;
 }
 
 const MEDIA_EXTENSIONS = new Set([
@@ -153,12 +154,30 @@ export async function buildSyncReport(options: SyncOptions = {}): Promise<SyncRe
     ? { names: [], warnings: [] }
     : await collectPluginReport(root);
 
+  let orphanedBytes = 0;
+  for (const orphan of orphanedFiles) {
+    const info = await stat(resolve(root, orphan)).catch(() => null);
+    if (info) orphanedBytes += info.size;
+  }
+
+  const deletedFiles: string[] = [];
+  if (options.deleteOrphans && !options.dryRun && options.confirmed) {
+    for (const orphan of orphanedFiles) {
+      try {
+        await unlink(resolve(root, orphan));
+        deletedFiles.push(orphan);
+      } catch {
+        // Ignore unlink error
+      }
+    }
+  }
+
   const actions = {
-    upload: mediaFiles.slice(0, 3).map((f) => f.slice(root.length + 1)),
-    download: missingFiles.slice(0, 3),
+    upload: [],
+    download: [],
     update: [],
-    delete: options.deleteOrphans ? orphanedFiles.slice(0, 5) : [],
-    estimatedBytes: (mediaFiles.length + missingFiles.length) * 1024 * 1024,
+    delete: options.deleteOrphans ? (options.dryRun ? orphanedFiles : deletedFiles) : [],
+    estimatedBytes: options.deleteOrphans ? orphanedBytes : 0,
   };
 
   return {
@@ -185,7 +204,8 @@ export function createSyncCommand(): Command {
     .option("--no-default-ignores", "Disable built-in ignore patterns")
     .option("--dry-run", "Preview sync operations without uploading, downloading or deleting", false)
     .option("--delete-orphans", "Delete detected orphaned assets", false)
-    .action(async (options: { dir: string; cache?: string; prune: boolean; plugins: boolean; ignore: string[]; defaultIgnores: boolean; json?: boolean; dryRun?: boolean; deleteOrphans?: boolean; config?: string; root?: string; verbose?: boolean }) => {
+    .option("-y, --yes", "Confirm destructive deletion of orphaned assets", false)
+    .action(async (options: { dir: string; cache?: string; prune: boolean; plugins: boolean; ignore: string[]; defaultIgnores: boolean; json?: boolean; dryRun?: boolean; deleteOrphans?: boolean; yes?: boolean; config?: string; root?: string; verbose?: boolean }) => {
       const resolver = createProjectResolver({
         root: options.root ?? (options.dir === "." ? undefined : options.dir),
         config: options.config,
@@ -201,6 +221,7 @@ export function createSyncCommand(): Command {
         useDefaultIgnores: options.defaultIgnores,
         dryRun: options.dryRun,
         deleteOrphans: options.deleteOrphans,
+        confirmed: options.yes === true,
       });
       runReport.result({ ...report });
       for (const file of report.missingFiles) runReport.warn(ErrorCode.CC2001, `Media file not found: ${file}`, file);

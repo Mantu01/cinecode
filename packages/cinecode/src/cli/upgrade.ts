@@ -1,5 +1,4 @@
 import { Command } from "commander";
-import { spawn } from "node:child_process";
 import { get } from "node:https";
 
 export interface UpgradeInfo {
@@ -12,7 +11,7 @@ export interface UpgradeInfo {
 
 function fetchLatestVersion(): Promise<string | null> {
   return new Promise((resolvePromise) => {
-    const request = get("https://registry.npmjs.org/cinecode/latest", { timeout: 6000 }, (response) => {
+    const request = get("https://registry.npmjs.org/cinecode/latest", { timeout: 3000 }, (response) => {
       let body = "";
       response.on("data", (chunk) => { body += chunk.toString(); });
       response.on("end", () => {
@@ -58,18 +57,10 @@ export async function checkForUpgrade(currentVersion = process.env.CINECODE_VERS
   };
 }
 
-function detectInstallCommand(): readonly [string, readonly string[]] {
-  const agent = process.env.npm_config_user_agent ?? "";
-  if (agent.includes("pnpm")) return ["pnpm", ["i", "-g", "cinecode"]];
-  if (agent.includes("yarn")) return ["yarn", ["global", "add", "cinecode"]];
-  return ["npm", ["i", "-g", "cinecode"]];
-}
-
 export function createUpgradeCommand(): Command {
   return new Command("upgrade")
     .description("Check npm for a newer cinecode release")
-    .option("--auto", "Run the detected global install command when an upgrade exists")
-    .action(async (options: { auto?: boolean }) => {
+    .action(async () => {
       const info = await checkForUpgrade();
       console.log(`Current version: ${info.currentVersion}`);
       console.log(`Latest version:  ${info.latestVersion}`);
@@ -77,15 +68,8 @@ export function createUpgradeCommand(): Command {
         console.log("You are up to date.");
         return;
       }
-      const [command, args] = detectInstallCommand();
-      console.log(`Upgrade available: ${command} ${args.join(" ")}`);
+      console.log(`Upgrade available (v${info.latestVersion}). Run npm i -g cinecode to update.`);
       if (info.changelogUrl) console.log(`Changelog: ${info.changelogUrl}`);
       for (const change of info.breakingChanges ?? []) console.log(`⚠ ${change}`);
-      if (!options.auto) return;
-      await new Promise<void>((resolvePromise, reject) => {
-        const child = spawn(command, [...args], { stdio: "inherit", windowsHide: false });
-        child.on("error", reject);
-        child.on("close", (code) => (code === 0 ? resolvePromise() : reject(new Error(`Upgrade failed with code ${code}`))));
-      });
     });
 }

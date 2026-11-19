@@ -1,4 +1,4 @@
-import { parentPort, workerData } from "node:worker_threads";
+import { parentPort } from "node:worker_threads";
 import { Canvas } from "@napi-rs/canvas";
 import { join } from "node:path";
 import type { Composition, FontEntry } from "../core/types/index.js";
@@ -6,6 +6,7 @@ import {
   renderFrame,
   primeVideoFramesForRange,
   setMediaCacheForRenderer,
+  setDisableLocalVideoDecode,
   videoFrameRefsFor,
   hasVideoFrameCached,
   storeRemoteVideoFrame,
@@ -16,6 +17,9 @@ import { createMediaCache } from "../media/cache.js";
 import { createCacheClient } from "./cache-channel.js";
 import { registerProjectFonts } from "../renderer/text/fonts.js";
 import { createBuiltinRegistry } from "../extensions/bootstrap.js";
+import { setExtensions } from "../extensions/index.js";
+import { PluginRegistry } from "../plugin/registry.js";
+import { loadPlugin } from "../plugin/loader.js";
 import { createRenderRuntime, type RenderRuntime } from "../renderer/runtime.js";
 import { frameFromPixels, frameTransfer } from "./frame-format.js";
 
@@ -31,6 +35,12 @@ interface WorkerStartup {
   fonts?: readonly FontEntry[];
   projectRoot?: string;
   mediaDir?: string;
+  crashOnFrame?: number;
+  plugins?: readonly {
+    readonly name: string;
+    readonly source?: string;
+    readonly options?: Readonly<Record<string, unknown>>;
+  }[];
 }
 
 interface ChunkInput {
@@ -109,6 +119,7 @@ function ensureMediaCache(cacheDir: string): Promise<void> {
       const mediaCache = createMediaCache(join(cacheDir, "media"));
       await mediaCache.initialize();
       setMediaCacheForRenderer(mediaCache);
+      setDisableLocalVideoDecode(true);
     })();
   }
   return ready;
@@ -122,25 +133,50 @@ async function fetchRemoteFrames(
   if (!cacheClient) return;
   const refs = await videoFrameRefsFor(composition, frames);
   const misses = refs.filter((ref) => !hasVideoFrameCached(ref.src, ref.sourceFrame));
-  for (const ref of misses) {
-    const response = await cacheClient.request(`video:${ref.src}@${ref.sourceFrame}`);
-    if (!response.hit || !response.data) continue;
-    const payload = JSON.parse(response.data.toString("utf8")) as {
-      buffer: string;
-      width: number;
-      height: number;
-      format: "rgba" | "rgb24";
-    };
-    storeRemoteVideoFrame(
-      ref.src,
-      {
-        buffer: Buffer.from(payload.buffer, "base64"),
-        width: payload.width,
-        height: payload.height,
-        format: payload.format,
-      },
-      ref.sourceFrame,
-    );
+  if (misses.length === 0) return;
+
+  const keys = misses.map((ref) => `video:${ref.src}@${ref.sourceFrame}`);
+  const responses = await cacheClient.requestBatch(keys);
+  for (let i = 0; i < misses.length; i++) {
+    const ref = misses[i]!;
+    const response = responses[i];
+    if (!response || !response.hit || !response.data) {
+      if (response?.error) {
+        throw new Error(`[CC4001] Remote decode error: ${response.error}`);
+      }
+      continue;
+    }
+    if (response.width !== undefined && response.height !== undefined) {
+      storeRemoteVideoFrame(
+        ref.src,
+        {
+          buffer: response.data,
+          width: response.width,
+          height: response.height,
+          format: (response.format as "rgba" | "rgb24") ?? "rgba",
+        },
+        ref.sourceFrame,
+      );
+    } else {
+      try {
+        const payload = JSON.parse(response.data.toString("utf8")) as {
+          buffer: string;
+          width: number;
+          height: number;
+          format: "rgba" | "rgb24";
+        };
+        storeRemoteVideoFrame(
+          ref.src,
+          {
+            buffer: Buffer.from(payload.buffer, "base64"),
+            width: payload.width,
+            height: payload.height,
+            format: payload.format,
+          },
+          ref.sourceFrame,
+        );
+      } catch {}
+    }
   }
 }
 
@@ -246,28 +282,146 @@ if (!parentPort) {
   throw new Error("Frame worker must be run as a worker thread");
 }
 
-const startup = workerData as WorkerStartup;
-if (!startup || !startup.compositionJson) {
-  process.exit(0);
+interface InitMessage {
+  readonly type: "init";
+  readonly payload: WorkerStartup;
 }
-const { seed, cacheDir } = startup;
-const policy: FrameErrorPolicy = startup.errorPolicy ?? "placeholder";
-const composition = JSON.parse(startup.compositionJson) as Composition;
-const frameWidth = startup.frameWidth ?? composition.width;
-const frameHeight = startup.frameHeight ?? composition.height;
-const fontResult = registerProjectFonts(startup.fonts, {
-  projectRoot: startup.projectRoot ?? process.cwd(),
-  mediaDir: startup.mediaDir ?? "media",
-});
-if (fontResult.errors.length > 0) throw new Error(fontResult.errors[0]!.message);
-const runtime = createRenderRuntime(createBuiltinRegistry(), "worker");
+
+interface ResetMessage {
+  readonly type: "reset";
+}
+
+interface ShutdownMessage {
+  readonly type: "shutdown";
+}
+
+type WorkerMessage = ChunkInput | InitMessage | ResetMessage | ShutdownMessage | { type: "cache-response" };
+
+interface WorkerState {
+  readonly composition: Composition;
+  readonly seed: number;
+  readonly cacheDir: string;
+  readonly policy: FrameErrorPolicy;
+  readonly frameWidth: number;
+  readonly frameHeight: number;
+  readonly runtime: RenderRuntime;
+  readonly crashOnFrame?: number;
+}
+
+let state: WorkerState | null = null;
+
+async function initialize(startup: WorkerStartup): Promise<void> {
+  const started = Date.now();
+  if (!startup.compositionJson) throw new Error("init payload has no composition");
+  const composition = JSON.parse(startup.compositionJson) as Composition;
+  const fontResult = registerProjectFonts(startup.fonts, {
+    projectRoot: startup.projectRoot ?? process.cwd(),
+    mediaDir: startup.mediaDir ?? "media",
+  });
+  if (fontResult.errors.length > 0) throw new Error(fontResult.errors[0]!.message);
+  // Per-job state never leaks across jobs when a worker is reused.
+  clearRendererCaches();
+  ready = null;
+
+  const workerRegistry = createBuiltinRegistry();
+  setExtensions(workerRegistry);
+  if (startup.plugins && startup.plugins.length > 0) {
+    const workerPluginRegistry = new PluginRegistry();
+    for (const p of startup.plugins) {
+      if (p.source) {
+        try {
+          const plugin = await loadPlugin(p.source, {
+            options: p.options as Record<string, unknown>,
+            registry: workerPluginRegistry,
+            rootDir: startup.projectRoot,
+          });
+          if (plugin.effects) {
+            for (const effect of plugin.effects) {
+              workerRegistry.slot("effect").register(effect.name, effect);
+              workerRegistry.slot("effect").register(`${plugin.manifest.name}/${effect.name}`, effect);
+              workerRegistry.slot("effect").register(`${plugin.manifest.name}:${effect.name}`, effect);
+            }
+          }
+          if (plugin.transitions) {
+            for (const transition of plugin.transitions) {
+              workerRegistry.slot("transition").register(transition.name, transition);
+              workerRegistry.slot("transition").register(`${plugin.manifest.name}/${transition.name}`, transition);
+              workerRegistry.slot("transition").register(`${plugin.manifest.name}:${transition.name}`, transition);
+            }
+          }
+        } catch (err) {
+          console.warn(`[frame-worker] failed to load plugin ${p.name}:`, err);
+        }
+      }
+    }
+    await workerPluginRegistry.init(workerRegistry);
+  }
+
+  state = {
+    composition,
+    seed: startup.seed,
+    cacheDir: startup.cacheDir,
+    policy: startup.errorPolicy ?? "placeholder",
+    frameWidth: startup.frameWidth ?? composition.width,
+    frameHeight: startup.frameHeight ?? composition.height,
+    runtime: createRenderRuntime(workerRegistry, "worker"),
+    crashOnFrame: startup.crashOnFrame,
+  };
+  parentPort!.postMessage({ type: "ready", startupMs: Date.now() - started });
+}
 
 process.once("exit", clearRendererCaches);
 
-parentPort!.on("message", (msg: ChunkInput) => {
-  if ((msg as { type?: string }).type === "cache-response") return;
-  ensureMediaCache(cacheDir)
-    .then(() => processFrames(composition, seed, msg.frames, policy, frameWidth, frameHeight, runtime))
+parentPort.on("message", (msg: WorkerMessage) => {
+  const type = (msg as { type?: string }).type;
+  if (type === "cache-response") return;
+  if (type === "init") {
+    initialize((msg as InitMessage).payload).catch((error: unknown) => {
+      parentPort!.postMessage({
+        type: "init-error",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return;
+  }
+  if (type === "reset") {
+    clearRendererCaches();
+    ready = null;
+    state = null;
+    parentPort!.postMessage({ type: "reset-complete" });
+    return;
+  }
+  if (type === "shutdown") {
+    clearRendererCaches();
+    ready = null;
+    state = null;
+    process.exit(0);
+  }
+  const current = state;
+  if (!current) {
+    parentPort!.postMessage({
+      frames: [],
+      error: "[CC4008] worker received a chunk before its bootstrap message",
+      aborted: true,
+    });
+    return;
+  }
+  const chunkFrames = (msg as ChunkInput).frames ?? (msg as { frames?: readonly number[] }).frames;
+  if (current.crashOnFrame !== undefined && chunkFrames?.includes(current.crashOnFrame)) {
+    process.exit(1);
+  }
+  ensureMediaCache(current.cacheDir)
+    .then(() =>
+      processFrames(
+        current.composition,
+        current.seed,
+        chunkFrames,
+        current.policy,
+        current.frameWidth,
+        current.frameHeight,
+        current.runtime,
+      ),
+    )
     .then((output) => {
       const frames: TransportFrame[] = [];
       const transfer: ArrayBuffer[] = [];

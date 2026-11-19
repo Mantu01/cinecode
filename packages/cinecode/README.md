@@ -214,7 +214,7 @@ Command aliases are opt-in: set `CINECODE_ALIASES=1` to expand them from
 command, expansion is bounded and cycle-safe, and an alias that resolves to no
 command fails with a suggestion.
 | `cinecode check` | Validate compositions and references |
-| `cinecode canvas serve` | Interactive drawing canvas server |
+| `cinecode preview` | Start read-only preview server and open viewer |
 | `cinecode render-multi <file>` | Render a resolution bundle in one command |
 
 ## Advanced usage
@@ -293,7 +293,7 @@ registerMediaResolver({
 
 ### 3D and canvas
 
-Use `model3d`, `text3d`, skyboxes, PBR materials, shadows, and skeleton animation inside normal visual tracks. `cinecode canvas serve` exposes a WebSocket canvas protocol with bounded undo/redo history and layer reordering.
+Use `model3d`, `text3d`, skyboxes, PBR materials, shadows, and skeleton animation inside normal visual tracks. `cinecode preview` exposes a read-only WebSocket preview server with orbit, pan, and zoom camera controls.
 
 ## Editor support
 

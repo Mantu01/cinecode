@@ -6,7 +6,6 @@ import { loadConfig } from "../config/schema.js";
 import { resolveProjectLocation } from "../config/project.js";
 import { loadManifestProject } from "../manifest/index.js";
 import { DevServer } from "../dev/index.js";
-import { startMetricsServer, type MetricsServerHandle } from "../observability/metrics-server.js";
 import { setHotReload } from "../loader/index.js";
 
 export interface DevCliOptions {
@@ -56,19 +55,12 @@ export async function devCommand(options: DevCliOptions): Promise<void> {
   console.log(`Cinecode dev server running at ${server.url}`);
   console.log(`Watching ${config.sourceDir ?? "./src"} — ${server.nodes.length} asset(s) registered`);
 
-  let metricsHandle: MetricsServerHandle | null = null;
-  const metricsPort = options.metricsPort ?? config.dev?.metricsPort ?? (port + 1);
-  if (metricsPort > 0 && process.env.NODE_ENV !== "production") {
-    metricsHandle = await startMetricsServer({ port: metricsPort, host });
-  }
-
   if (options.open ?? config.dev?.open ?? false) {
     openBrowser(server.url);
   }
 
   const shutdown = async (): Promise<void> => {
     console.log("\nShutting down dev server…");
-    await metricsHandle?.close();
     await server.stop();
     process.exit(0);
   };

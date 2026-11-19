@@ -1,231 +1,172 @@
 # Cinecode
 
-Programmatic media creation for filmmakers and developers. Describe a video, animation, or interactive canvas in TypeScript, then render it to MP4, WebM, GIF, PNG sequence, or PDF with a deterministic pipeline.
+Code-first media generation framework for developers and creators. Author animations, motion graphics, video timelines, and procedural audio directly in TypeScript or JavaScript, then render master videos with a deterministic pipeline.
 
-Cinecode treats compositions as code: timelines, clips, effects, audio, and 3D scenes are typed objects you can compose, diff, test, and reuse. Plugins, resolvers, and lifecycle hooks extend every stage of the render.
+## Runtime & Authoring Contract
 
-## Quick start
+- **Node.js Requirement:** Node `>=22.18.0` (tested on Node 22 LTS and Node 24). Older runtimes exit with error code `78` (`CINECODE_RUNTIME_UNSUPPORTED`).
+- **Module Architecture:** Native ESM only (`"type": "module"`).
+- **TypeScript Contract:** Native type stripping. Erasable TypeScript syntax is accepted (type annotations, interfaces, type aliases). Non-erasable syntax (enums, namespaces) is not supported. Use explicit file extensions (`.ts` / `.js`) in relative imports.
+
+## Quickstart
+
+Scaffold a clean project with the interactive questionnaire or CLI flags:
 
 ```bash
-pnpm add cinecode
+# Using npm
+npm create cinecode my-film
+
+# Or with pnpm
+pnpm create cinecode my-film --ts
 ```
 
+Navigate to the project and run the dev server or render a master:
+
+```bash
+cd my-film
+npm run dev      # Start dev server with Granular HMR
+npm run render   # Render all timelines to output/videos/
+```
+
+## The Four Project Roots
+
+Every project configuration defines four non-overlapping roots:
+
+```
+my-film/
+├── cinecode.config.ts  # Project settings and video quality
+├── main.ts             # Central manifest registering assets & timelines
+├── src/                # [sourceDir] Authored scene and timeline source code
+├── media/              # [mediaDir] Source assets (images, audio, fonts, video)
+├── output/             # [outputDir] Rendered video, audio, images, scenes
+└── .cinecode/cache/    # [cacheDir] Intermediate chunk cache & checkpoints
+```
+
+## Configuration & Manifest Contract
+
+### `cinecode.config.ts`
+
+Controls global project settings and output quality. The renderer never silently downgrades output:
+
 ```typescript
-// main.ts
+import { defineConfig } from "cinecode";
+
+export default defineConfig({
+  schemaVersion: 2,
+  project: {
+    entry: "./main.ts",
+    sourceDir: "./src",
+    mediaDir: "./media",
+    outputDir: "./output",
+    cacheDir: ".cinecode/cache",
+  },
+  video: {
+    width: 1920,
+    height: 1080,
+    fps: 30,
+    background: "#0a0a0a",
+  },
+  render: {
+    format: "mp4",
+    quality: "final",
+    codec: "h264",
+    preset: "slow",
+    concurrency: "auto",
+  },
+  audio: {
+    sampleRate: 48000,
+    channels: 2,
+  },
+});
+```
+
+### `main.ts`
+
+The central asset manifest. Every entry references an isolated file under `src/` so it can be generated, previewed, and cached independently:
+
+```typescript
 import { defineMain } from "cinecode";
 
 export default defineMain({
+  images: [
+    { id: "thumbnail", file: "./src/images/thumbnail.ts", format: "png" },
+  ],
+  audio: [
+    { id: "ambient", file: "./src/audio/ambient.ts", kind: "music", duration: 6 },
+  ],
   scenes: [
-    {
-      id: "intro",
-      name: "Hello Scene",
-      file: "./src/scenes/intro.ts",
-      duration: 3,
-    },
+    { id: "intro", file: "./src/scenes/intro.ts", duration: 6 },
   ],
   timelines: [
-    {
-      id: "main",
-      name: "Hello, Cinecode",
-      duration: 3,
-      sceneRefs: ["intro"],
-    },
+    { id: "main", duration: 6, sceneRefs: ["intro"], audioRef: ["ambient"] },
   ],
 });
 ```
 
+## Fast Authoring Model
+
+**Animate properties, do not emit a clip per frame.**
+
+Instead of creating hundreds of clips in loops, define persistent visual clips with `keyframes`. A single text or shape clip can span the entire scene while animating opacity, position, scale, or letter spacing smoothly on the fly. This reduces composition JSON data by over 99% and significantly accelerates rendering.
+
 ```typescript
-// src/scenes/intro.ts
-import { defineScene, timeline, track, text, solid } from "cinecode";
+import { defineScene, timeline, track, text, shape } from "cinecode";
 
-const DURATION = 3;
-
-export default defineScene("intro", DURATION, () => {
-  return timeline([
-    track("background", [solid("#0b0b0f", { start: 0, duration: DURATION })]),
-    track("title", [
-      text("Hello, Cinecode", 96, {
-        start: 0.5,
-        duration: 2,
-        align: "center",
-        fill: "#ffffff",
-        transitionIn: { name: "crossfade", duration: 0.6 },
+export default defineScene("intro", 6, () =>
+  timeline([
+    track("background", [
+      shape("rectangle", {
+        width: 1920,
+        height: 1080,
+        fill: "#0a0a0a",
+        opacity: 0,
+        keyframes: { opacity: [[0, 0], [0.8, 1, "easeOutCubic"]] },
+        start: 0,
+        duration: 6,
       }),
     ]),
-  ]);
-});
+    track("title", [
+      text("CINECODE", 96, {
+        fill: "#f5f0e8",
+        opacity: 0,
+        transform: { x: 480, y: 440 },
+        keyframes: {
+          opacity: [[0, 0], [0.5, 1, "easeOutCubic"]],
+          "transform.y": [[0, 480], [0.8, 440, "easeOutExpo"]],
+        },
+        start: 0.5,
+        duration: 5.5,
+      }),
+    ]),
+  ]),
+);
 ```
 
-```bash
-npx cinecode render --all --props ./cinecode.config.ts --overwrite
-```
+## Commands
 
-## Feature highlights
+| Command | Purpose | Example |
+| --- | --- | --- |
+| `cinecode render` | Render timelines or compositions to video | `cinecode render --config ./cinecode.config.ts` |
+| `cinecode still` | Render a single frame to PNG or JPEG | `cinecode still --config ./cinecode.config.ts --frame 0` |
+| `cinecode dev` | Start development server with Granular HMR | `cinecode dev --config ./cinecode.config.ts` |
+| `cinecode preview` | Start read-only preview viewer with camera controls | `cinecode preview --config ./cinecode.config.ts` |
+| `cinecode generate` | Interactively generate images, audio, scenes | `cinecode generate image --all` |
+| `cinecode validate` | Validate config, compositions, media, and fonts | `cinecode validate --config ./cinecode.config.ts` |
+| `cinecode doctor` | Inspect environment and project health | `cinecode doctor --fix` |
+| `cinecode clean` | Delete render cache and intermediate chunks | `cinecode clean --cache` |
+| `cinecode inspect` | Print resolved timeline tracks and clips | `cinecode inspect --config ./cinecode.config.ts` |
 
-- Declarative compositions with tracks, sequences, groups, and split-screen layouts
-- Rich clip types: video, image, text, shapes, SVG, particles, procedural noise, audio visualizers, data charts, stickers, gradient meshes, mesh warps, 3D text, glTF models
-- Built-in effect library: blur, sharpen, denoise, vignette, color grading, film grain, glitch, bloom, neon glow, depth of field, chromatic aberration, LUTs, and more
-- Transition library plus a plugin authoring API for custom transitions
-- Audio pipeline: mixing, spatial panning, reverb, sidechain ducking, beat detection, MIDI input, text-to-speech
-- Encoder pipeline: H.264/H.265/AV1/VP9/ProRes, two-pass VBR, alpha output, platform presets, chapters, thumbnails, subtitle burn-in, multi-resolution bundles
-- Plugin system with node_modules auto-discovery and expanded lifecycle hooks
-- Media resolvers for local files, HTTP(S), `s3://`, and `gs://` sources with caching
-- Dev server inspector with HMR, arbitrary frame scrubbing, layer toggles, and a performance overlay
-- JSON Schema generation for editor autocomplete and validation
-
-## Configuration
-
-```typescript
-// cinecode.config.ts
-import type { CinecodeConfig } from "cinecode";
-
-export default {
-  schemaVersion: 2,
-  project: { name: "my-video", entry: "./main.ts", sourceDir: "./src", outputDir: "./output", cacheDir: ".cinecode/cache" },
-  video: { title: "My Video", width: 1920, height: 1080, fps: 30, background: "#000000" },
-  render: { format: "mp4", codec: "h264", quality: "final", platformPreset: "youtube-1080p" },
-  audio: { sampleRate: 48000, channels: 2, masterVolume: 1 },
-  autoDiscoverPlugins: true,
-  ignorePatterns: ["tmp/**"],
-} satisfies CinecodeConfig;
-```
-
-Environment variables are substituted at load time, with optional fallbacks:
-
-```typescript
-outputDir: "${OUTPUT_DIR:-./output}",
-```
-
-A missing variable without a fallback fails loading with the variable name and a fix hint. A `.cinecodeignore` file excludes media from sync and scanning using gitignore-style patterns with `!` negation.
-
-## Dev server
-
-```bash
-npx cinecode dev
-```
-
-Open `http://localhost:3000` for the asset preview and `http://localhost:3000/inspector` for the inspector. The inspector provides click-to-seek scrubbing, frame stepping, playback, layer visibility toggles, a thumbnail strip, and a toggleable performance HUD. Saving a `.cinecode.ts` file triggers HMR without a page reload.
-
-## CLI
-
-| Command | Purpose |
-|---------|---------|
-| `cinecode render --props <file>` | Render a composition to a file |
-| `cinecode still <file>` | Render a single frame |
-| `cinecode preview <file>` | Stream a preview |
-| `cinecode dev` | Dev server with HMR and inspector |
-| `cinecode edit <file>` | Open a composition in `$EDITOR` or print JSON with `--json` |
-| `cinecode sync` | Verify media references, prune stale cache, report orphans and plugins |
-| `cinecode compare <a> <b>` | Pixel-diff two compositions over a deterministic frame range |
-| `cinecode benchmark <file>` | Measure frame time, p95, memory, and worker capacity |
-| `cinecode upgrade` | Compare the installed version with npm, optionally self-update |
-| `cinecode template [name]` | List or scaffold starter compositions |
-| `cinecode doctor [--fix]` | Environment and project diagnostics with auto-repair |
-| `cinecode health [--json]` | Compact CI-friendly system health report |
-| `cinecode check` | Validate compositions and references |
-| `cinecode canvas serve` | Interactive drawing canvas server |
-| `cinecode render-multi <file>` | Render a resolution bundle in one command |
-
-## Advanced usage
-
-### Plugin auto-discovery
-
-Packages that declare a Cinecode marker are loaded automatically:
-
-```json
-{
-  "name": "@studio/cinecode-transitions",
-  "cinecodePlugin": { "entry": "./dist/index.js", "kind": ["transition"] }
-}
-```
-
-```typescript
-import { definePlugin, defineTransition, registerTransition } from "cinecode";
-
-export default definePlugin({
-  manifest: { name: "custom-transitions", version: "1.0.0", kind: "transition" },
-  setup() {
-    registerTransition(defineTransition({
-      name: "zoom-in",
-      duration: 0.5,
-      params: { speed: { type: "number", default: 1, min: 0.1, max: 5 } },
-      apply({ ctx, from, to, progress, width, height, params }) {
-        const scale = 1 + progress * Number(params.speed);
-        ctx.save();
-        ctx.translate(width / 2, height / 2);
-        ctx.scale(scale, scale);
-        ctx.translate(-width / 2, -height / 2);
-        ctx.drawImage(from, 0, 0);
-        ctx.restore();
-        ctx.globalAlpha = progress;
-        ctx.drawImage(to, 0, 0);
-      },
-    }));
-  },
-});
-```
-
-Set `autoDiscoverPlugins: false` to load only plugins listed in the config.
-
-### Lifecycle hooks
-
-Plugins and inline handlers can observe or modify rendering:
-
-```typescript
-import { getPluginRegistry } from "cinecode";
-
-const registry = getPluginRegistry();
-registry.registerHook("afterFrame", async ({ canvas }) => {
-  // draw a watermark on the frame canvas when one is available
-  void canvas;
-});
-```
-
-Available hooks: `beforeRender`, `afterRender`, `beforeFrame`, `afterFrame`, `beforeEncode`, `afterEncode`, `beforeMix`, `afterMix`, `onProgress`, `onWarning`, `onResolutionChange`, `onError`.
-
-### Remote media
-
-Media references may use local paths, `https://`, `s3://`, or `gs://`. Remote files are cached under `.cinecode/cache/media/remote`. S3 uses `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, and optional `AWS_SESSION_TOKEN`/`AWS_ENDPOINT`. GCS uses `GCP_ACCESS_TOKEN` or `GCP_SERVICE_ACCOUNT_KEY`/`GOOGLE_APPLICATION_CREDENTIALS`.
-
-```typescript
-import { registerMediaResolver } from "cinecode";
-
-registerMediaResolver({
-  name: "internal-cdn",
-  canResolve: (uri) => uri.startsWith("cdn://"),
-  resolve: async (uri) => {
-    const response = await fetch(uri.replace("cdn://", "https://cdn.example.com/"));
-    return response.arrayBuffer();
-  },
-});
-```
-
-### 3D and canvas
-
-Use `model3d`, `text3d`, skyboxes, PBR materials, shadows, and skeleton animation inside normal visual tracks. `cinecode canvas serve` exposes a WebSocket canvas protocol with bounded undo/redo history and layer reordering.
-
-## Editor support
-
-Generate and use the JSON Schema:
-
-```bash
-pnpm --filter cinecode generate:schema
-```
-
-```json
-{
-  "json.schemas": [
-    { "fileMatch": ["cinecode.config.json"], "url": "./node_modules/cinecode/cinecode.schema.json" }
-  ]
-}
-```
+For all 34 commands and detailed flag options, see the [CLI Command Reference](docs/command-reference.md).
 
 ## Documentation
 
-- [API reference](docs/api-reference.md)
-- [Examples gallery](docs/examples)
-- [Migration guide](docs/migration.md)
-- [Contributing](CONTRIBUTING.md)
+- [CLI Command Reference](docs/command-reference.md) — Exhaustive reference of all 34 commands, flags, and exit codes.
+- [Configuration Reference](docs/config-reference.md) — Field-by-field reference for `cinecode.config.ts` and `main.ts`.
+- [Support Matrix & Limits](docs/support-matrix.md) — Supported Node versions, OS platforms, video/audio formats, and limitations.
+- [Architecture & Invariants](docs/architecture.md) — Design contracts, precedence order, zero-copy pipeline, and determinism.
+- [Output Formats](docs/output-formats.md) — Specifications for MP4, WebM, ProRes, APNG, GIF, and PDF output.
+- [Performance Benchmarks](docs/performance.md) — Shipped size baselines, frame transport timings, and decode benchmarks.
+- [Migration Guide](docs/migration.md) — Upgrading from Schema v1 to Schema v2.
 
 ## License
 

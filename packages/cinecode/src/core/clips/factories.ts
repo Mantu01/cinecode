@@ -21,7 +21,7 @@ import type {
 } from "../types/clips.js";
 import type { AudioLikeProps, MediaProps, TimeRange, TransitionRef, VisualProps, EffectRef, MaskProps, MatteProps } from "../types/clips.js";
 import type { ColorValue, FitMode, Point, Shadow, Stroke, Transform, BlendMode } from "../types/visual.js";
-import type { KeyframeProp } from "../types/clips.js";
+import type { KeyframeProp, KeyframeMap } from "../types/clips.js";
 
 type WithVisual = VisualProps & {
   readonly transform?: Transform;
@@ -32,7 +32,7 @@ type WithVisual = VisualProps & {
   readonly effects?: readonly EffectRef[];
   readonly transitionIn?: TransitionRef;
   readonly transitionOut?: TransitionRef;
-  readonly keyframes?: readonly KeyframeProp[];
+  readonly keyframes?: readonly KeyframeProp[] | KeyframeMap;
   readonly name?: string;
 };
 

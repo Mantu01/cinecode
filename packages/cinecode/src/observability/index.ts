@@ -1,4 +1,3 @@
-export * from "./tracing.js";
 export * from "./metrics.js";
 export {
   StructuredLogger,

@@ -23,6 +23,7 @@ import type {
 } from "../core/types/index.js";
 import type { FrameConversion } from "../core/time/index.js";
 import { createConversion, createVfrConversion, frameToSeconds } from "../core/time/index.js";
+import { resolveClipKeyframes } from "../core/keyframes/engine.js";
 import { computeClipSpan, validateComposition, compositionValidationError } from "../core/validation/index.js";
 import { extractFramesInMemory, type ExtractedFrame } from "../media/frames.js";
 import { calculateSourceFrame, type ConformParams } from "../media/conform.js";
@@ -193,6 +194,11 @@ const videoFrameCache = new ByteBoundedCache<string, ExtractedFrame>(
 
 /** Module-level media cache for video frame extraction (set by pipeline). */
 let _mediaCache: import("../media/cache.js").MediaCache | null = null;
+let _disableLocalVideoDecode = false;
+
+export function setDisableLocalVideoDecode(disable: boolean): void {
+  _disableLocalVideoDecode = disable;
+}
 
 /** Set the media cache for video frame extraction. Called by the pipeline. */
 export function setMediaCacheForRenderer(cache: import("../media/cache.js").MediaCache): void {
@@ -341,7 +347,7 @@ export async function primeVideoFramesForRange(
   composition: Composition,
   frames: readonly number[],
 ): Promise<void> {
-  if (!_mediaCache || frames.length === 0) return;
+  if (_disableLocalVideoDecode || !_mediaCache || frames.length === 0) return;
 
   const seen = new Set<string>();
   for (const track of composition.rootTimeline.tracks) {
@@ -385,8 +391,12 @@ export async function primeVideoFramesForRange(
           ),
         ),
       );
-      const first = Math.min(...sourceFrames);
-      const last = Math.max(...sourceFrames);
+      let first = Infinity;
+      let last = -Infinity;
+      for (const sf of sourceFrames) {
+        if (sf < first) first = sf;
+        if (sf > last) last = sf;
+      }
       if (first > last) continue;
 
       // Avoid priming scattered frames (heavy trim/speed ramps) — only
@@ -1629,6 +1639,9 @@ async function extractVideoFrameCanvas(
 
   let extractedFrame = recallVideoFrame(src, sourceFrame);
   if (!extractedFrame) {
+    if (_disableLocalVideoDecode) {
+      throw new Error(`[CC4001] Missing video frame ${sourceFrame} of "${src}" in worker cache; shared decode service must provide all required frames.`);
+    }
     let decoded: ExtractedFrame[] | null;
     try {
       decoded = await extractFramesInMemory(
@@ -2557,14 +2570,15 @@ async function renderStandardFrame(
     const clipCanvas = drawBuffer;
     const clipCtx = createContext(clipCanvas);
     clearCanvas(clipCtx, composition.width, composition.height);
-    await drawClip(clipCtx, clip, context, seed);
-    const withEffects = applyEffects(clipCanvas, clip, context);
-    const opacity = clip.opacity ?? 1;
-    const blendMode = resolveBlendMode(clip.blend);
-    const finalCanvas = evaluateClipVisual({ clipCanvas: withEffects, clip, context, underlying });
+    const activeClip = resolveClipKeyframes(clip, frame, composition.fps);
+    await drawClip(clipCtx, activeClip, context, seed);
+    const withEffects = applyEffects(clipCanvas, activeClip, context);
+    const opacity = activeClip.opacity ?? 1;
+    const blendMode = resolveBlendMode(activeClip.blend);
+    const finalCanvas = evaluateClipVisual({ clipCanvas: withEffects, clip: activeClip, context, underlying });
 
-    const mask = getMask(clip, composition.width, composition.height);
-    const matte = getMatte(clip, composition.width, composition.height);
+    const mask = getMask(activeClip, composition.width, composition.height);
+    const matte = getMatte(activeClip, composition.width, composition.height);
 
     // Composite this layer onto the target immediately rather than collecting
     // every active clip's full-screen canvas and flushing at the end. Drawing

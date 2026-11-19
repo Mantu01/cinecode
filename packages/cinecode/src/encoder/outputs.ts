@@ -274,26 +274,6 @@ export async function splitVideo(inputPath: string, segments: readonly SplitSegm
   );
 }
 
-export interface ThumbnailOptions {
-  readonly overwrite?: boolean;
-  readonly width?: number;
-}
-
-/** Extract a still thumbnail at the given timestamp (seconds). */
-export async function generateThumbnail(inputPath: string, timestamp: number, outputPath: string, options: ThumbnailOptions = {}): Promise<FfmpegResult> {
-  const { overwrite = false, width } = options;
-  const scale = width ? ["-vf", `scale=${width}:-2`] : [];
-  return runFfmpeg([
-    "-v", "error",
-    ...(overwrite ? ["-y"] : ["-n"]),
-    "-ss", String(timestamp),
-    "-i", inputPath,
-    "-frames:v", "1",
-    ...scale,
-    outputPath,
-  ]);
-}
-
 export interface FrameSequenceOptions {
   readonly overwrite?: boolean;
   readonly pattern?: string;

@@ -1,11 +1,9 @@
 {
   "compilerOptions": {
-    "target": "es2022",
-    "module": "nodenext",
-    "moduleResolution": "nodenext",
-    "noEmit": true,
-    "skipLibCheck": true,
-    "checkJs": false
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "checkJs": true
   },
-  "include": ["cinecode.config.js", "main.js", "src/**/*.js"]
+  "include": ["cinecode.config.js", "main.js", "src/**/*"]
 }

@@ -275,7 +275,7 @@ export function normalizeConfig(raw: Record<string, unknown>): CinecodeConfig {
     hardwareAcceleration: rawRender.hardwareAcceleration ?? DEFAULT_RENDER.hardwareAcceleration!,
     concurrency: rawRender.concurrency ?? (raw.concurrency as number | "auto" | undefined),
     chunkSize: rawRender.chunkSize,
-    memoryBudgetMb: rawRender.memoryBudgetMb,
+    ...(rawRender.memoryBudgetMb !== undefined ? { memoryBudgetMb: rawRender.memoryBudgetMb } : {}),
     alpha: rawRender.alpha,
     twoPass: rawRender.twoPass,
     platformPreset: rawRender.platformPreset,

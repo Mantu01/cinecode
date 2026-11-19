@@ -32,6 +32,21 @@ export interface FrameCacheEntry {
 
 const DEFAULT_MAX_FRAMES = 2048;
 
+async function safeMkdir(dir: string): Promise<void> {
+  for (let i = 0; i < 5; i++) {
+    try {
+      await mkdir(dir, { recursive: true });
+      return;
+    } catch (err: unknown) {
+      if ((err as { code?: string })?.code === "EPERM" && i < 4) {
+        await new Promise((r) => setTimeout(r, 25 * (i + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 export class MediaCache {
   private readonly cacheDir: string;
   private readonly metadataDir: string;
@@ -52,9 +67,9 @@ export class MediaCache {
   }
 
   async initialize(): Promise<void> {
-    await mkdir(this.metadataDir, { recursive: true });
-    await mkdir(this.frameDir, { recursive: true });
-    await mkdir(this.remoteDir, { recursive: true });
+    await safeMkdir(this.metadataDir);
+    await safeMkdir(this.frameDir);
+    await safeMkdir(this.remoteDir);
     await this.loadFrameAccessOrder();
   }
 

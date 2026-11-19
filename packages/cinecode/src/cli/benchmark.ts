@@ -34,7 +34,7 @@ function percentile(sorted: readonly number[], ratio: number): number {
 }
 
 export function getBenchmarkHistoryPath(projectDir = process.cwd()): string {
-  return path.join(projectDir, ".cinecode", "cache", "benchmarks", "history.json");
+  return path.join(projectDir, ".cinecode", "benchmarks", "history.json");
 }
 
 export function loadBenchmarkHistory(projectDir = process.cwd()): BenchmarkHistoryEntry[] {
@@ -103,13 +103,15 @@ export function createBenchmarkCommand(): Command {
     .option("--compare-baseline", "Compare results against historical baseline", false)
     .option("--fail-on-regression", "Exit with error code 1 if performance regresses > 5%", false)
     .option("--save-baseline", "Save this benchmark run as official baseline", false)
-    .action(async (file: string, options) => {
-      console.log(`Benchmarking '${file}' (${options.frames} frames, ${options.runs} runs)...`);
+    .action(async (file: string, options, command: Command) => {
+      const merged = { ...command.optsWithGlobals(), ...options };
+      const projectDir = merged.root ? path.resolve(merged.root) : process.cwd();
+      console.log(`Benchmarking '${file}' (${merged.frames} frames, ${merged.runs} runs)...`);
       const stats = await benchmarkComposition(file, {
-        frames: options.frames,
-        runs: options.runs,
-        seed: options.seed ?? 0,
-        composition: options.compositionName,
+        frames: merged.frames,
+        runs: merged.runs,
+        seed: merged.seed ?? 0,
+        composition: merged.compositionName,
       });
 
       console.log("\nBenchmark Results");
@@ -121,10 +123,13 @@ export function createBenchmarkCommand(): Command {
       console.log(`Workers:         ${stats.workers}`);
       console.log(`Total duration:  ${(stats.totalMs / 1000).toFixed(2)}s`);
 
-      const history = loadBenchmarkHistory();
-      const baseline = history.reverse().find((h) => h.file === file && (h.isBaseline || !options.compareBaseline));
+      const history = loadBenchmarkHistory(projectDir);
+      const baseline = [...history].reverse().find((h) => h.file === file && (h.isBaseline || !merged.compareBaseline));
 
-      if (options.compareBaseline && baseline) {
+      if (merged.compareBaseline) {
+        if (!baseline) {
+          throw createError(ErrorCode.CC9002, { reason: `no baseline found for ${file}` });
+        }
         const timeDeltaPct = ((stats.averageMs - baseline.averageMs) / (baseline.averageMs || 1)) * 100;
         const memDeltaPct = ((stats.peakMemoryMb - baseline.peakMemoryMb) / (baseline.peakMemoryMb || 1)) * 100;
 
@@ -134,7 +139,7 @@ export function createBenchmarkCommand(): Command {
 
         if (timeDeltaPct > 5.0 || memDeltaPct > 10.0) {
           console.warn(pc.red(pc.bold("\n⚠ PERFORMANCE REGRESSION DETECTED!")));
-          if (options.failOnRegression) {
+          if (merged.failOnRegression) {
             throw createError(ErrorCode.CC9002, { reason: `frame time ${timeDeltaPct.toFixed(1)}%, memory ${memDeltaPct.toFixed(1)}% over baseline` });
           }
         } else {
@@ -146,10 +151,10 @@ export function createBenchmarkCommand(): Command {
       saveBenchmarkRun({
         ...stats,
         file,
-        isBaseline: Boolean(options.saveBaseline),
-      });
+        isBaseline: Boolean(merged.saveBaseline),
+      }, projectDir);
 
-      if (options.saveBaseline) {
+      if (merged.saveBaseline) {
         console.log(pc.green("✔ Saved run as new baseline record."));
       }
     });

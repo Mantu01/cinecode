@@ -54,6 +54,105 @@ export interface RenderCacheStats {
   readonly sizeBytes: number;
 }
 
+export interface CacheGcOptions {
+  readonly maxSizeBytes?: number;
+  readonly maxAgeMs?: number;
+}
+
+export interface CacheGcResult {
+  readonly bytesReclaimed: number;
+  readonly filesDeleted: number;
+}
+
+export interface CacheIdentityInputs {
+  readonly composition: object;
+  readonly seed?: number;
+  readonly encoding?: unknown;
+  readonly frameWindow?: { readonly from?: number; readonly to?: number };
+  readonly tempo?: unknown;
+  readonly colorSpace?: string;
+  readonly pixelRatio?: number;
+  readonly alpha?: boolean;
+  readonly registry?: unknown;
+  readonly fonts?: unknown;
+  readonly frameworkVersion?: string;
+  readonly entryPath?: string;
+  readonly entryContent?: string | Buffer;
+}
+
+export function findFunctionValuedProperty(value: unknown, path: string = ""): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "function") return path || "anonymous";
+  if (typeof value !== "object") return null;
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) {
+      const match = findFunctionValuedProperty(value[i], `${path}[${i}]`);
+      if (match) return match;
+    }
+    return null;
+  }
+  for (const [key, val] of Object.entries(value)) {
+    const currentPath = path ? `${path}.${key}` : key;
+    const match = findFunctionValuedProperty(val, currentPath);
+    if (match) return match;
+  }
+  return null;
+}
+
+export function computeCanonicalCacheIdentity(inputs: CacheIdentityInputs): {
+  readonly identityHash: string;
+  readonly bypassCache: boolean;
+  readonly bypassReason?: string;
+} {
+  const funcPath = findFunctionValuedProperty(inputs.composition);
+  if (funcPath) {
+    const reason = `composition contains function-valued property at ${funcPath}`;
+    recordDegradation({
+      code: "CC4008",
+      what: "render cache bypassed",
+      reason,
+      input: funcPath,
+      instead: "frames will be rendered fresh without disk cache reuse",
+    });
+    const randomHash = createHash("sha256").update(Math.random().toString()).digest("hex").slice(0, 32);
+    return {
+      identityHash: randomHash,
+      bypassCache: true,
+      bypassReason: reason,
+    };
+  }
+
+  let entryDigest = "";
+  if (inputs.entryContent !== undefined) {
+    entryDigest = createHash("sha256").update(inputs.entryContent).digest("hex");
+  }
+
+  const identityPayload = {
+    composition: summarizeForHash(inputs.composition),
+    seed: inputs.seed ?? 0,
+    encoding: inputs.encoding ?? null,
+    frameWindow: inputs.frameWindow ?? null,
+    tempo: inputs.tempo ?? null,
+    colorSpace: inputs.colorSpace ?? "srgb",
+    pixelRatio: inputs.pixelRatio ?? 1,
+    alpha: inputs.alpha ?? false,
+    registry: inputs.registry ?? null,
+    fonts: inputs.fonts ?? null,
+    frameworkVersion: inputs.frameworkVersion ?? "1.0.0",
+    entryDigest,
+  };
+
+  const identityHash = createHash("sha256")
+    .update(canonicalJsonString(identityPayload))
+    .digest("hex")
+    .slice(0, 32);
+
+  return {
+    identityHash,
+    bypassCache: false,
+  };
+}
+
 export function canonicalJsonString(value: unknown): string {
   return JSON.stringify(canonicalize(value));
 }
@@ -369,6 +468,88 @@ export class RenderCache {
       sizeBytes += Object.values(index.frames).reduce((sum, entry) => sum + entry.size, 0);
     }
     return { entries: files.length, totalFrames, sizeBytes };
+  }
+
+  async garbageCollect(options: CacheGcOptions = {}): Promise<CacheGcResult> {
+    const now = Date.now();
+    let bytesReclaimed = 0;
+    let filesDeleted = 0;
+
+    const files = await this.listIndexFiles();
+    interface IndexInfo {
+      readonly file: string;
+      readonly hash: string;
+      readonly path: string;
+      mtime: number;
+      index: FrameCacheIndex;
+    }
+
+    const indexInfos: IndexInfo[] = [];
+    for (const file of files) {
+      const hash = file.slice(0, -5);
+      const filePath = this.indexPath(hash);
+      const st = await stat(filePath).catch(() => null);
+      if (!st) continue;
+      const index = await this.loadIndex(hash);
+      indexInfos.push({
+        file,
+        hash,
+        path: filePath,
+        mtime: st.mtimeMs,
+        index,
+      });
+    }
+
+    if (options.maxAgeMs !== undefined && options.maxAgeMs > 0) {
+      for (let i = indexInfos.length - 1; i >= 0; i--) {
+        const item = indexInfos[i]!;
+        if (now - item.mtime > options.maxAgeMs) {
+          await this.invalidate(item.hash);
+          indexInfos.splice(i, 1);
+          filesDeleted += 1;
+        }
+      }
+    }
+
+    interface ObjectFileInfo {
+      readonly path: string;
+      readonly size: number;
+      readonly mtime: number;
+    }
+
+    const objectFiles: ObjectFileInfo[] = [];
+    let totalObjectBytes = 0;
+
+    const scanDir = async (dir: string): Promise<void> => {
+      const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+      for (const entry of entries) {
+        const fullPath = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          await scanDir(fullPath);
+        } else if (entry.isFile()) {
+          const st = await stat(fullPath).catch(() => null);
+          if (st) {
+            objectFiles.push({ path: fullPath, size: st.size, mtime: st.mtimeMs });
+            totalObjectBytes += st.size;
+          }
+        }
+      }
+    };
+
+    await scanDir(this.objectsDir);
+
+    if (options.maxSizeBytes !== undefined && options.maxSizeBytes > 0 && totalObjectBytes > options.maxSizeBytes) {
+      objectFiles.sort((a, b) => a.mtime - b.mtime);
+      for (const obj of objectFiles) {
+        if (totalObjectBytes <= options.maxSizeBytes) break;
+        await rm(obj.path, { force: true }).catch(() => undefined);
+        totalObjectBytes -= obj.size;
+        bytesReclaimed += obj.size;
+        filesDeleted += 1;
+      }
+    }
+
+    return { bytesReclaimed, filesDeleted };
   }
 }
 

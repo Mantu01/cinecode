@@ -1,7 +1,6 @@
 import { Command } from "commander";
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import pc from "picocolors";
 import { bundleStoryHtml } from "../encoder/story-bundler.js";
 import type { Composition } from "../core/types/index.js";
@@ -9,6 +8,7 @@ import type { TransitionRef } from "../core/types/clips.js";
 import { multiSelect } from "./prompt-select.js";
 import { createError, ErrorCode, isCinecodeError } from "../errors/index.js";
 import { runReport } from "./run-report.js";
+import { validateComposition } from "../core/validation/index.js";
 
 export interface SceneShot {
   readonly type: "scene";
@@ -48,12 +48,33 @@ export interface StoryboardBuild {
   readonly duration: number;
 }
 
+const VALID_TRANSITIONS = new Set([
+  "crossfade",
+  "fade",
+  "fadeToWhite",
+  "wipe",
+  "dissolve",
+  "iris",
+  "irisOpen",
+  "irisClose",
+  "spin",
+  "zoom",
+  "diagonalWipe",
+  "curveWipe",
+]);
+
 export function buildStoryboardClips(board: Storyboard): StoryboardBuild {
   const clips: Record<string, unknown>[] = [];
   let cursor = 0;
   let pendingTransition: TransitionRef | undefined;
   for (const shot of board.shots) {
     if (shot.type === "transition") {
+      if (!VALID_TRANSITIONS.has(shot.name)) {
+        throw createError(ErrorCode.CC1002, {
+          key: "transition.name",
+          suggestion: `Transition "${shot.name}" is not registered. Use one of [${[...VALID_TRANSITIONS].join(", ")}]`,
+        });
+      }
       pendingTransition = { name: shot.name, duration: shot.duration };
       continue;
     }
@@ -85,7 +106,7 @@ export function buildStoryboardClips(board: Storyboard): StoryboardBuild {
 
 export function storyboardToComposition(board: Storyboard): Composition {
   const { clips, duration } = buildStoryboardClips(board);
-  return {
+  const comp: Composition = {
     name: board.title ?? "story",
     width: board.width ?? 1920,
     height: board.height ?? 1080,
@@ -98,7 +119,14 @@ export function storyboardToComposition(board: Storyboard): Composition {
         { name: "visual", kind: "visual", clips: clips as never },
       ],
     },
-  } as unknown as Composition;
+  };
+  const validation = validateComposition(comp);
+  if (!validation.valid) {
+    throw createError(ErrorCode.CC1002, {
+      reason: `invalid storyboard composition: ${validation.errors.map((e) => e.message).join("; ")}`,
+    });
+  }
+  return comp;
 }
 
 export function writeGeneratedComposition(board: Storyboard, cwd = process.cwd()): string {
@@ -215,7 +243,7 @@ export function createStoryCommand(): Command {
         runReport.result({ composition: generatedPath, html: htmlPath });
         console.log(pc.green(`✔ Bundled standalone review story: ${htmlPath}`));
         if (options.share) {
-          printShareUrl(options.expires);
+          printLocalShareInfo(htmlPath);
         }
         return;
       }
@@ -247,29 +275,15 @@ export function createStoryCommand(): Command {
       console.log(pc.green(`✔ Bundled standalone review story: ${htmlPath}`));
 
       if (options.share) {
-        printShareUrl(options.expires);
+        printLocalShareInfo(htmlPath);
       }
     });
 
   return cmd;
 }
 
-function fallbackComposition(): Composition {
-  return {
-    name: "story",
-    width: 1920,
-    height: 1080,
-    fps: 30,
-    duration: 10,
-    background: "#000000",
-    audio: {},
-    rootTimeline: { tracks: [] },
-  } as unknown as Composition;
-}
-
-function printShareUrl(expires: string): void {
-  const mockShortId = randomUUID().slice(0, 6);
-  const shareUrl = `https://share.cinecode.dev/s/${mockShortId}`;
-  console.log(`\n${pc.bold("Shareable Review URL:")} ${pc.cyan(shareUrl)}`);
-  console.log(pc.dim(`(Expires in ${expires})`));
+function printLocalShareInfo(htmlPath: string): void {
+  const resolved = path.resolve(htmlPath);
+  console.log(`\n${pc.bold("Local Review Bundle:")} ${pc.cyan(`file://${resolved.replace(/\\/g, "/")}`)}`);
+  console.log(pc.dim("Deploy or share this standalone directory to any static file host for team review."));
 }

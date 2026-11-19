@@ -21,6 +21,9 @@ import { mediaIgnore } from "./shared.js";
 import { loadComposition, selectComposition } from "./composition-loader.js";
 import { runReport } from "./run-report.js";
 import { validateComposition, type CompositionValidation } from "../core/validation/index.js";
+import { getPluginRegistry, setPluginRegistry, PluginRegistry } from "../plugin/registry.js";
+import { loadProjectPlugins } from "../plugin/loader.js";
+import type { RegisteredPlugin } from "../plugin/types.js";
 
 export type ProjectMode = "project" | "file";
 export type SelectionKind = "timeline" | "scene" | "composition" | "all" | "none";
@@ -60,6 +63,8 @@ export interface ProjectResolution {
   readonly validateCompositions: () => Promise<readonly CompositionValidation[]>;
   /** Populated by validateCompositions() so every command reads the same result. */
   readonly compositionValidation?: readonly CompositionValidation[];
+  readonly plugins?: readonly RegisteredPlugin[];
+  readonly pluginRegistry?: PluginRegistry;
 }
 
 export interface ResolveProjectOptions {
@@ -282,6 +287,9 @@ export class ProjectResolver {
         throw createError(ErrorCode.CC1009, { path: filePath }, { location: { file: filePath } });
       }
       const compositions = await loadComposition(filePath);
+      const pluginRegistry = new PluginRegistry();
+      setPluginRegistry(pluginRegistry);
+      await loadProjectPlugins(base.config, pluginRegistry, base.root);
       const resolution: ProjectResolution = {
         mode: "file",
         root: base.root,
@@ -296,6 +304,8 @@ export class ProjectResolver {
         selected: () => this.selected(),
         all: () => this.all(),
         validateCompositions: () => this.validateCompositions(),
+        plugins: pluginRegistry.getAll(),
+        pluginRegistry,
       };
       this.resolved = resolution;
       return resolution;
@@ -351,6 +361,10 @@ export class ProjectResolver {
       }, { location: { file: project.entryPath } });
     }
 
+    const pluginRegistry = new PluginRegistry();
+    setPluginRegistry(pluginRegistry);
+    await loadProjectPlugins(config, pluginRegistry, location.root);
+
     const resolution: ProjectResolution = {
       mode: "project",
       root: location.root,
@@ -366,6 +380,8 @@ export class ProjectResolver {
       selected: () => this.selected(),
       all: () => this.all(),
       validateCompositions: () => this.validateCompositions(),
+      plugins: pluginRegistry.getAll(),
+      pluginRegistry,
     };
     this.resolved = resolution;
     return resolution;

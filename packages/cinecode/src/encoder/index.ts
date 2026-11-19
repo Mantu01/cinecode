@@ -321,15 +321,30 @@ export class VideoEncoder {
 
   async cancel(): Promise<void> {
     if (this.process && !this.process.killed) {
-      this.process.kill("SIGINT");
+      try {
+        this.process.kill();
+      } catch {
+        // already gone
+      }
       await new Promise<void>((resolve) => {
-        this.process!.on("close", () => resolve());
-        setTimeout(resolve, 1000);
+        if (!this.process || this.process.killed) return resolve();
+        const timer = setTimeout(() => {
+          try {
+            this.process?.kill("SIGKILL");
+          } catch {
+            // ignore
+          }
+          resolve();
+        }, 500);
+        this.process.once("close", () => {
+          clearTimeout(timer);
+          resolve();
+        });
       });
     }
     if (!this.resolved) {
       this.resolved = true;
-      await rm(this.options.outputPath, { force: true });
+      await rm(this.options.outputPath, { force: true }).catch(() => undefined);
       this.rejectPromise(new Error("Encoding cancelled"));
     }
   }
@@ -424,7 +439,6 @@ export {
   convertMediaFormat,
   stitchVideos,
   splitVideo,
-  generateThumbnail,
   encodeStillImage,
   encodeAnimatedPng,
   encodeAnimatedWebp,
@@ -437,7 +451,6 @@ export {
   type StitchOptions,
   type SplitSegment,
   type SplitOptions,
-  type ThumbnailOptions,
   type StillImageFormat,
   type StillImageOptions,
   type FrameSequenceOptions,
@@ -481,4 +494,5 @@ export {
   bundleStoryHtml,
   type StoryBundleOptions,
 } from "./story-bundler.js";
+export * from "./thumbnail/index.js";
 

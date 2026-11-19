@@ -22,6 +22,8 @@ export interface RenderCheckpoint {
   readonly compositionId: string;
   readonly compositionHash: string;
   readonly totalFrames: number;
+  readonly from?: number;
+  readonly to?: number;
   readonly renderedFrames: readonly number[];
   readonly renderedFrameBitmask: string;
   readonly frameHashes: Readonly<Record<string, string>>;
@@ -35,6 +37,8 @@ export interface CheckpointManagerOptions {
   readonly compositionId: string;
   readonly compositionHash: string;
   readonly totalFrames: number;
+  readonly from?: number;
+  readonly to?: number;
   readonly renderSessionId?: string;
   readonly checkpointInterval?: number;
 }
@@ -67,12 +71,22 @@ export function decodeFrameBitmask(bitmask: string): number[] {
   return frames;
 }
 
+export function absoluteToRelative(chunkStartFrame: number, absoluteFrame: number): number {
+  return absoluteFrame - chunkStartFrame;
+}
+
+export function relativeToAbsolute(chunkStartFrame: number, relativeIndex: number): number {
+  return chunkStartFrame + relativeIndex;
+}
+
 export class CheckpointManager {
   private readonly checkpointsDir: string;
   private readonly chunksDir: string;
   private readonly compositionId: string;
   private readonly compositionHash: string;
   private readonly totalFrames: number;
+  private readonly from?: number;
+  private readonly to?: number;
   private readonly checkpointInterval: number;
   private sessionId: string;
   private rendered = new Set<number>();
@@ -88,6 +102,8 @@ export class CheckpointManager {
     this.compositionId = options.compositionId;
     this.compositionHash = options.compositionHash;
     this.totalFrames = options.totalFrames;
+    this.from = options.from;
+    this.to = options.to;
     this.checkpointInterval = Math.max(1, options.checkpointInterval ?? CHECKPOINT_INTERVAL_DEFAULT);
     this.sessionId = options.renderSessionId ?? `${options.compositionHash}-${Date.now().toString(36)}`;
   }
@@ -139,6 +155,7 @@ export class CheckpointManager {
         const checkpoint = JSON.parse(raw) as RenderCheckpoint;
         if (checkpoint.compositionHash !== this.compositionHash) continue;
         if (checkpoint.totalFrames !== this.totalFrames) continue;
+        if (checkpoint.from !== this.from || checkpoint.to !== this.to) continue;
         if (latest === null || checkpoint.timestamp > latest.timestamp) latest = checkpoint;
       } catch (error) {
         recordDegradation({
@@ -218,6 +235,8 @@ export class CheckpointManager {
       compositionId: this.compositionId,
       compositionHash: this.compositionHash,
       totalFrames: this.totalFrames,
+      from: this.from,
+      to: this.to,
       renderedFrames,
       renderedFrameBitmask: encodeFrameBitmask(renderedFrames),
       frameHashes: Object.fromEntries([...this.hashes.entries()].map(([key, value]) => [String(key), value])),

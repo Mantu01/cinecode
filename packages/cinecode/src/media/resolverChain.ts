@@ -1,8 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import type { MediaProbe, MediaResolver, ResolveContext } from "./resolver-types.js";
 import { FileSystemMediaResolver } from "./resolvers/filesystem.js";
-import { HttpMediaResolver } from "./resolvers/http.js";
-import { CloudMediaResolver } from "./resolvers/cloud.js";
 
 export class ResolverChain {
   private readonly resolvers: MediaResolver[] = [];
@@ -61,7 +59,8 @@ export class ResolverChain {
   }
 
   private findResolver(uri: string): MediaResolver | undefined {
-    return this.resolvers.find((resolver) => resolver.canResolve(uri)) ?? this.fallbackResolver;
+    return this.resolvers.find((resolver) => resolver.canResolve(uri))
+      ?? (this.fallbackResolver.canResolve(uri) ? this.fallbackResolver : undefined);
   }
 }
 
@@ -69,10 +68,7 @@ let defaultChain: ResolverChain | null = null;
 
 export function getMediaResolverChain(): ResolverChain {
   if (!defaultChain) {
-    defaultChain = new ResolverChain([
-      new HttpMediaResolver(),
-      new CloudMediaResolver(),
-    ]);
+    defaultChain = new ResolverChain([]);
   }
   return defaultChain;
 }

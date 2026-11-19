@@ -3,15 +3,21 @@ import { degradationCode, recordDegradation, recordWarning } from "../errors/deg
 export type RenderStage = "preparing" | "rendering" | "mixing-audio" | "encoding" | "multiplexing" | "done";
 
 export interface ProgressEvent {
-  readonly type: "start" | "frame" | "progress" | "audio-start" | "audio-done" | "encoding" | "muxing" | "done" | "error" | "warning";
+  readonly type: "start" | "frame" | "chunk" | "progress" | "audio-start" | "audio-done" | "encoding" | "muxing" | "done" | "error" | "warning";
   readonly stage: RenderStage;
   readonly percent: number;
+  readonly percentage?: number;
+  readonly completed?: number;
+  readonly total?: number;
   readonly frame?: number;
   readonly totalFrames?: number;
   readonly fps?: number;
   readonly instantaneousFps?: number;
+  readonly elapsed?: number;
+  readonly remaining?: number;
   readonly elapsedMs?: number;
   readonly remainingMs?: number;
+  readonly cacheHits?: number;
   readonly cacheHitRatio?: number;
   readonly memoryBytes?: number;
   readonly message?: string;
@@ -97,6 +103,7 @@ export class ProgressReporter {
   private cacheLookups = 0;
   private phaseStartedAt = Date.now();
   private instantFps = 0;
+  private maxEmittedPercent = 0;
 
   constructor(options: ProgressReporterOptions) {
     this.totalFrames = options.totalFrames;
@@ -217,6 +224,34 @@ export class ProgressReporter {
     if (this.terminal) this.writeTerminalLine(elapsedMs, remainingMs);
   }
 
+  reportStart(): void {
+    this.emit({
+      type: "start",
+      stage: "preparing",
+      percent: 0,
+      frame: 0,
+      totalFrames: this.totalFrames,
+      message: "Render started",
+    });
+  }
+
+  reportChunk(chunkIndex: number, completedCount: number): void {
+    this.frameCount = Math.min(this.totalFrames, this.frameCount + completedCount);
+    const now = Date.now();
+    const elapsedMs = now - this.startTime;
+    const remainingMs = this.estimateRemainingMs();
+    this.emit({
+      type: "chunk",
+      stage: this.currentStage,
+      percent: this.getPercent(),
+      frame: this.frameCount,
+      totalFrames: this.totalFrames,
+      elapsedMs,
+      remainingMs,
+      message: `Completed chunk ${chunkIndex}`,
+    });
+  }
+
   reportAudioStart(): void {
     this.setStage("mixing-audio");
     this.emit({ type: "audio-start", stage: "mixing-audio", percent: this.getPercent(), frame: this.frameCount, totalFrames: this.totalFrames });
@@ -304,11 +339,29 @@ export class ProgressReporter {
 
   private getPercent(): number {
     if (this.totalFrames === 0) return 100;
-    return Math.min(100, Math.round((this.frameCount / this.totalFrames) * 100));
+    const raw = Math.min(100, Math.round((this.frameCount / this.totalFrames) * 100));
+    this.maxEmittedPercent = Math.max(this.maxEmittedPercent, raw);
+    return this.maxEmittedPercent;
   }
 
   private emit(event: ProgressEvent): void {
-    if (this.onProgress) this.onProgress(event);
+    const rawPercent = event.percent ?? 0;
+    const nonRegressing = Math.max(this.maxEmittedPercent, rawPercent);
+    this.maxEmittedPercent = nonRegressing;
+
+    const enrichedEvent: ProgressEvent = {
+      ...event,
+      percent: nonRegressing,
+      percentage: nonRegressing,
+      completed: event.completed ?? (event.frame !== undefined ? Math.min(event.frame, this.totalFrames) : this.frameCount),
+      total: event.total ?? (event.totalFrames !== undefined ? event.totalFrames : this.totalFrames),
+      fps: event.fps,
+      elapsed: event.elapsed ?? event.elapsedMs,
+      remaining: event.remaining ?? event.remainingMs,
+      cacheHits: event.cacheHits ?? this.cacheHits,
+    };
+
+    if (this.onProgress) this.onProgress(enrichedEvent);
   }
 
   getStats(): { elapsedMs: number; frameCount: number; avgFps: number; emaFrameMs: number; etaMs: number } {

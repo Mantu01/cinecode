@@ -38,12 +38,6 @@ export interface DiskHealth {
   readonly ok: boolean;
 }
 
-export interface NetworkHealth {
-  readonly reachable: boolean;
-  readonly host: string;
-  readonly latencyMs: number | null;
-}
-
 export interface GpuHealth {
   readonly available: boolean;
   readonly acceleratedCanvas: boolean;
@@ -55,13 +49,10 @@ export interface SystemHealthReport {
   readonly node: NodeHealth;
   readonly workers: WorkerHealth;
   readonly diskSpace: DiskHealth;
-  readonly network: NetworkHealth;
   readonly gpu: GpuHealth;
   readonly issues: readonly string[];
 }
 
-
-const NETWORK_PROBE_HOST = "https://registry.npmjs.org/-/ping";
 
 function runBinary(path: string, args: readonly string[], timeoutMs = 5000): Promise<string | null> {
   return new Promise((resolvePromise) => {
@@ -148,20 +139,6 @@ async function probeDisk(cacheDir: string): Promise<DiskHealth> {
   };
 }
 
-async function probeNetwork(): Promise<NetworkHealth> {
-  const started = Date.now();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 4000);
-  try {
-    const response = await fetch(NETWORK_PROBE_HOST, { method: "HEAD", signal: controller.signal });
-    return { reachable: response.ok, host: "registry.npmjs.org", latencyMs: Date.now() - started };
-  } catch {
-    return { reachable: false, host: "registry.npmjs.org", latencyMs: null };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 async function probeGpu(): Promise<GpuHealth> {
   try {
     const module = await import("@napi-rs/canvas");
@@ -176,10 +153,9 @@ async function probeGpu(): Promise<GpuHealth> {
 }
 
 export async function collectHealth(cacheDir = ".cinecode/cache"): Promise<SystemHealthReport> {
-  const [ffmpeg, diskSpace, network, gpu] = await Promise.all([
+  const [ffmpeg, diskSpace, gpu] = await Promise.all([
     probeFfmpeg(),
     probeDisk(cacheDir),
-    probeNetwork(),
     probeGpu(),
   ]);
   const node = probeNode();
@@ -192,7 +168,7 @@ export async function collectHealth(cacheDir = ".cinecode/cache"): Promise<Syste
   if (!diskSpace.ok) issues.push("less than 1GB free in the cache volume");
   if (!gpu.available) issues.push("canvas renderer could not be initialized");
 
-  return { ffmpeg, node, workers, diskSpace, network, gpu, issues };
+  return { ffmpeg, node, workers, diskSpace, gpu, issues };
 }
 
 function formatHealth(report: SystemHealthReport): string {
@@ -205,7 +181,6 @@ function formatHealth(report: SystemHealthReport): string {
   lines.push(`memory        ${report.workers.totalMemoryMb} MB total`);
   lines.push(`disk cache    ${report.diskSpace.cacheDir}`);
   lines.push(`disk temp     ${report.diskSpace.tempDir}`);
-  lines.push(`network       ${report.network.reachable ? `reachable (${report.network.latencyMs} ms)` : "unreachable"}`);
   lines.push(`gpu           ${report.gpu.available ? `available (${report.gpu.backend})` : "not available"}`);
   if (report.issues.length > 0) {
     lines.push("");
@@ -216,7 +191,7 @@ function formatHealth(report: SystemHealthReport): string {
 
 export function createHealthCommand(): Command {
   return new Command("health")
-    .description("Report ffmpeg, Node, worker, disk, network and GPU health")
+    .description("Report ffmpeg, Node, worker, disk and GPU health (offline)")
     .option("--cache <dir>", "Cache directory to inspect")
     .option("--strict", "Exit non-zero when any issue is detected")
     .action(async (options: { cache?: string; json?: boolean; strict?: boolean }) => {

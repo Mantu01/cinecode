@@ -69,14 +69,6 @@ export {
 } from "./store.js";
 
 export {
-  TelemetryBroker,
-  telemetryBroker,
-  scrubPii,
-  type TelemetryConfig,
-  type TelemetryStatus,
-} from "./telemetry.js";
-
-export {
   PluginSandbox,
   createPluginSandbox,
   SecurityViolationError,
@@ -103,19 +95,6 @@ export {
   type ScaffoldResult,
   type TemplateType,
 } from "./scaffold/index.js";
-
-export {
-  MarketplaceClient,
-  marketplaceClient,
-  installPlugin,
-  removePlugin,
-  listInstalledPlugins,
-  findPluginConfigFile,
-  updateConfigPlugins,
-  type PluginPackageInfo,
-  type PluginSearchResult,
-  type InstalledPluginInfo,
-} from "./marketplace/index.js";
 
 export {
   verifyPluginSignature,

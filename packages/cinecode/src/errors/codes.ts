@@ -37,6 +37,7 @@ export enum ErrorCode {
   CC4009 = "CC4009",
   CC5001 = "CC5001",
   CC5002 = "CC5002",
+  CC5401 = "CC5401",
   CC6001 = "CC6001",
   CC6002 = "CC6002",
   CC6003 = "CC6003",
@@ -92,6 +93,7 @@ export const ErrorMessages: Record<ErrorCode, string> = {
   [ErrorCode.CC4009]: "Render failed for {count} output variant(s): {reason}",
   [ErrorCode.CC5001]: "Audio track '{name}' could not be mixed: {reason}",
   [ErrorCode.CC5002]: "Audio synthesis failed for sound '{name}': {reason}",
+  [ErrorCode.CC5401]: "Text-to-speech engine '{engine}' is unavailable or unsupported offline: {reason}",
   [ErrorCode.CC6001]: "Unsupported URL scheme for cloud media: {url}",
   [ErrorCode.CC6002]: "Download failed for {url}: {reason}",
   [ErrorCode.CC6003]: "Checksum mismatch for {url}: expected {expected}, got {actual}",
@@ -206,6 +208,8 @@ const FIX_HINTS: Partial<Record<ErrorCode, string>> = {
     "Check that the audio file format is supported and the sample rate matches the composition ({fps}fps → 48000Hz). Add `--audio-codec aac` if needed.",
   [ErrorCode.CC5002]:
     "Verify the sound definition is valid — oscillators, envelope, and filter params must be within acceptable ranges.",
+  [ErrorCode.CC5401]:
+    "Use the local 'system' TTS engine or install a local offline synthesis engine.",
   [ErrorCode.CC6001]: "Only http:// and https:// schemes are supported for cloud media downloads.",
   [ErrorCode.CC6002]:
     "Check network connectivity and retry. If persistent, download the file manually and reference locally.",

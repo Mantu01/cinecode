@@ -1,4 +1,3 @@
-export { createPostProcessSession, type PostProcessEffect, type PostProcessSession } from "./session.js";
 export {
   EffectGraphOptimizer,
   createEffectGraphOptimizer,

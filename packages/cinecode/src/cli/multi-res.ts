@@ -5,7 +5,8 @@ import { resolve } from "node:path";
 import { selectComposition } from "./composition-loader.js";
 import { resolveCacheDir, resolveOutputDir } from "./shared.js";
 import { createProjectResolver, reportResolution } from "./project-resolver.js";
-import { parseVariantLabel, renderMultiResolution } from "../pipeline/multiResolution.js";
+import { parseVariantLabel, renderMultiResolution, PREDEFINED_VARIANTS } from "../pipeline/multiResolution.js";
+import type { ResolutionVariant } from "../core/types/index.js";
 import { resolveRenderParameters, describeExplainReport } from "./precedence.js";
 
 interface MultiResOptions {
@@ -56,7 +57,27 @@ export function createMultiResCommand(): Command {
         },
       });
       runReport.result({ explain: describeExplainReport(explain) });
-      const variants = options.variants.split(",").map((label) => parseVariantLabel(label.trim())).filter(Boolean);
+      const rawLabels = options.variants.split(",").map((label) => label.trim()).filter(Boolean);
+      if (rawLabels.length === 0) {
+        throw createError(ErrorCode.CC1002, {
+          flag: "--variants",
+          received: options.variants,
+          expected: "a comma-separated list of valid variants (e.g. 480p, 720p, 1080p, 1440p, 4k, or WIDTHxHEIGHT)",
+        });
+      }
+      const validPresetKeys = Object.keys(PREDEFINED_VARIANTS).join(", ");
+      const variants: ResolutionVariant[] = [];
+      for (const label of rawLabels) {
+        try {
+          variants.push(parseVariantLabel(label));
+        } catch {
+          throw createError(ErrorCode.CC1002, {
+            flag: "--variants",
+            received: label,
+            expected: `one of [${validPresetKeys}], a WIDTHxHEIGHT dimension (e.g. 1920x1080), or a scale factor like 0.5x`,
+          });
+        }
+      }
       const outputDir = options.out ? resolve(options.out) : resolveOutputDir(config);
       const concurrency = parameters.concurrency.value === "auto" ? 4 : parameters.concurrency.value;
 

@@ -30,6 +30,7 @@ export interface ScaffoldOptions {
   readonly verbose: boolean;
   readonly pm: PackageManager;
   readonly skipInstall?: boolean;
+  readonly localLink?: boolean;
 }
 
 export interface FilePlan {
@@ -73,15 +74,19 @@ function listTemplateFiles(language: Language): string[] {
   return files;
 }
 
-function resolveCinecodeDep(): string {
+function resolveCinecodeDep(localLink?: boolean): string {
+  if (localLink) {
+    return "workspace:*";
+  }
   return `^${CREATE_CINECODE_VERSION}`;
 }
 
 function generateScaffoldPlan(options: ScaffoldOptions): ScaffoldPlan {
-  const { targetDir, language, fps, resolution, noGit } = options;
+  const { targetDir, language, fps, resolution, noGit, localLink } = options;
 
   const isTypeScript = language === "typescript";
   const [width, height] = resolution.split("x").map(Number);
+  const dep = resolveCinecodeDep(localLink);
 
   const vars = {
     FPS: String(fps),
@@ -91,7 +96,7 @@ function generateScaffoldPlan(options: ScaffoldOptions): ScaffoldPlan {
     EXT: isTypeScript ? "ts" : "js",
     CONFIG_EXT: isTypeScript ? "ts" : "js",
     LANGUAGE: language,
-    CINECODE_DEP: resolveCinecodeDep(),
+    CINECODE_DEP: dep,
     PROJECT_NAME: basename(targetDir),
   };
 
@@ -102,10 +107,7 @@ function generateScaffoldPlan(options: ScaffoldOptions): ScaffoldPlan {
     files.push({ path: resolve(targetDir, relPath), content: rendered });
   }
 
-  const folders = [
-    "media",
-    "output",
-  ].map((dir) => resolve(targetDir, dir));
+  const folders: string[] = [];
 
   const gitignoreEntries = ["output", ".cinecode/cache"];
 
@@ -234,8 +236,74 @@ function printNextSteps(targetDir: string, pm: PackageManager): void {
   console.log("");
 }
 
+async function verifyScaffold(targetDir: string, language: Language, verbose: boolean): Promise<void> {
+  const ext = language === "typescript" ? "ts" : "js";
+  const configPath = resolve(targetDir, `cinecode.config.${ext}`);
+  const manifestPath = resolve(targetDir, `main.${ext}`);
+  const pkgPath = resolve(targetDir, "package.json");
+
+  if (!existsSync(configPath)) {
+    throw new Error(`Scaffold verification failed: config file missing at ${configPath}`);
+  }
+  const configContent = readFileSync(configPath, "utf-8");
+  if (!configContent.includes("defineConfig")) {
+    throw new Error(`Scaffold verification failed: config file at ${configPath} does not define a valid Cinecode config`);
+  }
+
+  if (!existsSync(pkgPath)) {
+    throw new Error(`Scaffold verification failed: package.json missing at ${pkgPath}`);
+  }
+  let pkg: Record<string, unknown>;
+  try {
+    pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as Record<string, unknown>;
+  } catch (err) {
+    throw new Error(`Scaffold verification failed: package.json is invalid JSON`, { cause: err });
+  }
+  const deps = pkg.dependencies as Record<string, string> | undefined;
+  if (!deps?.cinecode) {
+    throw new Error(`Scaffold verification failed: package.json does not declare cinecode dependency`);
+  }
+  const scripts = pkg.scripts as Record<string, string> | undefined;
+  for (const script of ["dev", "render", "generate", "validate", "doctor", "still", "inspect"]) {
+    if (!scripts?.[script]) {
+      throw new Error(`Scaffold verification failed: package.json missing required script "${script}"`);
+    }
+  }
+
+  if (!existsSync(manifestPath)) {
+    throw new Error(`Scaffold verification failed: manifest file missing at ${manifestPath}`);
+  }
+  const manifestContent = readFileSync(manifestPath, "utf-8");
+  if (!manifestContent.includes("defineMain")) {
+    throw new Error(`Scaffold verification failed: manifest at ${manifestPath} does not export defineMain`);
+  }
+  if (!manifestContent.includes("intro") || !manifestContent.includes("main")) {
+    throw new Error(`Scaffold verification failed: manifest does not declare expected intro scene or main timeline`);
+  }
+
+  const expectedSourceFiles = [
+    `src/scenes/intro.${ext}`,
+    `src/images/thumbnail.${ext}`,
+    `src/audio/ambient.${ext}`,
+    "media/README.md",
+  ];
+  for (const rel of expectedSourceFiles) {
+    const full = resolve(targetDir, rel);
+    if (!existsSync(full)) {
+      throw new Error(`Scaffold verification failed: expected source file missing at ${full}`);
+    }
+  }
+
+  if (verbose) {
+    console.log("Scaffold post-verification passed: config, manifest, timelines, and source files verified.");
+  }
+}
+
 export async function scaffoldCommand(options: ScaffoldOptions): Promise<void> {
-  const { targetDir, dryRun, verbose, pm } = options;
+  const { targetDir, dryRun, verbose, pm, localLink } = options;
+
+  const dep = resolveCinecodeDep(localLink);
+  console.log(`Resolved dependency: cinecode@${dep}`);
 
   const blocking = await checkTargetDir(targetDir, options.force);
   if (blocking.length > 0 && options.force && verbose) {
@@ -267,6 +335,7 @@ export async function scaffoldCommand(options: ScaffoldOptions): Promise<void> {
   }
 
   await executePlan(plan, options);
+  await verifyScaffold(targetDir, options.language, verbose);
 
   if (options.skipInstall === true) {
     printNextSteps(targetDir, pm);
@@ -288,6 +357,7 @@ export function createScaffoldCommand(): Command {
     .option("--fps <number>", "Frames per second", "30")
     .option("--resolution <preset|WxH>", "Resolution preset or WxH", "1920x1080")
     .option("--no-git", "Skip git initialization")
+    .option("--local-link", "Use local workspace dependency for development", false)
     .option("--skip-install", "Skip dependency installation", false)
     .option("-f, --force", "Proceed even if directory is not empty", false)
     .option("--dry-run", "Print plan without writing files", false)
@@ -301,6 +371,7 @@ export function createScaffoldCommand(): Command {
           fps?: string;
           resolution?: string;
           git?: boolean;
+          localLink?: boolean;
           force?: boolean;
           dryRun?: boolean;
           verbose?: boolean;
@@ -339,6 +410,7 @@ export function createScaffoldCommand(): Command {
           fps,
           resolution,
           noGit: opts.git === false,
+          localLink: opts.localLink ?? false,
           force: opts.force ?? false,
           dryRun: opts.dryRun ?? false,
           verbose: opts.verbose ?? false,

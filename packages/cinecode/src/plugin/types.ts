@@ -1,5 +1,7 @@
 import type { Canvas } from "@napi-rs/canvas";
 import type { Composition, RenderFormat } from "../core/types/index.js";
+import type { EffectProcessor } from "../effects/engine.js";
+import type { TransitionProcessor } from "../transitions/engine.js";
 
 export type PluginKind =
   | "effect"
@@ -165,11 +167,16 @@ export type PluginHooks = {
 export interface PluginContext {
   readonly options: Readonly<Record<string, unknown>>;
   readonly log: (message: string) => void;
+  readonly registerEffect?: (effect: EffectProcessor) => void;
+  readonly registerTransition?: (transition: TransitionProcessor) => void;
 }
 
 export interface CinecodePlugin {
   readonly manifest: PluginManifest;
   readonly hooks?: PluginHooks;
+  readonly effects?: readonly EffectProcessor[];
+  readonly transitions?: readonly TransitionProcessor[];
+  readonly init?: (context: PluginContext) => void | Promise<void>;
   readonly setup?: (context: PluginContext) => void | Promise<void>;
   readonly teardown?: (context: PluginContext) => void | Promise<void>;
 }
@@ -179,8 +186,16 @@ export type PluginState = "registered" | "initializing" | "active" | "failed" | 
 export interface RegisteredPlugin {
   readonly plugin: CinecodePlugin;
   readonly options: Readonly<Record<string, unknown>>;
+  readonly source?: string;
   state: PluginState;
   readonly errors: readonly Error[];
+}
+
+export interface PluginConflict {
+  readonly feature: string;
+  readonly winningPlugin: string;
+  readonly losingPlugin: string;
+  readonly reason: string;
 }
 
 export interface HookRunResult<K extends HookName> {

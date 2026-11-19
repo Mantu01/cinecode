@@ -7,7 +7,6 @@ import util from "node:util";
 import { createRequire } from "node:module";
 import { type CapabilityPolicy, type PluginCapability, assertCapability, SecurityViolationError } from "./capabilities.js";
 import { PluginStateStore } from "../store.js";
-import { telemetryBroker } from "../telemetry.js";
 import { registerEffect } from "../../extensions/index.js";
 import { logger } from "../../observability/logger.js";
 
@@ -206,8 +205,8 @@ export class PluginSandbox {
         on: (event: string, handler: (payload: unknown) => void) => this.store.on(event, handler),
       },
       telemetry: {
-        record: (event: string, payload: Record<string, unknown> = {}) => {
-          return telemetryBroker.record(`plugin:${this.pluginId}:${event}`, payload);
+        record: (_event: string, _payload: Record<string, unknown> = {}) => {
+          // offline no-op
         },
       },
       fs: safeFs,

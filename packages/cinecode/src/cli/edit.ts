@@ -9,11 +9,22 @@ export interface EditOptions {
   editor?: string;
 }
 
+export function parseEditorCommand(input: string): { command: string; args: string[] } {
+  const tokens: string[] = [];
+  const regex = /[^\s"']+|"([^"]*)"|'([^']*)'/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(input)) !== null) {
+    tokens.push(match[1] ?? match[2] ?? match[0]);
+  }
+  const [command = "", ...args] = tokens;
+  return { command, args };
+}
+
 function editorCommand(): { command: string; args: readonly string[] } {
   const configured = process.env.VISUAL ?? process.env.EDITOR;
   if (configured) {
-    const [command, ...args] = configured.split(" ");
-    return { command: command ?? "vi", args };
+    const parsed = parseEditorCommand(configured);
+    return { command: parsed.command || "vi", args: parsed.args };
   }
   if (process.platform === "win32") return { command: "notepad", args: [] };
   if (process.platform === "darwin") return { command: "open", args: ["-t"] };
@@ -22,7 +33,7 @@ function editorCommand(): { command: string; args: readonly string[] } {
 
 export async function openFileInEditor(file: string, editor?: string): Promise<void> {
   const target = resolve(file);
-  const spec = editor ? { command: editor, args: [] as string[] } : editorCommand();
+  const spec = editor ? parseEditorCommand(editor) : editorCommand();
   await new Promise<void>((resolvePromise, reject) => {
     const child = spawn(spec.command, [...spec.args, target], { stdio: "inherit", windowsHide: false });
     child.on("error", reject);

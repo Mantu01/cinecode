@@ -1,7 +1,8 @@
 # Configuration reference
 
-Generated from the runtime Zod schema in `packages/cinecode/src/config/zod-schema.ts`.
+Generated from the runtime schema in `packages/cinecode/src/config/zod-schema.ts`.
 Unknown keys are rejected at every level. Array item fields use `[]`.
+For manifest documentation, see [manifest-reference.md](./manifest-reference.md).
 
 | Key | Type | Values | Required |
 | --- | --- | --- | --- |

@@ -5,7 +5,7 @@ import { platform, arch, freemem } from "node:os";
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { access, constants } from "node:fs/promises";
+import { access, constants, statfs } from "node:fs/promises";
 import ffmpegStatic from "@ffmpeg-installer/ffmpeg";
 import type { CinecodeConfig } from "../core/types/index.js";
 import { validateConfig } from "../config/validator.js";
@@ -128,7 +128,7 @@ async function checkFonts(config: CinecodeConfig, root: string): Promise<DoctorC
   };
 }
 
-async function checkFolders(config: CinecodeConfig): Promise<DoctorCheck> {
+async function checkFolders(config: CinecodeConfig, projectRoot: string): Promise<DoctorCheck> {
   const outputDir = config.outputDir ?? "output";
   const cacheDir = config.cacheDir ?? ".cinecode/cache";
   const mediaDir = config.mediaDir ?? "media";
@@ -137,7 +137,7 @@ async function checkFolders(config: CinecodeConfig): Promise<DoctorCheck> {
 
   for (const dir of dirs) {
     try {
-      await access(resolve(dir), constants.W_OK);
+      await access(resolve(projectRoot, dir), constants.W_OK);
     } catch {
       issues.push(dir);
     }
@@ -149,12 +149,17 @@ async function checkFolders(config: CinecodeConfig): Promise<DoctorCheck> {
   return { name: "Folders", status: "FAIL", message: `Not writable: ${issues.join(", ")}`, fixable: true };
 }
 
-async function checkDiskSpace(): Promise<DoctorCheck> {
-  const freeGB = freemem() / (1024 ** 3);
-  if (freeGB >= 1) {
-    return { name: "Disk space", status: "PASS", message: `${freeGB.toFixed(1)} GB free` };
+async function checkDiskSpace(projectRoot: string): Promise<DoctorCheck> {
+  try {
+    const stats = await statfs(projectRoot);
+    const freeGB = (stats.bavail * stats.bsize) / (1024 ** 3);
+    if (freeGB >= 1) {
+      return { name: "Disk space", status: "PASS", message: `${freeGB.toFixed(1)} GB free` };
+    }
+    return { name: "Disk space", status: "WARN", message: `${freeGB.toFixed(1)} GB free (< 1 GB)` };
+  } catch {
+    return { name: "Disk space", status: "WARN", message: "Could not determine free disk space" };
   }
-  return { name: "Disk space", status: "WARN", message: `${freeGB.toFixed(1)} GB free (< 1 GB)` };
 }
 
 async function checkConfig(config: CinecodeConfig, configPath: string): Promise<DoctorCheck> {
@@ -235,9 +240,9 @@ async function checkDeprecatedUsage(configPath: string): Promise<DoctorCheck> {
   return { name: "Deprecated API", status: "WARN", message: found.join("; ") };
 }
 
-async function checkCache(config: CinecodeConfig): Promise<DoctorCheck> {
+async function checkCache(config: CinecodeConfig, projectRoot: string): Promise<DoctorCheck> {
   try {
-    const cache = createMediaCache(resolve(config.cacheDir ?? ".cinecode/cache"));
+    const cache = createMediaCache(resolve(projectRoot, config.cacheDir ?? ".cinecode/cache"));
     await cache.initialize();
     const stats = await cache.getStats();
     return {
@@ -265,11 +270,11 @@ export async function doctorCommand(options: { config?: string; root?: string; f
     checkEncoder(),
     checkFfmpeg(),
     checkFonts(config, resolution.root),
-    checkFolders(config),
-    checkDiskSpace(),
+    checkFolders(config, resolution.root),
+    checkDiskSpace(resolution.root),
     checkConfig(config, resolution.configPath),
     checkMedia(() => resolution.media()),
-    checkCache(config),
+    checkCache(config, resolution.root),
     checkGitignore(config, resolution.root),
     checkCloudUrls(config),
     checkDeprecatedUsage(resolution.configPath),
@@ -318,8 +323,8 @@ export async function doctorCommand(options: { config?: string; root?: string; f
   }
 
   if (options.json) {
-    const failed = checks.filter(c => c.status === "FAIL").length;
-    if (failed > 0) throw createError(ErrorCode.CC7004, { reason: `${failed} check(s) failed` });
+    const failed = checks.filter(c => c.status === "FAIL");
+    if (failed.length > 0) throw createError(ErrorCode.CC7004, { reason: `${failed.map(c => `${c.name}: ${c.message}`).join(", ")}` });
     return;
   }
 
@@ -330,9 +335,9 @@ export async function doctorCommand(options: { config?: string; root?: string; f
     console.log(`${statusColor}[${check.status}]${reset} ${check.name}: ${check.message}${fixable}`);
   }
 
-  const failed = checks.filter(c => c.status === "FAIL").length;
-  if (failed > 0) {
-    throw createError(ErrorCode.CC7004, { reason: `${failed} check(s) failed` });
+  const failed = checks.filter(c => c.status === "FAIL");
+  if (failed.length > 0) {
+    throw createError(ErrorCode.CC7004, { reason: `${failed.map(c => `${c.name}: ${c.message}`).join(", ")}` });
   }
 }
 

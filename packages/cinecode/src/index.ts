@@ -217,9 +217,6 @@ export type {
 } from "./config/index.js";
 
 export * from "./manifest/index.js";
-export * from "./dev/index.js";
-export * from "./canvas-interact/index.js";
-export * from "./cli/index.js";
 export * from "./pipeline/index.js";
 export * from "./encoder/index.js";
 export * from "./plugin/index.js";

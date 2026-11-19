@@ -1,78 +1,64 @@
 import { Command } from "commander";
-import { resolve } from "node:path";
-import { createError, ErrorCode } from "../errors/codes.js";
-import { marketplaceClient } from "../plugin/marketplace/client.js";
-import { installPlugin, removePlugin, listInstalledPlugins } from "../plugin/marketplace/installer.js";
+import fs from "node:fs";
+import path from "node:path";
 import { scaffoldPlugin, type TemplateType } from "../plugin/scaffold/index.js";
+
+export interface InstalledPluginInfo {
+  readonly name: string;
+  readonly version: string;
+  readonly active: boolean;
+  readonly permissions: readonly string[];
+  readonly kind?: string;
+  readonly description?: string;
+}
+
+export function listInstalledPlugins(projectDir = process.cwd()): InstalledPluginInfo[] {
+  const pkgJsonPath = path.join(projectDir, "package.json");
+  const result: InstalledPluginInfo[] = [];
+  if (!fs.existsSync(pkgJsonPath)) return result;
+
+  try {
+    const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf8"));
+    const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+    for (const [depName, version] of Object.entries(deps)) {
+      if (depName.startsWith("@cinecode/plugin-") || depName.includes("cinecode-plugin")) {
+        let permissions: string[] = ["frame:process"];
+        let kind = "effect";
+        let description = "";
+        const depPkgPath = path.join(projectDir, "node_modules", depName, "package.json");
+        if (fs.existsSync(depPkgPath)) {
+          try {
+            const depPkg = JSON.parse(fs.readFileSync(depPkgPath, "utf8"));
+            if (depPkg.cinecode) {
+              if (depPkg.cinecode.permissions) permissions = depPkg.cinecode.permissions;
+              if (depPkg.cinecode.kind) kind = depPkg.cinecode.kind;
+              if (depPkg.cinecode.description) description = depPkg.cinecode.description;
+            }
+          } catch {}
+        }
+        result.push({
+          name: depName,
+          version: String(version),
+          active: true,
+          permissions,
+          kind,
+          description,
+        });
+      }
+    }
+  } catch {}
+  return result;
+}
 
 export function createPluginCommand(): Command {
   const pluginCmd = new Command("plugin")
-    .description("Manage Cinecode marketplace plugins, install, scaffold, and inspect");
-
-  pluginCmd
-    .command("search [query]")
-    .description("Search official Cinecode plugin marketplace")
-    .option("-t, --tag <tag>", "Filter by tag (e.g. audio, transitions, 3d, lut, ai)")
-    .option("-k, --kind <kind>", "Filter by plugin kind")
-    .action(async (query = "", options) => {
-      console.log(`Searching marketplace for "${query}"...\n`);
-      const results = await marketplaceClient.searchPlugins(query, {
-        tag: options.tag,
-        kind: options.kind,
-      });
-
-      if (results.length === 0) {
-        console.log("No plugins found matching criteria.");
-        return;
-      }
-
-      console.log("NAME".padEnd(35) + "VERSION".padEnd(12) + "RATING".padEnd(10) + "DOWNLOADS".padEnd(12) + "DESCRIPTION");
-      console.log("-".repeat(90));
-      for (const r of results) {
-        const ratingStr = `★ ${r.rating.toFixed(1)}`;
-        console.log(
-          r.name.padEnd(35) +
-          r.version.padEnd(12) +
-          ratingStr.padEnd(10) +
-          String(r.downloads).padEnd(12) +
-          r.description,
-        );
-      }
-    });
-
-  pluginCmd
-    .command("add <packageName>")
-    .description("Install and register a plugin from the marketplace or npm")
-    .option("--pm <pm>", "Package manager to use (pnpm, npm, yarn)", "pnpm")
-    .action(async (packageName, options) => {
-      console.log(`Installing '${packageName}'...`);
-      const res = await installPlugin(packageName, { pm: options.pm });
-      if (res.success) {
-        console.log(`✔ ${res.message}`);
-      } else {
-        throw createError(ErrorCode.CC8005, { plugin: packageName, reason: res.message }, { location: { file: resolve("package.json") } });
-      }
-    });
-
-  pluginCmd
-    .command("remove <packageName>")
-    .description("Uninstall and unregister a plugin")
-    .option("--pm <pm>", "Package manager to use (pnpm, npm, yarn)", "pnpm")
-    .action(async (packageName, options) => {
-      console.log(`Removing '${packageName}'...`);
-      const res = await removePlugin(packageName, { pm: options.pm });
-      if (res.success) {
-        console.log(`✔ ${res.message}`);
-      } else {
-        throw createError(ErrorCode.CC8005, { plugin: packageName, reason: res.message }, { location: { file: resolve("package.json") } });
-      }
-    });
+    .description("Inspect and scaffold local Cinecode plugins");
 
   pluginCmd
     .command("list")
     .description("List all installed plugins and their status")
-    .action(async () => {
-      const plugins = await listInstalledPlugins();
+    .action(() => {
+      const plugins = listInstalledPlugins();
       if (plugins.length === 0) {
         console.log("No Cinecode plugins installed in project.");
         return;

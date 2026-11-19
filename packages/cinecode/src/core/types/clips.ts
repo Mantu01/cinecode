@@ -35,9 +35,11 @@ export interface VisualProps {
   readonly dropShadow?: Shadow;
   readonly transitionIn?: TransitionRef;
   readonly transitionOut?: TransitionRef;
-  readonly keyframes?: readonly KeyframeProp[];
+  readonly keyframes?: readonly KeyframeProp[] | KeyframeMap;
   readonly name?: string;
 }
+
+export type KeyframeMap = Readonly<Record<string, readonly (readonly [time: number, value: any, easing?: any])[]>>;
 
 export type KeyframeProp = readonly [property: string, frames: readonly KeyframeTuple[]];
 

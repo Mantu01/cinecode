@@ -13,7 +13,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: "still", summary: "Render a single frame to PNG or JPEG", example: "cinecode still ./composition.ts --frame 0", props: true, load: async () => (await import("./still.js")).createStillCommand() },
   { name: "render", summary: "Render timelines or a composition to a video", example: "cinecode render --config ./cinecode.config.ts", props: true, load: async () => (await import("./render.js")).createRenderCommand() },
   { name: "render-multi", summary: "Render one composition at multiple resolutions", example: "cinecode render-multi ./composition.ts", load: async () => (await import("./multi-res.js")).createMultiResCommand() },
-  { name: "preview", summary: "Render a preview and optionally open it", example: "cinecode preview ./composition.ts", props: true, load: async () => (await import("./preview.js")).createPreviewCommand() },
+  { name: "preview", summary: "Start the read-only preview server and open viewer", example: "cinecode preview --config ./cinecode.config.ts", load: async () => (await import("./preview.js")).createPreviewCommand() },
   { name: "validate", summary: "Validate configuration, compositions, media and fonts", example: "cinecode validate --config ./cinecode.config.ts", load: async () => (await import("./validate.js")).createValidateCommand() },
   { name: "check", summary: "Validate authoring code before rendering", example: "cinecode check --config ./cinecode.config.ts", load: async () => (await import("./check.js")).createCheckCommand() },
   { name: "doctor", summary: "Run environment and project health checks", example: "cinecode doctor --fix", load: async () => (await import("./doctor.js")).createDoctorCommand() },
@@ -25,7 +25,6 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: "create", summary: "Scaffold a new Cinecode project", example: "cinecode create my-film", load: async () => (await import("./create.js")).createCreateCommand() },
   { name: "generate", summary: "Generate images, audio, scenes or timelines", example: "cinecode generate image --all", load: async () => (await import("./generate.js")).createGenerateCommand() },
   { name: "dev", summary: "Start the dev server with HMR", example: "cinecode dev --config ./cinecode.config.ts", load: async () => (await import("./dev.js")).createDevCommand() },
-  { name: "canvas", summary: "Interactive canvas tools", example: "cinecode canvas serve", load: async () => (await import("./canvas.js")).createCanvasCommand() },
   { name: "presets", summary: "List platform deliverable presets", example: "cinecode presets --json", load: async () => (await import("./presets.js")).createPresetsCommand() },
   { name: "thumbnail", summary: "Write poster images from the best frame", example: "cinecode thumbnail ./composition.ts", load: async () => (await import("./thumbnail.js")).createThumbnailCommand() },
   { name: "edit", summary: "Open a composition in the editor or print it", example: "cinecode edit ./composition.ts", load: async () => (await import("./edit.js")).createEditCommand() },
@@ -35,8 +34,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: "upgrade", summary: "Compare the installed version with npm", example: "cinecode upgrade", load: async () => (await import("./upgrade.js")).createUpgradeCommand() },
   { name: "template", summary: "List or scaffold starter compositions", example: "cinecode template list", load: async () => (await import("./template.js")).createTemplateCommand() },
   { name: "tts", summary: "Text-to-speech voice utilities", example: "cinecode tts voices", load: async () => (await import("./tts.js")).createTtsCommand() },
-  { name: "plugin", summary: "Manage marketplace plugins", example: "cinecode plugin list", load: async () => (await import("./plugin.js")).createPluginCommand() },
-  { name: "telemetry", summary: "Manage anonymous telemetry settings", example: "cinecode telemetry status", load: async () => (await import("./telemetry.js")).createTelemetryCommand() },
+  { name: "plugin", summary: "Manage installed plugins", example: "cinecode plugin list", load: async () => (await import("./plugin.js")).createPluginCommand() },
   { name: "diff", summary: "Semantic diff between compositions or revisions", example: "cinecode diff ./a.ts ./b.ts", load: async () => (await import("./diff.js")).createDiffCommand() },
   { name: "story", summary: "Generate a standalone web player bundle", example: "cinecode story ./main.ts", load: async () => (await import("./story.js")).createStoryCommand() },
   { name: "export-svg", summary: "Export frames as vector SVG graphics", example: "cinecode export-svg ./main.ts", load: async () => (await import("./export-svg.js")).createExportSvgCommand() },
@@ -46,7 +44,6 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: "migrate", summary: "Migrate the config schema to the latest version", example: "cinecode migrate ./cinecode.config.ts", load: async () => (await import("./migrate.js")).createMigrateCommand() },
   { name: "check-ignore", summary: "Check paths against .cinecodeignore rules", example: "cinecode check-ignore ./output/intro.mp4", load: async () => (await import("./check-ignore.js")).createCheckIgnoreCommand() },
   { name: "publish", summary: "Publish a rendered output to a destination", example: "cinecode publish ./output/videos/intro.mp4", load: async () => (await import("./publish.js")).createPublishCommand() },
-  { name: "probe", summary: "Continuous uptime monitoring probe", example: "cinecode probe https://example.com", load: async () => (await import("./uptime-probe.js")).createProbeCommand() },
 ];
 
 export function findCommand(name: string): CommandSpec | undefined {

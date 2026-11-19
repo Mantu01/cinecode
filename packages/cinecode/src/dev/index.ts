@@ -113,7 +113,12 @@ export class DevServer {
   }
 
   get url(): string {
-    const host = this.options.host === "0.0.0.0" ? "localhost" : this.options.host;
+    const address = this.server?.address();
+    if (address && typeof address === "object") {
+      const host = this.options.host === "0.0.0.0" ? "127.0.0.1" : this.options.host;
+      return `http://${host}:${address.port}`;
+    }
+    const host = this.options.host === "0.0.0.0" ? "127.0.0.1" : this.options.host;
     return `http://${host}:${this.options.port}`;
   }
 
@@ -273,6 +278,14 @@ export class DevServer {
     }
   }
 
+  async dispatchRequest(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse): Promise<void> {
+    await this.handleRequest(req, res);
+  }
+
+  async dispatchWsMessage(client: WsClient, data: unknown): Promise<void> {
+    await this.handlePreviewMessage(client, data);
+  }
+
   private async handleRequest(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse): Promise<void> {
     const rawUrl = req.url ?? "/";
     const url = new URL(rawUrl, "http://localhost");
@@ -391,19 +404,9 @@ export class DevServer {
       );
       return;
     }
-    if (pathname === "/persist" && req.method === "POST") {
-      let body = "";
-      req.on("data", (chunk: Buffer) => { body += chunk.toString("utf-8"); });
-      req.on("end", () => {
-        try {
-          const data = JSON.parse(body || "{}");
-          res.writeHead(200, { "content-type": "application/json" });
-          res.end(JSON.stringify({ success: true, message: "Persisted to source code", data }));
-        } catch (e: any) {
-          res.writeHead(400, { "content-type": "application/json" });
-          res.end(JSON.stringify({ error: e.message }));
-        }
-      });
+    if (pathname === "/persist" || pathname?.startsWith("/persist/")) {
+      res.writeHead(405, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "Preview server is read-only. Persistence operations are forbidden." }));
       return;
     }
     if (pathname === "/export-frame") {
@@ -544,12 +547,26 @@ export class DevServer {
       return;
     }
     const msgAny = message as any;
-    if (msgAny.type === "clip:update") {
-      this.hub.broadcast({
-        type: "clip:updated",
-        clipId: msgAny.clipId,
-        propertyPath: msgAny.propertyPath,
-        value: msgAny.value,
+    if (msgAny.type === "clip:update" || msgAny.type === "layer:update" || msgAny.type === "layer:reorder") {
+      client.send({
+        type: "error",
+        code: "CC6001",
+        message: "Preview server is read-only. Mutation operations are forbidden.",
+      });
+      return;
+    }
+    if (message.type === "view:state" || message.type === "camera:orbit" || message.type === "camera:pan" || message.type === "camera:zoom") {
+      client.send({
+        type: "view:ack",
+        state: message,
+      });
+      return;
+    }
+    if (message.type === "status:request") {
+      client.send({
+        type: "status:response",
+        version: "1.0.0",
+        readOnly: true,
       });
       return;
     }
@@ -644,7 +661,8 @@ const CLIENT_HTML = `<!doctype html>
   .dirty { width:6px; height:6px; border-radius:50%; background:#f5b544; margin-left:auto; display:none; }
   .node.stale .dirty { display:block; }
   section.preview { display:flex; align-items:center; justify-content:center; padding:24px; overflow:auto; }
-  img { max-width:100%; max-height:100%; border:1px solid #232227; border-radius:8px; background:#000; }
+  img { max-width:100%; max-height:100%; border:1px solid #232227; border-radius:8px; background:#000; cursor:grab; transform-origin:center center; transition:transform 0.05s ease-out; }
+  img:active { cursor:grabbing; }
   audio { width: 480px; }
   .empty { color:#6f6c66; }
   #overlay { position:fixed; right:12px; bottom:12px; width:420px; max-height:60vh; overflow:auto; background:#141418; border:1px solid #3a2f1a; border-radius:8px; padding:10px 12px; display:none; z-index:10; }
@@ -680,6 +698,18 @@ const CLIENT_HTML = `<!doctype html>
   let selected = null;
   const stale = new Set();
 
+  let zoomLevel = 1;
+  let panX = 0;
+  let panY = 0;
+  let isDragging = false;
+  let startX = 0;
+  let startY = 0;
+
+  function updateTransform(el) {
+    if (!el) return;
+    el.style.transform = "scale(" + zoomLevel + ") translate(" + panX + "px, " + panY + "px)";
+  }
+
   function render(type, node, frame) {
     var f = (frame === undefined || frame === null) ? 0 : frame;
     if (type === "audio") {
@@ -692,6 +722,33 @@ const CLIENT_HTML = `<!doctype html>
       preview.innerHTML = "";
       var img = document.createElement("img");
       img.src = "/preview/" + encodeURIComponent(node.id) + "?frame=" + f + "&v=" + Date.now();
+      updateTransform(img);
+
+      img.onwheel = function (e) {
+        e.preventDefault();
+        var delta = e.deltaY < 0 ? 0.1 : -0.1;
+        zoomLevel = Math.max(0.1, Math.min(10, zoomLevel + delta));
+        updateTransform(img);
+      };
+
+      img.onmousedown = function (e) {
+        if (e.button !== 0) return;
+        isDragging = true;
+        startX = e.clientX - panX * zoomLevel;
+        startY = e.clientY - panY * zoomLevel;
+      };
+
+      window.onmousemove = function (e) {
+        if (!isDragging) return;
+        panX = (e.clientX - startX) / zoomLevel;
+        panY = (e.clientY - startY) / zoomLevel;
+        updateTransform(img);
+      };
+
+      window.onmouseup = function () {
+        isDragging = false;
+      };
+
       preview.appendChild(img);
     }
   }
