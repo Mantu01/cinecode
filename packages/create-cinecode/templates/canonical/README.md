@@ -1,6 +1,6 @@
 # {{PROJECT_NAME}}
 
-A [Cinecode](https://github.com/cinecode/cinecode) project ({{LANGUAGE}}). Every
+A [Cinecode](https://github.com/Mantu01/cinecode) project ({{LANGUAGE}}). Every
 video is written as code:
 
 - **`cinecode.config.{{CONFIG_EXT}}`** — project settings and, most importantly,

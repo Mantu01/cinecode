@@ -10,6 +10,7 @@ import { createProjectResolver, reportResolution } from "./project-resolver.js";
 
 interface DownloadOptions {
   force?: boolean;
+  confirm?: boolean;
   only?: string;
   config?: string;
   root?: string;
@@ -180,6 +181,9 @@ function getFileNameFromUrl(url: string): string {
 }
 
 export async function mediaDownloadCommand(options: DownloadOptions): Promise<void> {
+  if (!options.confirm) {
+    throw createError(ErrorCode.CC7004, { reason: "Network opt-in missing: rerun `cinecode media:download --confirm`." });
+  }
   const resolver = createProjectResolver({ root: options.root, config: options.config });
   const resolution = await resolver.resolve();
   reportResolution(resolution, options.verbose === true);
@@ -284,6 +288,7 @@ export function createMediaDownloadCommand(): Command {
   const cmd = new Command("media:download")
     .description("Download cloud media files into media directory")
     .option("--force", "Re-download existing files", false)
+    .option("--confirm", "Explicitly allow network downloads")
     .option("--only <name>", "Download only the specified entry")
     .action(async (options: DownloadOptions, command: Command) => {
       await mediaDownloadCommand({ ...command.optsWithGlobals(), ...options });

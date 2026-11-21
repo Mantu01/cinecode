@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { Transform, type TransformCallback } from "node:stream";
 import { mkdir, rm } from "node:fs/promises";
-import ffmpegStatic from "@ffmpeg-installer/ffmpeg";
+import { resolveBinary } from "../binary/resolver.js";
 import type { RenderFormat } from "../core/types/config.js";
 import type { VideoEncoding } from "../core/quality.js";
 import { frameInputPixFmt, outputPlanFor } from "../core/output-plan.js";
@@ -166,7 +166,7 @@ export class StreamingEncoder {
 
   async start(): Promise<void> {
     await mkdir(this.options.tempDir, { recursive: true });
-    const child = spawn(ffmpegStatic.path, this.buildArgs(), {
+    const child = spawn(resolveBinary("ffmpeg").path, this.buildArgs(), {
       windowsHide: true,
       stdio: ["pipe", "ignore", "pipe"],
     });

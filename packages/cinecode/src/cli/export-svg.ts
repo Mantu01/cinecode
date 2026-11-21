@@ -2,7 +2,7 @@ import { Command } from "commander";
 import fs from "node:fs";
 import path from "node:path";
 import pc from "picocolors";
-import { serializeFrameToSvg, type CssMode, type FontStrategy } from "../svg/serializer.js";
+import { serializeFrameToSvg, unsupportedSvgClips } from "../svg/serializer.js";
 import { runReport } from "./run-report.js";
 import { createProjectResolver, reportResolution } from "./project-resolver.js";
 import { createError, ErrorCode } from "../errors/codes.js";
@@ -10,16 +10,14 @@ import { createError, ErrorCode } from "../errors/codes.js";
 export function createExportSvgCommand(): Command {
   const cmd = new Command("export-svg")
     .description("Export composition frames as high-precision vector SVG graphics")
-    .argument("[entry]", "Composition entry file", "src/main.ts")
+    .argument("[entry]", "Composition entry file")
     .option("-f, --frame <number>", "Single frame number to export", "0")
     .option("-r, --range <range>", "Frame range to export (e.g. 0-60)")
     .option("-o, --out <path>", "Output directory or file path", "./dist/svg")
     .option("--viewBox-precision <digits>", "Coordinate precision digits", "3")
-    .option("--css-mode <mode>", "CSS styling mode: inline, embedded, external", "inline")
-    .option("--font-strategy <strategy>", "Font strategy: embed-base64, link-webfont, convert-to-paths", "convert-to-paths")
     .option("--optimize", "Run SVGO optimization passes", false)
     .option("-c, --composition <name>", "Composition name")
-    .action(async (entry: string, options) => {
+    .action(async (entry: string | undefined, options) => {
       const resolver = createProjectResolver({ root: options.root, config: options.config, file: entry, composition: options.composition });
       const resolution = await resolver.resolve();
       reportResolution(resolution, (options as { verbose?: boolean }).verbose === true);
@@ -30,13 +28,17 @@ export function createExportSvgCommand(): Command {
       const comp = selected[0]!;
       runReport.expectArtifact("svg");
 
-      const outDir = path.resolve(options.out);
+      const unsupported = unsupportedSvgClips(comp);
+      if (unsupported.length > 0) {
+        const list = unsupported.map((clip) => `${clip.id}:${clip.type}@${clip.track}[${clip.start}-${clip.start + clip.duration}]`).join(", ");
+        throw createError(ErrorCode.CC4009, { reason: `SVG export unsupported clips: ${list}. Render a raster frame instead.` });
+      }
+
+      const outDir = path.resolve(resolution.context.root, options.out);
       fs.mkdirSync(outDir, { recursive: true });
 
       const serializerOpts = {
         viewBoxPrecision: parseInt(options.viewBoxPrecision, 10),
-        cssMode: options.cssMode as CssMode,
-        fontStrategy: options.fontStrategy as FontStrategy,
         optimize: Boolean(options.optimize),
       };
 

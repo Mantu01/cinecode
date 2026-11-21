@@ -327,13 +327,13 @@ export class ProgressReporter {
   private writeTerminalLine(elapsedMs: number, remainingMs: number): void {
     const line = this.formatLine(elapsedMs, remainingMs);
     const padding = line.length >= this.lastLineLength ? "" : " ".repeat(this.lastLineLength - line.length);
-    process.stdout.write(`\r${line}${padding}\x1b[K`);
+    process.stderr.write(`\r${line}${padding}\x1b[K`);
     this.lastLineLength = line.length;
   }
 
   private clearTerminalLine(): void {
     if (this.lastLineLength === 0) return;
-    process.stdout.write("\r\x1b[K");
+    process.stderr.write("\r\x1b[K");
     this.lastLineLength = 0;
   }
 

@@ -1,4 +1,5 @@
 import type { Composition } from "../core/types/index.js";
+import { compositionTotalFrames } from "../core/time/index.js";
 
 export interface StoryBundleOptions {
   title?: string;
@@ -55,7 +56,7 @@ export function bundleStoryHtml(composition: Composition, options: StoryBundleOp
     </div>
   </main>
   <div class="controls">
-    <input type="range" class="timeline" id="scrubber" min="0" max="${Math.round((Number(composition.duration) || 10) * (composition.fps || 30))}" value="0">
+    <input type="range" class="timeline" id="scrubber" min="0" max="${compositionTotalFrames(composition)}" value="0">
     <div class="playback-bar">
       <div>
         <button class="btn" id="playBtn">▶ Play</button>

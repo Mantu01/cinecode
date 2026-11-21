@@ -4,6 +4,11 @@ Every CLI command supports one switch, `--json`. In machine mode stdout carries
 exactly one well-formed JSON document and nothing else. Human text, progress
 and structured logs go to stderr.
 
+Informational commands (`help`, `version`, `license`) are the single exception:
+they print plain text on stdout, write nothing on stderr, exit `0` and never
+emit the envelope, with or without `--json`. Help and version are clean exits,
+not reports.
+
 Schema version: `1` (`MACHINE_SCHEMA_VERSION` in the CLI package).
 
 ```json
@@ -44,7 +49,7 @@ Schema version: `1` (`MACHINE_SCHEMA_VERSION` in the CLI package).
 | `ok` | False when the run failed; then `error` is present. |
 | `degraded` | True when `degradations` is non-empty. |
 | `project` | Resolved root/config/manifest paths, or `null` when the command has no project. |
-| `result` | Command payload. Commands with no structured payload expose `{ "output": "..." }`. |
+| `result` | Command payload. Incidental stdout appears as `capturedOutput` (a name no command uses, so payload data is never overwritten); above 64 KiB the document carries `outputFile` and `outputBytes` instead of truncating silently. |
 | `artifacts` | Files the run produced, with `units`/`unit` when countable. |
 | `warnings` | Non-fatal diagnostics; they do not mark the run degraded. |
 | `degradations` | Recoverable substitutions: what degraded, why, which input, what the user got instead. |
@@ -56,7 +61,9 @@ Schema version: `1` (`MACHINE_SCHEMA_VERSION` in the CLI package).
 Failures use the `CC####` namespace. Exit codes map by category: usage `2`
 (`CC0001`, `CC1014`), validation `3` (`CC1`, `CC2`, `CC3`, `CC8`),
 environment `4` (`CC6`, `CC7`), cancellation `130` (`CC4003`), runtime `1`
-(everything else).
+(everything else). An unsupported Node.js version exits `78` before the envelope
+exists: the guard writes the plain `[CINECODE_RUNTIME_UNSUPPORTED]` message to
+standard error, prints nothing on standard output, and creates no files.
 
 A missing artifact that a command requested fails with `CC4004` instead of
 reporting success.

@@ -1,10 +1,9 @@
 import { loadComposition, selectComposition } from "../cli/composition-loader.js";
-import { parseTimeInput } from "../cli/shared.js";
 import { createRenderJob, type RenderOptions, type RenderJob } from "../pipeline/index.js";
-import { getDefaultCacheDir } from "../cli/render.js";
 import { resolveRenderParameters } from "../cli/precedence.js";
+import { loadProjectContext } from "../cli/project-context.js";
 import { mkdir } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 
 export interface RenderApiOptions {
   readonly entry: string;
@@ -30,6 +29,10 @@ export interface RenderApiOptions {
   readonly memoryBudgetMb?: number;
   /** Configured fonts registered in every render process before drawing. */
   readonly fonts?: readonly import("../core/types/index.js").FontEntry[];
+  /** Project root; defaults to the configured/discovered project. */
+  readonly root?: string;
+  readonly config?: string;
+  readonly cwd?: string;
   readonly projectRoot?: string;
   readonly mediaDir?: string;
 }
@@ -57,14 +60,21 @@ export async function render(options: RenderApiOptions): Promise<RenderJob> {
     fresh = false,
     overwrite = false,
     seed = 0,
-    cacheDir = getDefaultCacheDir(),
     quality,
   } = options;
 
-  await mkdir(cacheDir, { recursive: true });
-  await mkdir(resolve("output"), { recursive: true });
+  const context = await loadProjectContext({
+    root: options.root ?? options.projectRoot,
+    config: options.config,
+    cwd: options.cwd,
+    allowStandalone: true,
+  });
+  const entryPath = isAbsolute(entry) ? entry : resolve(context.root, entry);
+  const resolvedCacheDir = options.cacheDir ?? context.roots.cache;
 
-  const compositions = await loadComposition(entry);
+  await mkdir(resolvedCacheDir, { recursive: true });
+
+  const compositions = await loadComposition(entryPath);
   const composition = selectComposition(compositions, compositionName);
 
   const { parameters } = resolveRenderParameters({
@@ -87,6 +97,15 @@ export async function render(options: RenderApiOptions): Promise<RenderJob> {
       fps: composition.fps,
       duration: composition.duration,
     },
+    project: {
+      root: context.root,
+      configPath: context.configPath,
+      config: context.config,
+      mode: "file",
+      selection: `composition ${composition.name}`,
+      roots: context.roots,
+    },
+    explicit: context.explicit,
   });
 
   const outputPath = parameters.outputPath.value;
@@ -100,7 +119,7 @@ export async function render(options: RenderApiOptions): Promise<RenderJob> {
       fps: parameters.fps.value,
     },
     outputPath,
-    cacheDir,
+    cacheDir: resolvedCacheDir,
     seed,
     concurrency: parameters.concurrency.value,
     chunkSize: options.chunkSize ?? 8,
@@ -113,8 +132,8 @@ export async function render(options: RenderApiOptions): Promise<RenderJob> {
     toFrame: parameters.frameWindow.value.to,
     silent: true,
     fonts: options.fonts,
-    projectRoot: options.projectRoot,
-    mediaDir: options.mediaDir,
+    projectRoot: context.root,
+    mediaDir: options.mediaDir ?? context.config.mediaDir,
   };
 
   return createRenderJob(renderOptions);

@@ -14,7 +14,7 @@ export interface RenderImageOptions {
 }
 
 export interface RenderImageBufferOptions extends RenderImageOptions {
-  readonly format?: "png" | "jpg" | "webp" | "svg";
+  readonly format?: "png" | "jpg" | "webp";
   /** 0-100, only used by jpg/webp. */
   readonly quality?: number;
 }

@@ -81,8 +81,8 @@ export function createPluginCommand(): Command {
   pluginCmd
     .command("init <pluginName>")
     .description("Scaffold a new Cinecode plugin starter kit")
-    .option("-t, --type <type>", "Plugin template type: effect, transition, audio-effect, clip-type", "effect")
-    .option("-d, --desc <description>", "Plugin description", "")
+    .option("--type <type>", "Plugin template type: effect, transition, audio-effect, clip-type", "effect")
+    .option("--desc <description>", "Plugin description", "")
     .option("-a, --author <author>", "Author name", "")
     .action((pluginName, options) => {
       console.log(`Scaffolding new plugin '${pluginName}' (type: ${options.type})...`);

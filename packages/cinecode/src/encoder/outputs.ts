@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import ffmpegStatic from "@ffmpeg-installer/ffmpeg";
+import { resolveBinary } from "../binary/resolver.js";
 import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -72,7 +72,7 @@ async function writeFramesToDir(
 function runFfmpeg(args: readonly string[], stdinData?: Buffer): Promise<FfmpegResult> {
   const outputPath = args[args.length - 1] ?? "";
   return new Promise<FfmpegResult>((resolve) => {
-    const child = spawn(ffmpegStatic.path, [...args], { windowsHide: true });
+    const child = spawn(resolveBinary("ffmpeg").path, [...args], { windowsHide: true });
     let stderr = "";
     child.on("error", (err) => {
       resolve({ success: false, outputPath, error: `Failed to spawn ffmpeg: ${err.message}` });

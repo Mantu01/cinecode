@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { getPluginRegistry } from "./registry.js";
 import { loadPluginFromFile } from "./loader.js";
+import { logger } from "../observability/logger.js";
 
 export interface PluginWatcherOptions {
   onReload?: (pluginId: string) => void;
@@ -53,7 +54,7 @@ export class PluginHotReloader {
         try {
           await existing.plugin.teardown?.({
             options: existing.options,
-            log: (msg: string) => console.log(`[Plugin:${pluginId}] ${msg}`),
+            log: (msg: string) => logger.debug("plugin", `[Plugin:${pluginId}] ${msg}`),
           });
         } catch {}
       }
@@ -66,7 +67,7 @@ export class PluginHotReloader {
       this.options.onReload?.(pluginId);
       return true;
     } catch (err) {
-      console.error(`[Plugin:${pluginId}] Hot-reload failed:`, err);
+      logger.error("plugin", `[Plugin:${pluginId}] Hot-reload failed:`, { error: String(err) });
       return false;
     }
   }

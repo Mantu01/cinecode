@@ -5,6 +5,7 @@ import type { CinecodeConfig, Composition } from "../core/types/index.js";
 import type { AudioEntry, ImageEntry, ManifestEntryBase, SceneEntry, TimelineEntry } from "../core/types/manifest.js";
 import {
   assembleTimelineComposition,
+  assertSelectorId,
   composeSceneComposition,
   resolveAudioBuffer,
   resolveImageClip,
@@ -14,17 +15,14 @@ import { createProjectResolver, reportResolution } from "./project-resolver.js";
 import { renderImageBuffer } from "../renderer/image.js";
 import { encodeWavBuffer } from "../audio/muxer.js";
 import { multiSelect, type SelectItem } from "./prompt-select.js";
-import {
-  OUTPUT_SUBDIRS,
-  ensureDir,
-  resolveOutputDir,
-  resolveOutputPath,
-  startCompositionRender,
-} from "./shared.js";
+import { OUTPUT_SUBDIRS, ensureDir, resolveOutputPath, startCompositionRender } from "./shared.js";
 import { formatTime } from "../pipeline/progress.js";
 import { createError, ErrorCode } from "../errors/index.js";
 import { runReport } from "./run-report.js";
 import { resolveRenderParameters } from "./precedence.js";
+import { assertRenderableFormat } from "./format-preflight.js";
+import { assertIdPathInside } from "../manifest/ids.js";
+import { resolveProjectRoots } from "../config/roots.js";
 
 export type GenerateKind = "audio" | "image" | "scene" | "timeline" | "all";
 
@@ -68,6 +66,7 @@ async function selectTargets(
   if (kind === "all" || kind === "scene") pools.push({ kind: "scene", entries: manifest.scenes ?? [] });
   if (kind === "all" || kind === "timeline") pools.push({ kind: "timeline", entries: manifest.timelines ?? [] });
 
+  for (const id of options.id ?? []) assertSelectorId("generate", id);
   const idFilter = options.id && options.id.length > 0 ? new Set(options.id) : null;
 
   const selected: Target[] = [];
@@ -95,10 +94,12 @@ async function generateImage(
   options: GenerateOptions,
 ): Promise<string> {
   const format = entry.format ?? project.config.images?.defaultFormat ?? "png";
-  const safeFormat = format === "svg" ? "png" : format;
-  const outDir = options.out ? resolve(options.out) : join(resolveOutputDir(project.config), OUTPUT_SUBDIRS.images);
+  const outDir = options.out
+    ? resolve(project.rootDir, options.out)
+    : join(resolveProjectRoots(project.rootDir, project.config).output, OUTPUT_SUBDIRS.images);
   await ensureDir(outDir);
-  const outputPath = await resolveOutputPath(join(outDir, `${entry.id}.${safeFormat}`), options.overwrite ?? false);
+  const outputPath = await resolveOutputPath(join(outDir, `${entry.id}.${format}`), options.overwrite ?? false);
+  assertIdPathInside(outDir, outputPath, entry.id);
   if (options.dryRun) return outputPath;
 
   const resolvedImage = await resolveImageClip(project, entry.id);
@@ -106,7 +107,7 @@ async function generateImage(
     width: resolvedImage.width,
     height: resolvedImage.height,
     background: resolvedImage.background,
-    format: safeFormat,
+    format,
     quality: entry.quality ?? project.config.images?.quality,
     scaleFactor: entry.scaleFactor,
     seed: options.seed ?? 0,
@@ -120,9 +121,12 @@ async function generateAudio(
   entry: AudioEntry,
   options: GenerateOptions,
 ): Promise<string> {
-  const outDir = options.out ? resolve(options.out) : join(resolveOutputDir(project.config), OUTPUT_SUBDIRS.audio);
+  const outDir = options.out
+    ? resolve(project.rootDir, options.out)
+    : join(resolveProjectRoots(project.rootDir, project.config).output, OUTPUT_SUBDIRS.audio);
   await ensureDir(outDir);
   const outputPath = await resolveOutputPath(join(outDir, `${entry.id}.wav`), options.overwrite ?? false);
+  assertIdPathInside(outDir, outputPath, entry.id);
   if (options.dryRun) return outputPath;
 
   const buffer = await resolveAudioBuffer(project, entry.id);
@@ -142,13 +146,14 @@ async function generateVideoTarget(
   project: ManifestProject,
   target: { kind: "scene" | "timeline"; entry: ManifestEntryBase },
   options: GenerateOptions,
+  explicit: ReadonlySet<string>,
 ): Promise<string> {
   const config = project.config;
   const composition = target.kind === "scene"
     ? await composeScene(project, target.entry as SceneEntry)
     : await assembleTimelineComposition(project, target.entry.id);
 
-  const { parameters } = resolveRenderParameters({
+  const { parameters, preset } = resolveRenderParameters({
     flags: {
       out: options.out,
       concurrency: options.concurrency,
@@ -170,12 +175,23 @@ async function generateVideoTarget(
       mode: "project",
       selection: `${target.kind} ${target.entry.id}`,
     },
+    explicit,
+  });
+  assertRenderableFormat({
+    command: "render",
+    format: parameters.format.value,
+    fromFrame: parameters.frameWindow.value.from,
+    toFrame: parameters.frameWindow.value.to,
+    preset: preset?.id,
   });
 
   const subdir = target.kind === "scene" ? OUTPUT_SUBDIRS.scenes : OUTPUT_SUBDIRS.videos;
-  const outDir = options.out ? resolve(options.out) : join(resolveOutputDir(config), subdir);
+  const outDir = options.out
+    ? resolve(project.rootDir, options.out)
+    : join(resolveProjectRoots(project.rootDir, config).output, subdir);
   await ensureDir(outDir);
   const outputPath = await resolveOutputPath(join(outDir, `${target.entry.id}.${parameters.format.value}`), options.overwrite ?? false);
+  assertIdPathInside(outDir, outputPath, target.entry.id);
 
   if (options.dryRun) return outputPath;
 
@@ -188,6 +204,7 @@ async function generateVideoTarget(
     },
     outputPath,
     config,
+    projectRoot: project.rootDir,
     seed: options.seed ?? 0,
     concurrency: parameters.concurrency.value,
     quality: parameters.quality.value,
@@ -223,7 +240,7 @@ export async function generateCommand(kind: GenerateKind, options: GenerateOptio
     } else if (target.kind === "audio") {
       outputPath = await generateAudio(project, target.entry as AudioEntry, options);
     } else {
-      outputPath = await generateVideoTarget(project, target as { kind: "scene" | "timeline"; entry: ManifestEntryBase }, options);
+      outputPath = await generateVideoTarget(project, target as { kind: "scene" | "timeline"; entry: ManifestEntryBase }, options, resolution.context.explicit);
     }
     results.push({ id: target.entry.id, kind: target.kind, path: outputPath });
     if (!options.dryRun) runReport.artifact({ kind: target.kind, path: resolve(outputPath), units: 1, unit: "file" });

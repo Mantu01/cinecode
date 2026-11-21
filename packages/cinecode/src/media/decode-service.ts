@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import ffmpegStatic from "@ffmpeg-installer/ffmpeg";
+import { resolveBinary } from "../binary/resolver.js";
 import type { MediaCache, MediaMetadata } from "./cache.js";
 import { inspectMedia } from "./inspector.js";
 import type { Composition } from "../core/types/index.js";
@@ -305,7 +305,7 @@ export class DefaultSharedDecodeService implements SharedDecodeService {
     ];
 
     return new Promise<void>((resolve, reject) => {
-      const child = spawn(ffmpegStatic.path, args, { windowsHide: true });
+      const child = spawn(resolveBinary("ffmpeg").path, args, { windowsHide: true });
       this.activeProcesses.add(child);
 
       const chunks: Buffer[] = [];

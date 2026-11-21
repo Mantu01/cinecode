@@ -2,6 +2,7 @@ import { pathToFileURL } from "node:url";
 import { resolve, isAbsolute } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { createError, ErrorCode } from "../errors/codes.js";
+import { recordDegradation } from "../errors/degradations.js";
 import type { CinecodeConfig } from "../core/types/index.js";
 import type { CinecodePlugin, PluginKind } from "./types.js";
 import { PluginRegistry } from "./registry.js";
@@ -134,7 +135,12 @@ function validatePlugin(plugin: unknown, source: string): CinecodePlugin {
 
   const deprecation = checkPluginDeprecation(resolved.manifest as any);
   if (deprecation.isDeprecated || deprecation.isIncompatible) {
-    console.warn(formatDeprecationNotice(resolved.manifest as any, deprecation));
+    recordDegradation({
+      code: "CC7001",
+      what: "deprecated or incompatible plugin",
+      reason: formatDeprecationNotice(resolved.manifest as any, deprecation),
+      instead: "plugin loaded with deprecation notice",
+    });
   }
 
   return resolved as CinecodePlugin;

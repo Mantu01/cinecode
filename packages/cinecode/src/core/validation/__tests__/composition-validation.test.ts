@@ -103,6 +103,16 @@ test("missing required properties are fatal", () => {
   ];
   const result = validateComposition(comp);
   assert.ok(result.errors.some((issue) => issue.code === "CC3007" && /fontSize|content/.test(issue.message)));
+
+  const audio = fixture();
+  (audio.rootTimeline as { tracks: unknown[] }).tracks = [
+    {
+      name: "audio",
+      kind: "audio",
+      clips: [{ type: "audio", name: "ambient", buffer: { length: 1 }, start: 0, duration: 1 }],
+    },
+  ];
+  assert.equal(validateComposition(audio).valid, true, "an inline buffer replaces the src requirement");
 });
 
 test("overlaps are fatal unless a transition explains them", () => {

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import ffmpegStatic from "@ffmpeg-installer/ffmpeg";
+import { resolveBinary } from "../binary/resolver.js";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { mkdir, rm, stat } from "node:fs/promises";
@@ -69,7 +69,7 @@ export async function preprocessVideo(
         cachePath,
       ];
 
-      const child = spawn(ffmpegStatic.path, args, { windowsHide: true });
+      const child = spawn(resolveBinary("ffmpeg").path, args, { windowsHide: true });
       child.on("close", (code) => {
         if (code === 0) resolve(cachePath);
         else reject(new Error(`FFmpeg preprocess failed: ${code}`));

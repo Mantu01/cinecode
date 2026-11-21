@@ -1,4 +1,4 @@
-export type { LoadConfigOptions } from "./schema.js";
+export type { LoadConfigOptions, LoadedConfig } from "./schema.js";
 export {
   CONFIG_FILENAMES,
   findConfigUpward,
@@ -9,12 +9,13 @@ export {
 } from "./project.js";
 export {
   loadConfig,
+  loadConfigDocument,
   getDefaultConfig,
   normalizeConfig,
   findConfigFile,
   resolveConfigPath,
   parseResolutionString,
-  explicitConfigPaths,
+  explicitPathsOf,
   DEFAULT_PROJECT,
   DEFAULT_VIDEO,
   DEFAULT_RENDER,
@@ -26,6 +27,7 @@ export {
   validateConfig,
   validateAuthoringConfig,
   validateNormalizedConfig,
+  configValidationCounts,
   resolveResolution,
   resolveFps,
 } from "./validator.js";
@@ -58,11 +60,7 @@ export {
   type CinecodeIgnoreOptions,
   type IgnoreRule,
 } from "./ignore.js";
-export {
-  defineConfig,
-  scaffoldConfigFile,
-  type ScaffoldConfigOptions,
-} from "./scaffold.js";
+export { defineConfig } from "./scaffold.js";
 export {
   ConfigMigrationEngine,
   type MigrationResult,

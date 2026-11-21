@@ -1,7 +1,8 @@
 import type { Clip } from "../types/clips.js";
 import type { Timeline } from "../types/tracks.js";
 import { AUTHORING_CODES, authoringIssue, type ValidationIssue } from "../validation/errors.js";
-import { type FrameConversion, framesToSeconds, timeInputToFrames } from "./convert.js";
+import { type FrameConversion, timeInputToFrames } from "./convert.js";
+import { framesToSeconds } from "./timebase.js";
 
 export type BoundaryBehavior = "clamp" | "extend" | "strict";
 

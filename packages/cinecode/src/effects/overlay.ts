@@ -4,6 +4,7 @@ import { extname, join, resolve } from "node:path";
 import type { EffectInput, EffectProcessor } from "./engine.js";
 import { defineEffect, getData, putData } from "./engine.js";
 import { noise2d } from "../core/random/index.js";
+import { recordDegradation } from "../errors/degradations.js";
 
 export type OverlayBlendMode = "screen" | "add" | "multiply" | "overlay" | "soft-light" | "color-dodge";
 
@@ -119,7 +120,12 @@ function resolveSourceCanvas(
   if (!frames || frames.length === 0) {
     if (!warnedSources.has(source)) {
       warnedSources.add(source);
-      console.warn(`CC6101: Overlay source not preloaded: ${source}. Call preloadOverlay() before rendering.`);
+      recordDegradation({
+        code: "CC6101",
+        what: "overlay source not preloaded",
+        reason: `Overlay source not preloaded: ${source}`,
+        instead: "call preloadOverlay() before rendering; overlay skipped",
+      });
     }
     return null;
   }

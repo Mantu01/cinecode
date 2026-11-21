@@ -1,11 +1,9 @@
 import { parentPort } from "node:worker_threads";
 import { Canvas } from "@napi-rs/canvas";
-import { join } from "node:path";
 import type { Composition, FontEntry } from "../core/types/index.js";
 import {
   renderFrame,
   primeVideoFramesForRange,
-  setMediaCacheForRenderer,
   setDisableLocalVideoDecode,
   videoFrameRefsFor,
   hasVideoFrameCached,
@@ -13,7 +11,6 @@ import {
   createRenderSession,
   clearRendererCaches,
 } from "../renderer/engine.js";
-import { createMediaCache } from "../media/cache.js";
 import { createCacheClient } from "./cache-channel.js";
 import { registerProjectFonts } from "../renderer/text/fonts.js";
 import { createBuiltinRegistry } from "../extensions/bootstrap.js";
@@ -22,6 +19,7 @@ import { PluginRegistry } from "../plugin/registry.js";
 import { loadPlugin } from "../plugin/loader.js";
 import { createRenderRuntime, type RenderRuntime } from "../renderer/runtime.js";
 import { frameFromPixels, frameTransfer } from "./frame-format.js";
+import { createError, ErrorCode } from "../errors/index.js";
 
 export type FrameErrorPolicy = "placeholder" | "repeat-previous" | "abort";
 
@@ -61,6 +59,7 @@ interface WorkerOutput {
   failures?: readonly FrameFailure[];
   aborted?: boolean;
   diagnostics?: string;
+  cacheHits?: number;
 }
 
 interface TransportFrame {
@@ -113,12 +112,9 @@ function isCircuitBroken(
 }
 
 let ready: Promise<void> | null = null;
-function ensureMediaCache(cacheDir: string): Promise<void> {
+function disableWorkerLocalDecode(): Promise<void> {
   if (!ready) {
     ready = (async () => {
-      const mediaCache = createMediaCache(join(cacheDir, "media"));
-      await mediaCache.initialize();
-      setMediaCacheForRenderer(mediaCache);
       setDisableLocalVideoDecode(true);
     })();
   }
@@ -128,12 +124,13 @@ function ensureMediaCache(cacheDir: string): Promise<void> {
 async function fetchRemoteFrames(
   composition: Composition,
   frames: readonly number[],
-): Promise<void> {
+): Promise<number> {
   const cacheClient = parentPort ? createCacheClient(parentPort) : null;
-  if (!cacheClient) return;
+  if (!cacheClient) return 0;
   const refs = await videoFrameRefsFor(composition, frames);
   const misses = refs.filter((ref) => !hasVideoFrameCached(ref.src, ref.sourceFrame));
-  if (misses.length === 0) return;
+  const hits = refs.length - misses.length;
+  if (misses.length === 0) return hits;
 
   const keys = misses.map((ref) => `video:${ref.src}@${ref.sourceFrame}`);
   const responses = await cacheClient.requestBatch(keys);
@@ -178,6 +175,7 @@ async function fetchRemoteFrames(
       } catch {}
     }
   }
+  return hits;
 }
 
 async function processFrames(
@@ -191,12 +189,12 @@ async function processFrames(
 ): Promise<WorkerOutput> {
   const results: { index: number; buffer: Buffer }[] = [];
   const failures: FrameFailure[] = [];
-  const session = createRenderSession();
+  const session = workerSession ?? createRenderSession();
   let consecutiveFailures = 0;
   let previousBuffer: Buffer | null = null;
 
   await primeVideoFramesForRange(composition, frames);
-  await fetchRemoteFrames(composition, frames);
+  const cacheHits = await fetchRemoteFrames(composition, frames);
 
   for (const frame of frames) {
     try {
@@ -206,6 +204,7 @@ async function processFrames(
       previousBuffer = buffer;
       consecutiveFailures = 0;
     } catch (error) {
+      session.lastFrameSurface = null;
       const failure: FrameFailure = {
         frame,
         timecode: frame / Math.max(1, composition.fps),
@@ -215,16 +214,18 @@ async function processFrames(
       };
       failures.push(failure);
       consecutiveFailures += 1;
-      console.error(
-        JSON.stringify({
-          level: "error",
-          stage: "frame-render",
-          frame,
-          timecodeSeconds: failure.timecode,
-          clip: failure.clip,
-          message: failure.message,
-        }),
-      );
+      if (process.env.CINECODE_VERBOSE === "1") {
+        process.stderr.write(
+          JSON.stringify({
+            level: "error",
+            stage: "frame-render",
+            frame,
+            timecodeSeconds: failure.timecode,
+            clip: failure.clip,
+            message: failure.message,
+          }) + "\n",
+        );
+      }
 
       if (policy === "abort") {
         return {
@@ -261,6 +262,7 @@ async function processFrames(
   return {
     frames: results,
     failures,
+    cacheHits,
     ...(failures.length > 0 ? { diagnostics: formatDiagnostics(failures, frames.length) } : {}),
   };
 }
@@ -279,7 +281,11 @@ function formatDiagnostics(failures: readonly FrameFailure[], total: number): st
 }
 
 if (!parentPort) {
-  throw new Error("Frame worker must be run as a worker thread");
+  throw createError(
+    ErrorCode.CC7004,
+    { reason: "frame worker must be run inside a worker thread" },
+    { fixHint: "Run renders through the pipeline or CLI; frame-worker.ts is not a standalone entry." },
+  );
 }
 
 interface InitMessage {
@@ -309,17 +315,41 @@ interface WorkerState {
 }
 
 let state: WorkerState | null = null;
+let workerSession: import("../renderer/engine.js").RenderSession | null = null;
 
 async function initialize(startup: WorkerStartup): Promise<void> {
   const started = Date.now();
-  if (!startup.compositionJson) throw new Error("init payload has no composition");
-  const composition = JSON.parse(startup.compositionJson) as Composition;
+  if (!startup.compositionJson) {
+    throw createError(ErrorCode.CC9001, { reason: "frame worker init payload has no composition" }, {
+      fixHint: "Retry the render; if it persists the pipeline sent an invalid worker payload.",
+    });
+  }
+  let composition: Composition;
+  try {
+    composition = JSON.parse(startup.compositionJson) as Composition;
+  } catch (error) {
+    throw createError(ErrorCode.CC9001, {
+      reason: `frame worker could not parse the composition payload: ${error instanceof Error ? error.message : String(error)}`,
+    }, { fixHint: "Retry the render; the composition payload was not valid JSON." });
+  }
   const fontResult = registerProjectFonts(startup.fonts, {
     projectRoot: startup.projectRoot ?? process.cwd(),
     mediaDir: startup.mediaDir ?? "media",
   });
-  if (fontResult.errors.length > 0) throw new Error(fontResult.errors[0]!.message);
+  if (fontResult.errors.length > 0) {
+    const font = fontResult.errors[0]!;
+    throw createError(
+      ErrorCode.CC3006,
+      { family: font.family, missing: font.message },
+      { location: { file: font.path }, fixHint: "Fix the font entry path or register a family available on this machine." },
+    );
+  }
   // Per-job state never leaks across jobs when a worker is reused.
+  if (workerSession) {
+    workerSession.dispose();
+    workerSession = null;
+  }
+  workerSession = createRenderSession();
   clearRendererCaches();
   ready = null;
 
@@ -350,7 +380,9 @@ async function initialize(startup: WorkerStartup): Promise<void> {
             }
           }
         } catch (err) {
-          console.warn(`[frame-worker] failed to load plugin ${p.name}:`, err);
+          if (process.env.CINECODE_VERBOSE === "1") {
+            process.stderr.write(`[frame-worker] failed to load plugin ${p.name}: ${String(err)}\n`);
+          }
         }
       }
     }
@@ -370,7 +402,13 @@ async function initialize(startup: WorkerStartup): Promise<void> {
   parentPort!.postMessage({ type: "ready", startupMs: Date.now() - started });
 }
 
-process.once("exit", clearRendererCaches);
+process.once("exit", () => {
+  if (workerSession) {
+    workerSession.dispose();
+    workerSession = null;
+  }
+  clearRendererCaches();
+});
 
 parentPort.on("message", (msg: WorkerMessage) => {
   const type = (msg as { type?: string }).type;
@@ -385,6 +423,10 @@ parentPort.on("message", (msg: WorkerMessage) => {
     return;
   }
   if (type === "reset") {
+    if (workerSession) {
+      workerSession.dispose();
+      workerSession = null;
+    }
     clearRendererCaches();
     ready = null;
     state = null;
@@ -392,6 +434,10 @@ parentPort.on("message", (msg: WorkerMessage) => {
     return;
   }
   if (type === "shutdown") {
+    if (workerSession) {
+      workerSession.dispose();
+      workerSession = null;
+    }
     clearRendererCaches();
     ready = null;
     state = null;
@@ -410,7 +456,7 @@ parentPort.on("message", (msg: WorkerMessage) => {
   if (current.crashOnFrame !== undefined && chunkFrames?.includes(current.crashOnFrame)) {
     process.exit(1);
   }
-  ensureMediaCache(current.cacheDir)
+  disableWorkerLocalDecode()
     .then(() =>
       processFrames(
         current.composition,

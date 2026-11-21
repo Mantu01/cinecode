@@ -5,9 +5,12 @@ import pc from "picocolors";
 import { loadCinecodeIgnore } from "../config/ignore.js";
 import { createError, ErrorCode } from "../errors/index.js";
 import { runReport } from "./run-report.js";
+import { loadProjectContext } from "./project-context.js";
 
 export interface PublishOptions {
   dest?: string;
+  root?: string;
+  config?: string;
 }
 
 export interface PublishResult {
@@ -39,17 +42,18 @@ function respectIgnore(projectDir: string, relativePath: string): boolean {
   return loadCinecodeIgnore(projectDir).shouldIgnore(relativePath);
 }
 
-export async function publishOutput(outputPath: string, options: PublishOptions = {}): Promise<PublishResult> {
-  if (!fs.existsSync(outputPath)) {
-    return { success: false, target: outputPath, message: `Output file not found: ${outputPath}` };
+export async function publishOutput(outputPath: string, options: PublishOptions = {}, projectRoot?: string): Promise<PublishResult> {
+  const root = path.resolve(projectRoot ?? ".");
+  const resolvedOutput = path.resolve(root, outputPath);
+  if (!fs.existsSync(resolvedOutput)) {
+    return { success: false, target: resolvedOutput, message: `Output file not found: ${resolvedOutput}` };
   }
-  const resolvedOutput = path.resolve(outputPath);
-  const projectDir = path.dirname(resolvedOutput);
-  if (respectIgnore(projectDir, path.basename(resolvedOutput))) {
-    return { success: false, target: outputPath, message: "Output matches .cinecodeignore patterns — publish refused" };
+  const relativeOutput = path.relative(root, resolvedOutput).replace(/\\/g, "/");
+  if (respectIgnore(root, relativeOutput)) {
+    return { success: false, target: resolvedOutput, message: "Output matches .cinecodeignore patterns — publish refused" };
   }
 
-  const configPath = path.join(process.cwd(), ".cinecode-publish.json");
+  const configPath = path.join(root, ".cinecode-publish.json");
   let destination = options.dest;
   if (!destination && fs.existsSync(configPath)) {
     try {
@@ -63,15 +67,20 @@ export async function publishOutput(outputPath: string, options: PublishOptions 
     return { success: false, target: outputPath, message: "Local publish needs --dest or .cinecode-publish.json {\"destination\": \"...\"}" };
   }
 
-  const targetDir = path.resolve(destination);
+  const targetDir = path.resolve(root, destination);
+  const sourceDir = path.resolve(root, "src");
+  const insideSource = targetDir === sourceDir || targetDir.startsWith(`${sourceDir}${path.sep}`);
+  if (insideSource) {
+    return { success: false, target: targetDir, message: `Local destination is inside source tree: source=${sourceDir}, destination=${targetDir}` };
+  }
   fs.mkdirSync(targetDir, { recursive: true });
-  const target = path.join(targetDir, path.basename(outputPath));
+  const target = path.join(targetDir, path.basename(resolvedOutput));
   const contentType = detectContentType(target);
 
   // Atomic write via temp file in same directory + rename
   const tempPath = `${target}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
   try {
-    fs.copyFileSync(outputPath, tempPath);
+    fs.copyFileSync(resolvedOutput, tempPath);
     fs.renameSync(tempPath, target);
   } catch (err) {
     try { fs.unlinkSync(tempPath); } catch { /* ignore */ }
@@ -86,17 +95,20 @@ export function createPublishCommand(): Command {
     .description("Publish a rendered output locally to a destination directory")
     .argument("<outputPath>", "Rendered output file to publish")
     .option("--dest <dir>", "Local destination directory")
-    .action(async (outputPath: string, options: PublishOptions) => {
+    .action(async (outputPath: string, options: PublishOptions, command: Command) => {
       console.log(`Publishing '${outputPath}' locally...`);
-      const result = await publishOutput(outputPath, options);
+      const merged = { ...command.optsWithGlobals(), ...options } as PublishOptions;
+      const context = await loadProjectContext({ root: merged.root, config: merged.config, allowStandalone: true });
+      const result = await publishOutput(outputPath, merged, context.root);
       runReport.result({ success: result.success, target: result.target, message: result.message });
       if (result.success) {
         runReport.artifact({ kind: "published", path: result.target, units: 1, unit: "file" });
         console.log(pc.green(`✔ ${result.message}`));
         console.log(pc.cyan(result.target));
       } else {
-        if (!fs.existsSync(outputPath)) {
-          throw createError(ErrorCode.CC2001, { path: path.resolve(outputPath) }, { location: { file: path.resolve(outputPath) } });
+        const resolved = path.resolve(context.root, outputPath);
+        if (!fs.existsSync(resolved)) {
+          throw createError(ErrorCode.CC2001, { path: resolved }, { location: { file: resolved } });
         }
         throw createError(ErrorCode.CC6002, { url: result.target, reason: result.message });
       }

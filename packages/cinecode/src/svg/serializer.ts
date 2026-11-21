@@ -11,6 +11,32 @@ export interface SvgSerializerOptions {
   optimize?: boolean;
 }
 
+export interface UnsupportedSvgClip {
+  readonly id: string;
+  readonly type: string;
+  readonly track: string;
+  readonly start: number;
+  readonly duration: number;
+}
+
+export function unsupportedSvgClips(comp: Composition): readonly UnsupportedSvgClip[] {
+  const unsupported: UnsupportedSvgClip[] = [];
+  for (const track of comp.rootTimeline?.tracks ?? []) {
+    if (track.kind !== "visual") continue;
+    for (const clip of track.clips as readonly any[]) {
+      if (clip.type === "text" || clip.type === "shape" || clip.type === "solid") continue;
+      unsupported.push({
+        id: String(clip.name ?? clip.id ?? "unnamed"),
+        type: String(clip.type ?? "unknown"),
+        track: track.name ?? "unnamed",
+        start: Number(clip.start ?? 0),
+        duration: Number(clip.duration ?? 0),
+      });
+    }
+  }
+  return unsupported;
+}
+
 export function serializeFrameToSvg(
   comp: Composition,
   frame: number,
@@ -35,7 +61,10 @@ export function serializeFrameToSvg(
     if (time < start || time > start + dur) continue;
 
     if (clip.type === "text") {
-      const text = clip.text || "";
+      const text = String(clip.text || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
       const fontSize = clip.fontSize || 48;
       const fill = clip.color || "#ffffff";
       const x = clip.x ?? width * 0.5;
@@ -44,6 +73,8 @@ export function serializeFrameToSvg(
       elements.push(
         `<text x="${x.toFixed(precision)}" y="${y.toFixed(precision)}" font-size="${fontSize}" fill="${fill}" text-anchor="middle" dominant-baseline="middle">${text}</text>`,
       );
+    } else if (clip.type === "solid") {
+      elements.push(`<rect x="0" y="0" width="${width}" height="${height}" fill="${clip.color || "#000000"}" />`);
     } else if (clip.type === "shape") {
       const shapeType = clip.shape || "rect";
       const fill = clip.color || "#3182ce";

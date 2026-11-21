@@ -96,8 +96,8 @@ export function createBuiltinRegistry(): ExtensionRegistry {
   registry.register<AudioProcessorExtension>("audioProcessor", reverbProcessor.name, reverbProcessor);
 
   if (process.env.CINECODE_VERBOSE === "1" || process.env.CINECODE_LOG_LEVEL === "debug") {
-    console.error(
-      `cinecode: extension registry v${EXTENSION_REGISTRY_VERSION}: ${BUILTIN_EFFECT_NAMES.length} effects, ${BUILTIN_TRANSITION_NAMES.length} transitions`,
+    process.stderr.write(
+      `cinecode: extension registry v${EXTENSION_REGISTRY_VERSION}: ${BUILTIN_EFFECT_NAMES.length} effects, ${BUILTIN_TRANSITION_NAMES.length} transitions\n`,
     );
   }
   return registry;

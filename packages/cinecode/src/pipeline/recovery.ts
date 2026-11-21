@@ -1,4 +1,5 @@
 import type { CinecodeError } from "../errors/index.js";
+import { recordDegradation } from "../errors/degradations.js";
 import { Canvas } from "@napi-rs/canvas";
 
 export * from "./checkpoint.js";
@@ -22,7 +23,12 @@ export const DEFAULT_FRAME_RECOVERY: RecoveryPolicy = {
   maxRetries: 1,
   retryDelayMs: 100,
   onRecovery: (error, attempt) => {
-    console.warn(`[cinecode] Frame recovery (${attempt}/${error.code}): ${error.message}`);
+    recordDegradation({
+      code: error.code ?? "CC4001",
+      what: "frame render recovery",
+      reason: `attempt ${attempt}: ${error.message}`,
+      instead: "frame retried",
+    });
   },
 };
 
@@ -32,7 +38,12 @@ export const DEFAULT_AUDIO_RECOVERY: RecoveryPolicy = {
   maxRetries: 0,
   retryDelayMs: 0,
   onRecovery: (error) => {
-    console.warn(`[cinecode] Audio recovery: ${error.message}`);
+    recordDegradation({
+      code: error.code ?? "CC2004",
+      what: "audio recovery",
+      reason: error.message,
+      instead: "audio track skipped",
+    });
   },
 };
 
@@ -42,7 +53,12 @@ export const DEFAULT_MUX_RECOVERY: RecoveryPolicy = {
   maxRetries: 1,
   retryDelayMs: 500,
   onRecovery: (error) => {
-    console.error(`[cinecode] Mux recovery failed: ${error.message}`);
+    recordDegradation({
+      code: error.code ?? "CC4003",
+      what: "mux recovery",
+      reason: error.message,
+      instead: "mux retried",
+    });
   },
 };
 

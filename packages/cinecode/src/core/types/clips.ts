@@ -4,6 +4,7 @@ import type { MaterialSlotOverride } from "../../model-3d/materials/types.js";
 import type { AudioBuffer } from "../../audio/types.js";
 import type { AnimatableValue } from "./animatable.js";
 import type { EasingDescriptor } from "./easing.js";
+import type { Timeline } from "./tracks.js";
 import type {
   Anchor,
   BlendMode,
@@ -247,6 +248,9 @@ export interface SceneClip extends VisualProps {
   readonly type: "scene";
   readonly ref: string;
   readonly props?: Record<string, unknown>;
+  readonly timeline?: Timeline;
+  readonly width?: number;
+  readonly height?: number;
 }
 
 export interface ComponentClip extends VisualProps {

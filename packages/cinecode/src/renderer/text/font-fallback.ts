@@ -88,8 +88,8 @@ export class FontFallbackResolver {
     this.warnOnFallback = options.warnOnFallback !== false;
   }
 
-  private isAvailable(family: string): boolean {
-    const normalized = family.toLowerCase();
+  isAvailable(family: string): boolean {
+    const normalized = family.toLowerCase().trim();
     if (normalized === "sans-serif" || normalized === "serif" || normalized === "monospace") return true;
     return this.availability.has(normalized);
   }
@@ -121,7 +121,7 @@ export class FontFallbackResolver {
     if (cached !== undefined) return cached;
 
     let resolved = primary;
-    if (!this.hasGlyph(primary, char, style)) {
+    if (!this.isAvailable(primary) || !this.hasGlyph(primary, char, style)) {
       resolved = REPLACEMENT_GLYPH;
       for (const candidate of this.chainFor(char, primary)) {
         if (candidate === primary) continue;
@@ -166,7 +166,9 @@ export class FontFallbackResolver {
     const missing: string[] = [];
     for (const char of text) {
       if (isPlainSpace(char)) continue;
-      if (this.resolveFamily(style, char) === REPLACEMENT_GLYPH) missing.push(char);
+      if (!this.isAvailable(style.fontFamily) || this.resolveFamily(style, char) === REPLACEMENT_GLYPH) {
+        if (!missing.includes(char)) missing.push(char);
+      }
     }
     return missing;
   }

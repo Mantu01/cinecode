@@ -5,6 +5,17 @@ import { createError, ErrorCode, type CinecodeError } from "../errors/index.js";
 import { validateManifestShape } from "../config/zod-schema.js";
 import { loadModuleFile } from "./loader.js";
 import { hotReloadEnabled } from "../loader/index.js";
+import { parseDurationInput } from "../core/time-input.js";
+import { validateSerializableProps } from "../core/define/props.js";
+import { checkEntryExport } from "./brands.js";
+import { idRule } from "./ids.js";
+
+/** Manifest keys that were accepted before and had no consumer. */
+const REMOVED_MANIFEST_KEYS: Readonly<Record<string, string>> = {
+  tags: "Removed; entry tags were never read by a command.",
+  description: "Removed; entry descriptions were never displayed by a command.",
+  "audio.format": "Removed; audio generation always writes a WAV file derived from sampleRate.",
+};
 
 export interface ManifestValidationResult {
   readonly valid: boolean;
@@ -19,94 +30,13 @@ export interface ManifestValidationOptions {
   readonly moduleCache?: Map<string, unknown>;
 }
 
-// Parses and validates a duration number or timecode against project fps.
+// Parses and validates a duration with the one time grammar.
 export function parseAndValidateDuration(
   value: number | string,
   fps: number,
 ): { valid: boolean; seconds?: number; error?: string } {
-  if (typeof value === "number") {
-    if (!Number.isFinite(value) || value <= 0) {
-      return { valid: false, error: `Duration must be a finite positive number, got ${value}` };
-    }
-    return { valid: true, seconds: value };
-  }
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!trimmed) return { valid: false, error: "Duration string cannot be empty" };
-    if (trimmed.includes(":")) {
-      const parts = trimmed.split(":");
-      if (parts.length < 2 || parts.length > 4) {
-        return { valid: false, error: `Invalid timecode "${value}". Expected HH:MM:SS or HH:MM:SS:FF` };
-      }
-      for (const part of parts) {
-        if (!/^\d+$/.test(part)) {
-          return { valid: false, error: `Invalid timecode part "${part}" in "${value}". Numeric digits required` };
-        }
-      }
-      const numParts = parts.map(Number);
-      if (parts.length === 4) {
-        const [h, m, s, f] = numParts;
-        if (m! >= 60 || s! >= 60) return { valid: false, error: `Invalid timecode "${value}": minutes/seconds must be < 60` };
-        if (f! >= fps) return { valid: false, error: `Invalid timecode "${value}": frame ${f} exceeds project frame rate (${fps} fps)` };
-        const seconds = h! * 3600 + m! * 60 + s! + f! / fps;
-        return seconds > 0 ? { valid: true, seconds } : { valid: false, error: `Duration must be positive, got ${seconds}s` };
-      }
-      if (parts.length === 3) {
-        const [h, m, s] = numParts;
-        if (m! >= 60 || s! >= 60) return { valid: false, error: `Invalid timecode "${value}": minutes/seconds must be < 60` };
-        const seconds = h! * 3600 + m! * 60 + s!;
-        return seconds > 0 ? { valid: true, seconds } : { valid: false, error: `Duration must be positive, got ${seconds}s` };
-      }
-      if (parts.length === 2) {
-        const [m, s] = numParts;
-        if (s! >= 60) return { valid: false, error: `Invalid timecode "${value}": seconds must be < 60` };
-        const seconds = m! * 60 + s!;
-        return seconds > 0 ? { valid: true, seconds } : { valid: false, error: `Duration must be positive, got ${seconds}s` };
-      }
-    }
-    const sMatch = trimmed.match(/^(\d+(?:\.\d+)?)\s*s$/i);
-    if (sMatch) {
-      const parsed = parseFloat(sMatch[1]!);
-      return parsed > 0 ? { valid: true, seconds: parsed } : { valid: false, error: `Duration must be positive, got ${parsed}` };
-    }
-    if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
-      const parsed = parseFloat(trimmed);
-      return parsed > 0 ? { valid: true, seconds: parsed } : { valid: false, error: `Duration must be positive, got ${parsed}` };
-    }
-    return { valid: false, error: `Unrecognized duration/timecode format "${value}"` };
-  }
-  return { valid: false, error: `Duration must be number or string, got ${typeof value}` };
-}
-
-function checkKindExport(kind: string, raw: unknown): boolean {
-  if (!raw) return false;
-  if (kind === "image") {
-    if (typeof raw === "object" && (raw as { kind?: string }).kind === "image") return true;
-    if (typeof raw === "function") return true;
-    if (typeof raw === "object" && ("type" in (raw as object) || "kind" in (raw as object))) return true;
-    return false;
-  }
-  if (kind === "audio") {
-    if (typeof raw === "object" && ((raw as { kind?: string }).kind === "audio" || (raw as { kind?: string }).kind === "sound")) return true;
-    if (typeof raw === "object" && "data" in (raw as object) && "sampleRate" in (raw as object)) return true;
-    if (typeof raw === "function") return true;
-    return false;
-  }
-  if (kind === "scene") {
-    if (typeof raw === "object" && (raw as { kind?: string }).kind === "scene") return true;
-    if (typeof raw === "object" && Array.isArray((raw as { tracks?: unknown }).tracks)) return true;
-    if (typeof raw === "object" && "rootTimeline" in (raw as object)) return true;
-    if (typeof raw === "function" || Array.isArray(raw)) return true;
-    return false;
-  }
-  if (kind === "timeline") {
-    if (typeof raw === "object" && Array.isArray((raw as { tracks?: unknown }).tracks)) return true;
-    if (typeof raw === "object" && "rootTimeline" in (raw as object)) return true;
-    if (typeof raw === "object" && (raw as { kind?: string }).kind === "scene") return true;
-    if (typeof raw === "function") return true;
-    return false;
-  }
-  return false;
+  const parsed = parseDurationInput(value, fps);
+  return parsed.ok ? { valid: true, seconds: parsed.seconds } : { valid: false, error: parsed.error };
 }
 
 // Validates the manifest document eagerly at resolution time.
@@ -128,9 +58,14 @@ export async function validateManifestDocument(
       const keys = issue.keys ?? [];
       for (const key of keys) {
         const fullKey = issue.path ? `${issue.path}.${key}` : key;
+        const collection = issue.path.split(".")[0] ?? "";
+        const suggestion =
+          REMOVED_MANIFEST_KEYS[`${collection}.${key}`] ??
+          REMOVED_MANIFEST_KEYS[key] ??
+          "Supported manifest collections: images, audio, scenes, timelines.";
         errors.push(createError(
           ErrorCode.CC1002,
-          { key: fullKey, suggestion: "Supported manifest collections: images, audio, scenes, timelines." },
+          { key: fullKey, suggestion },
           { location: { file: manifestPath } },
         ));
       }
@@ -169,7 +104,27 @@ export async function validateManifestDocument(
     ));
   }
 
-  // 3. Validate identity: unique ids across all referenceable collections
+  // 3. Entry props must survive serialisation: the render pipeline reads them from a worker.
+  for (const col of [
+    { kind: "image", entries: manifest.images ?? [] },
+    { kind: "audio", entries: manifest.audio ?? [] },
+    { kind: "scene", entries: manifest.scenes ?? [] },
+    { kind: "timeline", entries: manifest.timelines ?? [] },
+  ] as const) {
+    for (let i = 0; i < col.entries.length; i++) {
+      const entry = col.entries[i] as unknown as Record<string, unknown>;
+      if (!entry) continue;
+      for (const issue of validateSerializableProps(entry, `${col.kind}s[${i}]`)) {
+        errors.push(createError(
+          ErrorCode.CC1010,
+          { path: manifestPath, reason: `${col.kind}s[${i}].${issue.prop}: ${issue.message}` },
+          { location: { file: manifestPath, clip: String(entry.id ?? "") } },
+        ));
+      }
+    }
+  }
+
+  // 4. Validate identity: unique ids across all referenceable collections
   const collections = [
     { kind: "image", entries: manifest.images ?? [] },
     { kind: "audio", entries: manifest.audio ?? [] },
@@ -183,33 +138,33 @@ export async function validateManifestDocument(
     for (let i = 0; i < col.entries.length; i++) {
       const entry = col.entries[i] as ManifestEntryBase;
       if (!entry || typeof entry.id !== "string" || !entry.id) continue;
-      if (seenIds.has(entry.id)) {
-        const prev = seenIds.get(entry.id)!;
+      const key = entry.id.toLowerCase();
+      if (seenIds.has(key)) {
+        const prev = seenIds.get(key)!;
         const prevLoc = `${prev.kind}s[${prev.index}]`;
         const currLoc = `${col.kind}s[${i}]`;
         errors.push(createError(
           ErrorCode.CC1010,
           {
             path: manifestPath,
-            reason: `duplicate id "${entry.id}" declared in ${prevLoc} and ${currLoc}`,
+            reason: `duplicate id "${entry.id}" declared in ${prevLoc} and ${currLoc} (ids are compared case-insensitively)`,
           },
           {
             location: { file: manifestPath },
-            fixHint: `Change identifier "${entry.id}" so each entry has a unique id`,
+            fixHint: `Change identifier "${entry.id}" so each entry has a unique id, including case-only differences`,
           },
         ));
       } else {
-        seenIds.set(entry.id, { kind: col.kind, index: i, id: entry.id });
+        seenIds.set(key, { kind: col.kind, index: i, id: entry.id });
       }
     }
   }
 
-  // 4. Validate references: sceneRefs, audioRef
+  // 5. Validate references: sceneRefs, audioRef
   const sceneIds = new Set((manifest.scenes ?? []).map((s) => s.id));
   const audioIds = new Set((manifest.audio ?? []).map((a) => a.id));
   const availableScenes = Array.from(sceneIds).join(", ") || "none";
   const availableAudio = Array.from(audioIds).join(", ") || "none";
-  const referencedAudio = new Set<string>();
 
   for (const timeline of manifest.timelines ?? []) {
     if (Array.isArray(timeline.sceneRefs)) {
@@ -232,7 +187,6 @@ export async function validateManifestDocument(
     }
     if (Array.isArray(timeline.audioRef)) {
       for (const ref of timeline.audioRef) {
-        referencedAudio.add(ref);
         if (!audioIds.has(ref)) {
           errors.push(createError(
             ErrorCode.CC3007,
@@ -251,7 +205,7 @@ export async function validateManifestDocument(
     }
   }
 
-  // 5, 6, 7 & 8: Files, exported kinds, value ranges, media references
+  // 6, 7 & 8: Files, exported kinds, value ranges, media references
   for (const col of collections) {
     for (let i = 0; i < col.entries.length; i++) {
       const entry = col.entries[i] as any;
@@ -295,7 +249,7 @@ export async function validateManifestDocument(
             },
             { location: { file: manifestPath } },
           ));
-        } else if (referencedAudio.has(entry.id)) {
+        } else {
           const found = existsSync(inMedia) ? inMedia : (allowCoLocated && existsSync(inSource) ? inSource : null);
           if (!found) {
             const searched = [inMedia];
@@ -358,16 +312,17 @@ export async function validateManifestDocument(
           continue;
         }
 
-        if (!checkKindExport(col.kind, moduleExports)) {
+        const exported = checkEntryExport(col.kind, moduleExports);
+        if (!exported.ok) {
           errors.push(createError(
             ErrorCode.CC3008,
             {
-              path: `${entry.file} (entry "${entry.id}")`,
-              expected: `a ${col.kind} (define${col.kind.charAt(0).toUpperCase() + col.kind.slice(1)})`,
+              path: entry.file,
+              expected: `${exported.expected} for entry "${entry.id}"; received ${exported.received}`,
             },
             {
-              location: { file: resolvedFile },
-              fixHint: `Export ${col.kind} definition from "${entry.file}" for entry "${entry.id}"`,
+              location: { file: resolvedFile, clip: entry.id },
+              fixHint: `Export ${exported.expected} from "${entry.file}" for entry "${entry.id}"`,
             },
           ));
         }

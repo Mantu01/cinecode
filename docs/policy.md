@@ -65,16 +65,36 @@ a cache-busting key so an edited module and its transitive imports reload.
   Importing the CLI entry never parses argv, reads the home directory or exits;
   only the executable path runs it.
 - Global options exist on every command from one table: `--root`, `--config`,
-  `--json`, `--no-color`, `--verbose`. `--props` is a deprecated alias of
-  `--config` and warns on use.
+  `--json`, `--no-color`, `--verbose`. There are no deprecated option aliases.
+- One letter means one concept across every command; the table lives in
+  `src/cli/short-flags.ts` and is checked against the generated command
+  reference.
 - Command implementations load lazily per command. Help and version import no
   renderer, encoder, 3D, PDF, MIDI or observability stack.
 - Aliases are opt-in (`CINECODE_ALIASES=1`), applied after the command token is
   known, bounded, cycle-safe, local-first, and never rewrite a known command.
+- Project paths come from one `ProjectContext`: absolute project, source, media,
+  output and cache roots. No command resolves a project path from the working
+  directory; only the discovery step reads it, and only when neither `--root`
+  nor `--config` was given.
+- Discovery stops at `package.json` or `.git`. A config in a parent project above
+  that marker is never discovered.
 - Value-bearing flags carry no defaults so precedence stays observable.
 - Exit codes: `0` success, `1` runtime, `2` usage, `3` validation,
-  `4` environment, `130` cancelled. Command bodies throw `ExitSignal` instead of
-  touching the process exit state.
+  `4` environment, `78` unsupported Node.js runtime, `130` cancelled. Command
+  bodies throw `ExitSignal` instead of touching the process exit state; only the
+  runtime guard writes to the process exit state directly.
+
+## Network
+
+**Local only by default.** No command reaches the network unless the user names it.
+
+- `cloudMedia` entries are a declaration: the media index registers their names and
+  marks them `origin: cloud`, and nothing downloads them implicitly.
+- `cinecode media:download` is the only command that fetches remote media, and only
+  when it is invoked explicitly against a configured entry. Rendering, preview,
+  `check` and `generate` never download; a cloud reference that was not downloaded
+  fails as a missing media file.
 
 ## Release readiness
 

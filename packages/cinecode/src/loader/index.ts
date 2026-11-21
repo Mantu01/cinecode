@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs";
 import { extname, isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { assertSupportedRuntime } from "./runtime.js";
+import { isCinecodeError } from "../errors/index.js";
 
 export * from "./runtime.js";
 
@@ -79,11 +81,34 @@ function toUserModuleError(error: unknown, file: string): UserModuleError {
   return new UserModuleError("USER_MODULE_LOAD_FAILED", file, `Cannot load ${file}${lineOf(error)}: ${detail}`, error);
 }
 
+/** A coded error raised by the module itself keeps its code and gains the file. */
+function userModuleFailure(error: unknown, file: string): Error {
+  if (isCinecodeError(error)) {
+    if (!error.location?.file) (error as { location?: { file?: string } }).location = { ...error.location, file };
+    return error;
+  }
+  return toUserModuleError(error, file);
+}
+
+/** User modules read their own assets relative to the project root, never the caller's cwd. */
+async function importFromRoot(url: URL, rootDir: string): Promise<unknown> {
+  const previous = process.cwd();
+  const target = resolve(rootDir);
+  const changed = target !== resolve(previous);
+  if (changed) process.chdir(target);
+  try {
+    return await import(url.href);
+  } finally {
+    if (changed) process.chdir(previous);
+  }
+}
+
 export async function loadUserModule<T = unknown>(
   file: string,
   rootDir: string = process.cwd(),
   options: LoadUserModuleOptions = {},
 ): Promise<T> {
+  assertSupportedRuntime();
   const resolved = resolveUserModule(file, rootDir);
   if (!existsSync(resolved)) {
     throw new UserModuleError("USER_MODULE_NOT_FOUND", resolved, `Module not found: ${resolved}`);
@@ -91,10 +116,10 @@ export async function loadUserModule<T = unknown>(
   const url = pathToFileURL(resolved);
   if (options.fresh) url.searchParams.set("reload", `${process.pid}-${reloadCounter++}`);
   try {
-    const module = (await import(url.href)) as Record<string, unknown>;
+    const module = (await importFromRoot(url, rootDir)) as Record<string, unknown>;
     return (module.default ?? module) as T;
   } catch (error) {
-    throw toUserModuleError(error, resolved);
+    throw userModuleFailure(error, resolved);
   }
 }
 
@@ -103,6 +128,7 @@ export async function loadUserModuleNamespace<T = Record<string, unknown>>(
   rootDir: string = process.cwd(),
   options: LoadUserModuleOptions = {},
 ): Promise<T> {
+  assertSupportedRuntime();
   const resolved = resolveUserModule(file, rootDir);
   if (!existsSync(resolved)) {
     throw new UserModuleError("USER_MODULE_NOT_FOUND", resolved, `Module not found: ${resolved}`);
@@ -110,8 +136,8 @@ export async function loadUserModuleNamespace<T = Record<string, unknown>>(
   const url = pathToFileURL(resolved);
   if (options.fresh) url.searchParams.set("reload", `${process.pid}-${reloadCounter++}`);
   try {
-    return (await import(url.href)) as T;
+    return (await importFromRoot(url, rootDir)) as T;
   } catch (error) {
-    throw toUserModuleError(error, resolved);
+    throw userModuleFailure(error, resolved);
   }
 }

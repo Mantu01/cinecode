@@ -21,6 +21,9 @@ export const OUTPUT_FORMATS = [
 
 export type RenderFormat = (typeof OUTPUT_FORMATS)[number];
 
+/** Accepted as media input; never accepted as a render output format. */
+export const INPUT_ONLY_FORMATS = ["wav", "mp3", "flac", "aac", "ogg", "opus", "m4a"] as const;
+
 /** How frames reach the writer: live pipe, animation, sequence, still or document. */
 export type OutputStrategy = "stream" | "animation" | "sequence" | "still" | "document";
 
@@ -260,9 +263,12 @@ export function outputPlanFor(format: RenderFormat | undefined): OutputPlan {
   const resolved = format ?? "mp4";
   const plan = OUTPUT_PLANS[resolved];
   if (!plan) {
+    const inputOnly = (INPUT_ONLY_FORMATS as readonly string[]).includes(String(resolved))
+      ? ` ("${resolved}" is an input format, not a render output)`
+      : "";
     throw createError(ErrorCode.CC1008, {
       format: String(resolved),
-      supported: OUTPUT_FORMATS.join(", "),
+      supported: `${OUTPUT_FORMATS.join(", ")}${inputOnly}`,
     });
   }
   return plan;
@@ -344,18 +350,6 @@ export function resolveAudioPlan(format: RenderFormat | undefined, codec?: Audio
     });
   }
   return plan.audio;
-}
-
-/** Generated documentation for the output plan table. */
-export function formatReferenceMarkdown(): string {
-  return [
-    "# Output formats",
-    "",
-    "Generated from `OUTPUT_PLANS` in `src/core/output-plan.ts` — do not edit by hand.",
-    "",
-    formatTableMarkdown(),
-    "",
-  ].join("\n");
 }
 
 /** Markdown table of the plan, generated into the docs so they cannot drift. */

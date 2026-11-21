@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import ffmpegStatic from "@ffmpeg-installer/ffmpeg";
+import { resolveBinary } from "../binary/resolver.js";
 import { encodeWavBuffer } from "./muxer.js";
 import type { AudioBuffer } from "./types.js";
 
@@ -193,7 +193,7 @@ export async function encodeAudioFile(
   ];
 
   return new Promise<AudioEncodeResult>((resolve) => {
-    const child = spawn(ffmpegStatic.path, args, { windowsHide: true });
+    const child = spawn(resolveBinary("ffmpeg").path, args, { windowsHide: true });
     let stderr = "";
     child.stdin.on("error", (err) => {
       if (!stderr) stderr = err.message;

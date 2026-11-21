@@ -8,15 +8,13 @@ export interface ManifestEntryBase {
   readonly name?: string;
   /** File that exports the asset (scene/audio/image/timeline builder). */
   readonly file?: string;
-  readonly tags?: readonly string[];
-  readonly description?: string;
 }
 
 /** A standalone still image registered in `main.ts`. */
 export interface ImageEntry extends ManifestEntryBase {
   readonly width?: number;
   readonly height?: number;
-  readonly format?: "png" | "jpg" | "webp" | "svg";
+  readonly format?: "png" | "jpg" | "webp";
   /** 0-100 for jpg/webp. */
   readonly quality?: number;
   /** Retina multiplier (e.g. 2 for 2x stills). */
@@ -27,18 +25,18 @@ export interface ImageEntry extends ManifestEntryBase {
 
 /** A procedural or file-backed audio asset registered in `main.ts`. */
 export interface AudioEntry extends ManifestEntryBase {
-  readonly kind?: "voice" | "music" | "sfx" | "other";
   readonly src?: string;
   readonly sampleRate?: number;
   readonly channels?: 1 | 2;
   readonly gain?: number;
   readonly duration?: number | string;
-  readonly format?: "wav" | "mp3" | "flac" | "aac";
 }
 
 /** A reusable visual scene registered in `main.ts`. */
 export interface SceneEntry extends ManifestEntryBase {
   readonly duration?: number | string;
+  /** Accept a declared duration shorter than the content and report dropped frames. */
+  readonly truncate?: boolean;
   readonly width?: number;
   readonly height?: number;
   readonly fps?: number;
@@ -48,6 +46,8 @@ export interface SceneEntry extends ManifestEntryBase {
 /** A multi-scene timeline registered in `main.ts`. */
 export interface TimelineEntry extends ManifestEntryBase {
   readonly duration?: number | string;
+  /** Accept a declared duration shorter than the content and report dropped frames. */
+  readonly truncate?: boolean;
   readonly width?: number;
   readonly height?: number;
   readonly fps?: number;

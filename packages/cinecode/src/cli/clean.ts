@@ -1,8 +1,7 @@
 import { Command } from "commander";
 import { rm, readdir, stat } from "node:fs/promises";
 import { resolve } from "node:path";
-import { loadConfig } from "../config/schema.js";
-import { resolveProjectLocation } from "../config/project.js";
+import { loadProjectContext } from "./project-context.js";
 import { formatCacheGcResult, pruneStaleEntries } from "../pipeline/cache-gc.js";
 
 interface CleanOptions {
@@ -55,11 +54,9 @@ function formatSize(bytes: number): string {
 }
 
 export async function cleanCommand(options: CleanOptions): Promise<void> {
-  const location = resolveProjectLocation({ root: options.root, config: options.config });
-  const config = await loadConfig(location.configPath);
-
-  const cacheDir = resolve(location.root, config.cacheDir);
-  const outputDir = resolve(location.root, config.outputDir);
+  const context = await loadProjectContext({ root: options.root, config: options.config });
+  const cacheDir = context.roots.cache;
+  const outputDir = context.roots.output;
 
   if (options.pruneStaleDays !== undefined) {
     const result = await pruneStaleEntries(cacheDir, options.pruneStaleDays, { dryRun: options.dryRun === true });

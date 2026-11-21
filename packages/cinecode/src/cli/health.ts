@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { statfs } from "node:fs/promises";
 import { cpus, totalmem } from "node:os";
 import { resolve } from "node:path";
-import ffmpegStatic from "@ffmpeg-installer/ffmpeg";
+import { resolveBinary } from "../binary/resolver.js";
 import { checkRuntime } from "../loader/index.js";
 import { createError, ErrorCode } from "../errors/index.js";
 import { runReport } from "./run-report.js";
@@ -83,7 +83,7 @@ function runBinary(path: string, args: readonly string[], timeoutMs = 5000): Pro
 }
 
 async function probeFfmpeg(): Promise<FfmpegHealth> {
-  const binaryPath = ffmpegStatic.path;
+  const binaryPath = resolveBinary("ffmpeg").path;
   const banner = await runBinary(binaryPath, ["-hide_banner", "-version"]);
   if (!banner) {
     return { version: "not found", path: binaryPath, h264: false, hevc: false, av1: false, vp9: false };
@@ -181,7 +181,7 @@ function formatHealth(report: SystemHealthReport): string {
   lines.push(`memory        ${report.workers.totalMemoryMb} MB total`);
   lines.push(`disk cache    ${report.diskSpace.cacheDir}`);
   lines.push(`disk temp     ${report.diskSpace.tempDir}`);
-  lines.push(`gpu           ${report.gpu.available ? `available (${report.gpu.backend})` : "not available"}`);
+  lines.push(`canvas        ${report.gpu.available ? `available (${report.gpu.backend})` : "not available"}`);
   if (report.issues.length > 0) {
     lines.push("");
     for (const issue of report.issues) lines.push(`⚠ ${issue}`);
@@ -191,7 +191,7 @@ function formatHealth(report: SystemHealthReport): string {
 
 export function createHealthCommand(): Command {
   return new Command("health")
-    .description("Report ffmpeg, Node, worker, disk and GPU health (offline)")
+    .description("Report ffmpeg, Node, worker, disk and canvas acceleration health (offline)")
     .option("--cache <dir>", "Cache directory to inspect")
     .option("--strict", "Exit non-zero when any issue is detected")
     .action(async (options: { cache?: string; json?: boolean; strict?: boolean }) => {

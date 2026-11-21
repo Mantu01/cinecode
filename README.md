@@ -92,7 +92,7 @@ export default defineMain({
     { id: "thumbnail", file: "./src/images/thumbnail.ts", format: "png" },
   ],
   audio: [
-    { id: "ambient", file: "./src/audio/ambient.ts", kind: "music", duration: 6 },
+    { id: "ambient", file: "./src/audio/ambient.ts", duration: 6 },
   ],
   scenes: [
     { id: "intro", file: "./src/scenes/intro.ts", duration: 6 },

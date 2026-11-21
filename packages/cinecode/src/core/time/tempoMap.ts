@@ -90,19 +90,3 @@ export function attachTempo(conversion: FrameConversion, tempo: TempoMap): Frame
 export function createVfrConversion(regions: readonly TempoRegion[], defaultFps: number): FrameConversion {
   return attachTempo(createConversion(defaultFps), createTempoMap(regions, defaultFps));
 }
-
-export function frameToSeconds(frameNumber: number, conversion: FrameConversion): number {
-  const tempo = conversion.tempo;
-  if (!tempo) return frameNumber / conversion.fpsFloat;
-  return framesToTime(tempo.regions, frameNumber, conversion.fpsFloat);
-}
-
-export function secondsToFrame(timeSeconds: number, conversion: FrameConversion): number {
-  const tempo = conversion.tempo;
-  if (!tempo) return Math.round(timeSeconds * conversion.fpsFloat);
-  return Math.round(timeToFrames(tempo.regions, timeSeconds, conversion.fpsFloat));
-}
-
-export function durationInFrames(durationSeconds: number, conversion: FrameConversion): number {
-  return Math.ceil(secondsToFrame(durationSeconds, conversion));
-}

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import ffprobeStatic from "@ffprobe-installer/ffprobe";
+import { resolveBinary } from "../binary/resolver.js";
 import type { MediaMetadata, MediaCache } from "./cache.js";
 
 export interface InspectorOptions {
@@ -22,6 +22,35 @@ export interface ProbeResult {
   readonly audioChannels?: number;
   readonly audioBitDepth?: number;
   readonly audioSampleFormat?: string;
+}
+
+export function normalizeMediaCodec(codec: string | undefined): string | undefined {
+  if (!codec) return undefined;
+  const aliases: Readonly<Record<string, string>> = {
+    libx264: "h264",
+    h264: "h264",
+    libx265: "h265",
+    h265: "h265",
+    hevc: "h265",
+    libaom_av1: "av1",
+    libsvtav1: "av1",
+    av1: "av1",
+    aprores: "prores",
+    prores: "prores",
+    libvpx_vp9: "vp9",
+    vp9: "vp9",
+    ffv1: "ffv1",
+    utvideo: "utvideo",
+    libopus: "opus",
+    opus: "opus",
+    ac3: "ac3",
+    eac3: "eac3",
+    flac: "flac",
+    pcm_s16le: "pcm_s16le",
+    pcm_s24le: "pcm_s24le",
+    pcm_s32le: "pcm_s32le",
+  };
+  return aliases[codec.toLowerCase()] ?? codec.toLowerCase();
 }
 
 function parseFps(rate: string): number {
@@ -67,7 +96,7 @@ export function probeMediaFile(filePath: string): Promise<ProbeResult> {
       filePath,
     ];
 
-    const child = spawn(ffprobeStatic.path, args, { windowsHide: true });
+    const child = spawn(resolveBinary("ffprobe").path, args, { windowsHide: true });
     let stdout = "";
     let stderr = "";
 

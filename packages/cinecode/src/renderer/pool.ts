@@ -199,6 +199,12 @@ function registerByteCache(cache: { stats(): CacheStats }): void {
   byteCacheRegistry.push(cache);
 }
 
+/** A disposed job's caches stop counting toward the live job totals. */
+export function unregisterByteCache(cache: { stats(): CacheStats }): void {
+  const index = byteCacheRegistry.indexOf(cache);
+  if (index >= 0) byteCacheRegistry.splice(index, 1);
+}
+
 /** Every renderer cache with its current bytes, limit and eviction count. */
 export function getRendererCacheStats(): readonly CacheStats[] {
   return byteCacheRegistry.map((cache) => cache.stats());

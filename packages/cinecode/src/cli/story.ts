@@ -8,6 +8,7 @@ import type { TransitionRef } from "../core/types/clips.js";
 import { multiSelect } from "./prompt-select.js";
 import { createError, ErrorCode, isCinecodeError } from "../errors/index.js";
 import { runReport } from "./run-report.js";
+import { loadProjectContext } from "./project-context.js";
 import { validateComposition } from "../core/validation/index.js";
 
 export interface SceneShot {
@@ -129,9 +130,10 @@ export function storyboardToComposition(board: Storyboard): Composition {
   return comp;
 }
 
-export function writeGeneratedComposition(board: Storyboard, cwd = process.cwd()): string {
+export function writeGeneratedComposition(board: Storyboard, dir: string): string {
   const composition = storyboardToComposition(board);
-  const target = path.join(cwd, "generated-composition.ts");
+  fs.mkdirSync(dir, { recursive: true });
+  const target = path.join(dir, "generated-composition.ts");
   const source = `import { defineConfig } from "cinecode";\n\nexport default defineConfig(${JSON.stringify(composition, null, 2)});\n`;
   fs.writeFileSync(target, source, "utf8");
   return target;
@@ -203,14 +205,15 @@ export function createStoryCommand(): Command {
     .option("-o, --out <dir>", "Output directory for web bundle", "./dist/story")
     .option("--title <title>", "Story title", "Cinecode Review")
     .option("--board <path>", "Storyboard JSON path (auto-detects ./storyboard.json)")
-    .option("--share", "Upload story and generate short shareable URL", false)
-    .option("--expires <time>", "Link expiration (e.g. 24h, 7d)", "48h")
-    .action(async (entry: string, options) => {
+    .action(async (entry: string, options, command: Command) => {
       console.log(`Generating interactive story for '${entry}'...`);
+      const merged = { ...command.optsWithGlobals(), ...options } as { root?: string; config?: string };
+      const context = await loadProjectContext({ root: merged.root, config: merged.config, allowStandalone: true });
+      const entryPath = path.resolve(context.root, entry);
 
-      const outDir = path.resolve(options.out);
+      const outDir = path.resolve(context.root, options.out);
       fs.mkdirSync(outDir, { recursive: true });
-      runReport.setProject({ root: process.cwd(), manifest: path.resolve(entry) });
+      runReport.setProject({ root: context.root, manifest: entryPath });
       runReport.expectArtifact("story");
 
       let board: Storyboard | undefined;
@@ -218,12 +221,12 @@ export function createStoryCommand(): Command {
       if (options.board) {
         boardSource = path.resolve(options.board);
       } else {
-        const candidate = path.resolve("storyboard.json");
-        if (!fs.existsSync(path.resolve(entry)) && fs.existsSync(candidate)) {
+        const candidate = path.resolve(context.root, "storyboard.json");
+        if (!fs.existsSync(entryPath) && fs.existsSync(candidate)) {
           boardSource = candidate;
         }
       }
-      if (!boardSource && !fs.existsSync(path.resolve(entry))) {
+      if (!boardSource && !fs.existsSync(entryPath)) {
         board = await interactiveStoryboard();
         console.log(pc.dim("No entry or storyboard.json found — using template storyboard"));
       }
@@ -233,7 +236,7 @@ export function createStoryCommand(): Command {
 
       if (board) {
         const composition = storyboardToComposition(board);
-        const generatedPath = writeGeneratedComposition(board);
+        const generatedPath = writeGeneratedComposition(board, path.join(context.roots.output, "scenes"));
         runReport.artifact({ kind: "composition", path: generatedPath, units: 1, unit: "file" });
         console.log(pc.green(`✔ Generated composition from storyboard: ${generatedPath}`));
         const html = bundleStoryHtml(composition, { title: options.title });
@@ -242,14 +245,11 @@ export function createStoryCommand(): Command {
         runReport.artifact({ kind: "story", path: htmlPath, units: 1, unit: "file" });
         runReport.result({ composition: generatedPath, html: htmlPath });
         console.log(pc.green(`✔ Bundled standalone review story: ${htmlPath}`));
-        if (options.share) {
-          printLocalShareInfo(htmlPath);
-        }
         return;
       }
 
       let comp: Composition;
-      const absEntry = path.resolve(entry);
+      const absEntry = entryPath;
       if (absEntry.endsWith(".json")) {
         try {
           comp = JSON.parse(fs.readFileSync(absEntry, "utf8"));
@@ -273,17 +273,8 @@ export function createStoryCommand(): Command {
       runReport.result({ html: htmlPath });
 
       console.log(pc.green(`✔ Bundled standalone review story: ${htmlPath}`));
-
-      if (options.share) {
-        printLocalShareInfo(htmlPath);
-      }
     });
 
   return cmd;
 }
 
-function printLocalShareInfo(htmlPath: string): void {
-  const resolved = path.resolve(htmlPath);
-  console.log(`\n${pc.bold("Local Review Bundle:")} ${pc.cyan(`file://${resolved.replace(/\\/g, "/")}`)}`);
-  console.log(pc.dim("Deploy or share this standalone directory to any static file host for team review."));
-}

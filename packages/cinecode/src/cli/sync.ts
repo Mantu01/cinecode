@@ -214,7 +214,7 @@ export function createSyncCommand(): Command {
       reportResolution(resolution, options.dryRun === true || options.verbose === true);
       const report = await buildSyncReport({
         dir: resolution.root,
-        cacheDir: options.cache ?? resolve(resolution.root, resolution.config.cacheDir, "media"),
+        cacheDir: options.cache ? resolve(resolution.root, options.cache) : resolution.context.roots.cache,
         pruneCache: options.prune,
         discoverPlugins: options.plugins,
         ignorePatterns: options.ignore,

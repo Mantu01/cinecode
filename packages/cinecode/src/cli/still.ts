@@ -8,9 +8,10 @@ import { registerProjectFonts } from "../renderer/text/fonts.js";
 import { createError, ErrorCode } from "../errors/index.js";
 import { resolveRenderParameters, formatExplainReport, describeExplainReport } from "./precedence.js";
 import { STILL_FORMATS, outputPlanFor, type RenderFormat } from "../core/output-plan.js";
-import { assertOutputFormat } from "../media/formats.js";
+import { assertRenderableFormat } from "./format-preflight.js";
 import { encodeStillImage, type StillImageFormat } from "../encoder/outputs.js";
 import { withAtomicOutput } from "../encoder/output.js";
+import { TIME_GRAMMAR } from "../core/time-input.js";
 
 export interface StillOptions {
   composition?: string;
@@ -23,32 +24,22 @@ export interface StillOptions {
   format?: RenderFormat;
   config?: string;
   root?: string;
-  props?: string;
   seed?: number;
   dryRun?: boolean;
   explain?: boolean;
   resolution?: string;
 }
 
-/** Rejects any format that is not a still image, naming the alternatives. */
-function assertStillFormat(format: string): RenderFormat {
-  const normalized = format.toLowerCase();
-  assertOutputFormat(normalized, "image");
-  if (!STILL_FORMATS.includes(normalized as RenderFormat)) {
-    throw createError(
-      ErrorCode.CC2002,
-      { type: "image", path: format },
-      { fixHint: `${format} is not a still image format; use one of ${STILL_FORMATS.join(", ")}.` },
-    );
-  }
-  return normalized as RenderFormat;
+/** Narrows the resolved format to a still image; the preflight already rejected others. */
+function asStillFormat(format: RenderFormat): RenderFormat {
+  if (!STILL_FORMATS.includes(format)) throw createError(ErrorCode.CC1012, { reason: `${format} is not a still image format` });
+  return format;
 }
 
 export async function stillCommand(options: StillOptions): Promise<void> {
-  if (options.format) assertStillFormat(options.format);
   const resolver = createProjectResolver({
     root: options.root,
-    config: options.config ?? options.props,
+    config: options.config,
     file: options.file,
     composition: options.composition,
     timeline: options.timeline,
@@ -92,11 +83,19 @@ export async function stillCommand(options: StillOptions): Promise<void> {
       mode: project.mode,
       selection: project.selection.id ? `${project.selection.kind} ${project.selection.id}` : project.selection.kind,
       config: project.config,
+      roots: project.context.roots,
     },
+    explicit: project.context.explicit,
     kind: "still",
   });
 
   runReport.result({ explain: describeExplainReport(explain) });
+  assertRenderableFormat({
+    command: "still",
+    format: parameters.format.value,
+    fromFrame: parameters.frameWindow.value.from,
+    toFrame: parameters.frameWindow.value.to,
+  });
 
   if (options.explain || options.dryRun) {
     console.log(formatExplainReport(explain));
@@ -108,7 +107,7 @@ export async function stillCommand(options: StillOptions): Promise<void> {
 
   const frame = Math.max(0, parameters.frameWindow.value.from);
   const out = parameters.outputPath.value;
-  const format = assertStillFormat(parameters.format.value);
+  const format = asStillFormat(parameters.format.value);
   const plan = outputPlanFor(format);
 
   runReport.expectArtifact("image");
@@ -150,7 +149,7 @@ export function createStillCommand(): Command {
     .option("-T, --timeline <id>", "Timeline id from main.ts")
     .option("-s, --scene <id>", "Scene id from main.ts")
     .option("-f, --frame <number>", "Frame number", (v) => parseInt(v, 10))
-    .option("-t, --time <timecode|seconds>", "Time (HH:MM:SS:FF or seconds)")
+    .option("--time <time>", `Time (${TIME_GRAMMAR})`)
     .option("-o, --out <path>", "Output file path")
     .option("--format <format>", `Output format: ${STILL_FORMATS.join(", ")}`)
     .option("--resolution <WIDTHxHEIGHT>", "Override resolution")

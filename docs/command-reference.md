@@ -2,7 +2,11 @@
 
 <!-- Generated automatically from CLI command metadata. Do not edit manually. -->
 
-Cinecode provides 34 local CLI commands for project authoring, diagnostics, rendering, and asset generation.
+Cinecode provides 35 local CLI commands for project authoring, diagnostics, rendering, and asset generation.
+
+Informational commands (`help`, `version`, `license`) print text on standard output only, write nothing on standard error, exit `0` and never emit the machine envelope.
+
+A project entry file (`main.ts`) has exactly one accepted shape: `export default defineMain({ images, audio, scenes, timelines })`. A composition, timeline, scene, image or audio definition in `main.ts` is a contract error; definitions belong in the entry files the manifest references.
 
 ## Commands Overview
 
@@ -23,6 +27,7 @@ Cinecode provides 34 local CLI commands for project authoring, diagnostics, rend
 | [`cinecode create`](#create) | Scaffold a new Cinecode project | `cinecode create my-film` |
 | [`cinecode generate`](#generate) | Generate images, audio, scenes or timelines | `cinecode generate image --all` |
 | [`cinecode dev`](#dev) | Start the dev server with HMR | `cinecode dev --config ./cinecode.config.ts` |
+| [`cinecode formats`](#formats) | List input, output and planned media formats | `cinecode formats --json` |
 | [`cinecode presets`](#presets) | List platform deliverable presets | `cinecode presets --json` |
 | [`cinecode thumbnail`](#thumbnail) | Write poster images from the best frame | `cinecode thumbnail ./composition.ts` |
 | [`cinecode edit`](#edit) | Open a composition in the editor or print it | `cinecode edit ./composition.ts` |
@@ -60,7 +65,7 @@ Render a single frame to PNG or JPEG
 | `-T, --timeline <id>` | Timeline id from main.ts | `—` |
 | `-s, --scene <id>` | Scene id from main.ts | `—` |
 | `-f, --frame <number>` | Frame number | `—` |
-| `-t, --time <timecode\|seconds>` | Time (HH:MM:SS:FF or seconds) | `—` |
+| `--time <time>` | Time (HH:MM:SS:FF, HH:MM:SS, MM:SS, 12.5s, 250ms, 12.5 (seconds), 30f or frames(30) (frame index)) | `—` |
 | `-o, --out <path>` | Output file path | `—` |
 | `--format <format>` | Output format: png, jpg, webp | `—` |
 | `--resolution <WIDTHxHEIGHT>` | Override resolution | `—` |
@@ -80,21 +85,23 @@ Render timelines (main.ts) or a standalone composition file to MP4
 | --- | --- | --- |
 | `--file <path>` | Standalone composition file (file mode) | `—` |
 | `-c, --composition <name>` | Composition name (requires --file) | `—` |
-| `-t, --timeline <id>` | Render a single timeline from main.ts | `—` |
+| `-T, --timeline <id>` | Render a single timeline from main.ts | `—` |
 | `-s, --scene <id>` | Render a single scene from main.ts | `—` |
 | `--all` | Render every timeline | `false` |
-| `-p, --preview` | Render preview quality (faster) | `false` |
+| `--preview` | Render preview quality (faster) | `false` |
 | `--quality <level>` | Quality: draft \| preview \| medium \| final \| lossless \| low \| high | `—` |
 | `--codec <codec>` | Video codec: h264 \| h265 \| av1 \| prores \| vp9 \| ffv1 \| utvideo | `—` |
 | `--crf <number>` | Override CRF (0 = lossless) | `—` |
 | `--fps <number>` | Override FPS | `—` |
 | `--resolution <WIDTHxHEIGHT>` | Override resolution | `—` |
 | `-o, --out <path>` | Output file path | `—` |
-| `--from <timecode\|seconds\|frames>` | Start time (HH:MM:SS:FF, seconds, or frames(N)) | `—` |
-| `--to <timecode\|seconds\|frames>` | End time (HH:MM:SS:FF, seconds, or frames(N)) | `—` |
+| `--from <time>` | Start time (HH:MM:SS:FF, HH:MM:SS, MM:SS, 12.5s, 250ms, 12.5 (seconds), 30f or frames(30) (frame index)) | `—` |
+| `--to <time>` | End time (HH:MM:SS:FF, HH:MM:SS, MM:SS, 12.5s, 250ms, 12.5 (seconds), 30f or frames(30) (frame index)) | `—` |
 | `--concurrency <number\|auto>` | Number of worker threads | `—` |
 | `--memory-budget <mb>` | Render memory budget in MiB (frames queued + chunks in flight) | `—` |
-| `--no-cache` | Disable render cache | `false` |
+| `--chunk-size <frames>` | Frames per worker chunk (overrides the heuristic) | `—` |
+| `--hardware-acceleration <mode>` | Encoder backend: auto \| nvenc \| videotoolbox \| qsv \| off | `—` |
+| `--no-cache` | Disable render cache | `—` |
 | `--fresh` | Ignore resume state, start fresh | `false` |
 | `--resume` | Resume from the last durable render checkpoint | `false` |
 | `--overwrite` | Overwrite existing output file | `false` |
@@ -103,7 +110,7 @@ Render timelines (main.ts) or a standalone composition file to MP4
 | `--dry-run` | Print render plan without rendering | `false` |
 | `--seed <number>` | Random seed | `—` |
 | `--format <format>` | Output format: mp4, webm, prores, mkv, avi, gif, apng, png, jpg, webp, pdf, webm-alpha, prores-alpha | `—` |
-| `--preset <name>` | Platform preset (youtube-1080p, youtube-4k, youtube-shorts, tiktok, instagram-reels, instagram-feed-square, instagram-feed-portrait, linkedin, twitter, vimeo-pro, broadcast-sdi, archival-master, web-gif, web-webp) | `—` |
+| `--preset <name>` | Platform preset (youtube-1080p, youtube-4k, youtube-shorts, tiktok, instagram-reels, instagram-feed-square, instagram-feed-portrait, instagram-post, linkedin, twitter, vimeo-pro, broadcast-sdi, archival-master, web-gif, web-webp) | `—` |
 | `--list-presets` | List available platform presets | `false` |
 | `--gif-quality <n>` | GIF quality 1-8 (controls palette size) | `—` |
 | `--gif-dither <mode>` | GIF dithering: floyd-steinberg, sierra-2, atkinson, none | `—` |
@@ -131,7 +138,7 @@ Render one composition at multiple resolutions in a single run
 | Option | Description | Default |
 | --- | --- | --- |
 | `-c, --composition <name>` | Composition name | `—` |
-| `-v, --variants <list>` | Comma-separated variants (480p,720p,1080p,WIDTHxHEIGHT) | `480p,720p,1080p` |
+| `--variants <list>` | Comma-separated variants (480p,720p,1080p,WIDTHxHEIGHT) | `480p,720p,1080p` |
 | `-o, --out <dir>` | Output directory | `—` |
 | `--seed <number>` | Random seed | `—` |
 | `--concurrency <number>` | Worker count | `—` |
@@ -191,7 +198,7 @@ Run environment and project health checks
 
 ### `cinecode health` {#health}
 
-Report ffmpeg, Node, worker, disk and GPU health (offline)
+Report ffmpeg, Node, worker, disk and canvas acceleration health (offline)
 
 **Usage:** `cinecode health --json`
 
@@ -217,7 +224,7 @@ Print resolved timeline for a composition
 | `--timeline <id>` | Timeline id from main.ts | `—` |
 | `--scene <id>` | Scene id from main.ts | `—` |
 | `-f, --frame <number>` | Show clips active at frame | `—` |
-| `-t, --time <timecode\|seconds>` | Show clips active at time (HH:MM:SS:FF or seconds) | `—` |
+| `--time <time>` | Show clips active at time (HH:MM:SS:FF, HH:MM:SS, MM:SS, 12.5s, 250ms, 12.5 (seconds), 30f or frames(30) (frame index)) | `—` |
 | `--deep` | Generate deep dependency graph across audio, visual, and effects | `false` |
 | `--format <format>` | Graph output format: dot, mermaid, ascii | `—` |
 
@@ -260,6 +267,7 @@ Download cloud media files into media directory
 | Option | Description | Default |
 | --- | --- | --- |
 | `--force` | Re-download existing files | `false` |
+| `--confirm` | Explicitly allow network downloads | `—` |
 | `--only <name>` | Download only the specified entry | `—` |
 
 ### `cinecode create` {#create}
@@ -279,7 +287,7 @@ Create a new Cinecode project
 | `--no-git` | Skip git initialization | `—` |
 | `--local-link` | Link local workspace dependency | `false` |
 | `--skip-install` | Skip dependency installation | `false` |
-| `-f, --force` | Proceed even if directory is not empty | `false` |
+| `--force` | Proceed even if directory is not empty | `false` |
 | `--dry-run` | Print plan without writing files | `false` |
 | `-v, --verbose` | Verbose output | `false` |
 
@@ -317,7 +325,12 @@ Start the dev server with granular HMR for scenes, images, and audio
 | `--host <host>` | Host to bind | `—` |
 | `--open` | Open the preview in the browser | `false` |
 | `--no-hmr` | Disable the HMR socket push | `—` |
-| `--metrics-port <number>` | Prometheus metrics port (0 disables) | `—` |
+
+### `cinecode formats` {#formats}
+
+List input, output and planned media formats
+
+**Usage:** `cinecode formats --json`
 
 ### `cinecode presets` {#presets}
 
@@ -402,7 +415,7 @@ Measure per-frame render time, peak memory and regression tracking
 | --- | --- | --- |
 | `-c, --composition-name <name>` | Composition name | `—` |
 | `-n, --frames <number>` | Frames per run | `30` |
-| `-r, --runs <number>` | Number of runs | `3` |
+| `--runs <number>` | Number of runs | `3` |
 | `--seed <number>` | Deterministic seed | `—` |
 | `--compare-baseline` | Compare results against historical baseline | `false` |
 | `--fail-on-regression` | Exit with error code 1 if performance regresses > 5% | `false` |
@@ -413,6 +426,12 @@ Measure per-frame render time, peak memory and regression tracking
 Check npm for a newer cinecode release
 
 **Usage:** `cinecode upgrade`
+
+#### Options
+
+| Option | Description | Default |
+| --- | --- | --- |
+| `--confirm` | Explicitly allow the npm network request | `—` |
 
 ### `cinecode template` {#template}
 
@@ -457,7 +476,7 @@ Semantic comparison between two compositions or git revisions
 
 | Option | Description | Default |
 | --- | --- | --- |
-| `-f, --format <format>` | Output format: text or markdown (use --json for machine output) | `text` |
+| `--format <format>` | Output format: text or markdown (use --json for machine output) | `text` |
 | `--side-by-side` | Display terminal diff side-by-side | `false` |
 
 ### `cinecode story` {#story}
@@ -473,8 +492,6 @@ Generate a standalone interactive web player bundle for team review
 | `-o, --out <dir>` | Output directory for web bundle | `./dist/story` |
 | `--title <title>` | Story title | `Cinecode Review` |
 | `--board <path>` | Storyboard JSON path (auto-detects ./storyboard.json) | `—` |
-| `--share` | Upload story and generate short shareable URL | `false` |
-| `--expires <time>` | Link expiration (e.g. 24h, 7d) | `48h` |
 
 ### `cinecode export-svg` {#export-svg}
 
@@ -490,8 +507,6 @@ Export composition frames as high-precision vector SVG graphics
 | `-r, --range <range>` | Frame range to export (e.g. 0-60) | `—` |
 | `-o, --out <path>` | Output directory or file path | `./dist/svg` |
 | `--viewBox-precision <digits>` | Coordinate precision digits | `3` |
-| `--css-mode <mode>` | CSS styling mode: inline, embedded, external | `inline` |
-| `--font-strategy <strategy>` | Font strategy: embed-base64, link-webfont, convert-to-paths | `convert-to-paths` |
 | `--optimize` | Run SVGO optimization passes | `false` |
 | `-c, --composition <name>` | Composition name | `—` |
 
@@ -530,7 +545,7 @@ Scaffold a new Cinecode project
 | `--no-git` | Skip git initialization | `—` |
 | `--local-link` | Link local workspace dependency | `false` |
 | `--skip-install` | Skip dependency installation | `false` |
-| `-f, --force` | Proceed even if directory is not empty | `false` |
+| `--force` | Proceed even if directory is not empty | `false` |
 | `--dry-run` | Print plan without writing files | `false` |
 | `-v, --verbose` | Verbose output | `false` |
 
@@ -572,6 +587,37 @@ Publish a rendered output locally to a destination directory
 | --- | --- | --- |
 | `--dest <dir>` | Local destination directory | `—` |
 
+## Platform presets
+
+Generated from the single preset table; `--preset`, `render.platformPreset` and `presets --json` use the same values.
+
+| ID | Size | FPS | Format | Codec | CRF | Encoder preset | Audio | Max file size |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `youtube-1080p` | 1920x1080 | 30 | mp4 | h264 | 18 | fast | aac 192 kbps | none |
+| `youtube-4k` | 3840x2160 | 30 | mp4 | h265 | 15 | medium | aac 384 kbps | none |
+| `youtube-shorts` | 1080x1920 | 30 | mp4 | h264 | 20 | fast | aac 128 kbps | none |
+| `tiktok` | 1080x1920 | 30 | mp4 | h264 | 20 | veryfast | aac 128 kbps | 287 MB |
+| `instagram-reels` | 1080x1920 | 30 | mp4 | h264 | 20 | fast | aac 128 kbps | 400 MB |
+| `instagram-feed-square` | 1080x1080 | 30 | mp4 | h264 | 20 | fast | aac 128 kbps | none |
+| `instagram-feed-portrait` | 1080x1350 | 30 | mp4 | h264 | 20 | fast | aac 128 kbps | none |
+| `instagram-post` | 1080x1080 | 30 | mp4 | h264 | 20 | fast | aac 128 kbps | none |
+| `linkedin` | 1920x1080 | 30 | mp4 | h264 | 20 | fast | aac 128 kbps | none |
+| `twitter` | 1920x1080 | 30 | mp4 | h264 | 20 | superfast | aac 128 kbps | 512 MB |
+| `vimeo-pro` | 1920x1080 | 24 | mp4 | h264 | 15 | slow | aac 320 kbps | none |
+| `broadcast-sdi` | 1920x1080 | 25 | prores | prores | 0 | slow | pcm_s24le 2304 kbps | none |
+| `archival-master` | 1920x1080 | 24 | prores-alpha | prores | 0 | slow | pcm_s24le 2304 kbps | none |
+| `web-gif` | 500x500 | 15 | gif | h264 | 0 | medium | none | 5 MB |
+| `web-webp` | 1080x1080 | 30 | webp | h264 | 0 | medium | none | none |
+
+## Validation warnings
+
+`check` and `inspect` report these warnings once per command. `check --strict` turns every warning into a failure with exit code `3`.
+
+| Code | Meaning |
+| --- | --- |
+| `CC3009` | An image, audio or scene entry is not referenced by any timeline. The entry stays valid as a direct `generate` or `render` target. |
+| `CC3010` | A timeline declares `sceneRefs` that its `file` replaces. Remove one source. |
+
 ## Exit Codes
 
 All CLI commands exit with standard codes indicating outcome:
@@ -582,5 +628,6 @@ All CLI commands exit with standard codes indicating outcome:
 | `1` | **runtime** | render, pipeline or unexpected failure |
 | `2` | **usage** | invalid arguments, flags or command |
 | `3` | **validation** | config, media, timeline or plugin validation failure |
-| `4` | **environment** | missing binary, unsupported runtime or network failure |
+| `4` | **environment** | missing binary or network failure |
+| `78` | **unsupportedRuntime** | Node.js version below the declared minimum (exit 78, no other work done) |
 | `130` | **cancelled** | cancelled by user or timeout |

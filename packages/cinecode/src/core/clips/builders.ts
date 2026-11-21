@@ -13,6 +13,7 @@ import type {
   VisualClip,
 } from "../types/clips.js";
 import type { AudioTrack, AnyTrack, Timeline, VisualTrack, SubtitleTrack } from "../types/tracks.js";
+import { brandDefinition } from "../../manifest/brands.js";
 import type { Composition, CompositionProps } from "../types/composition.js";
 import type { BlendMode } from "../types/visual.js";
 import { type FrameConversion, createConversion, timeInputToFrames } from "../time/convert.js";
@@ -141,7 +142,10 @@ export function timeline(...inputs: Array<readonly AnyTrack[] | AnyTrack | Timel
 }
 
 export function composition(props: CompositionProps): Composition {
-  return { ...props, background: props.background ?? "#000000", audio: props.audio ?? { sampleRate: 48000, channels: 2, masterVolume: 1 } };
+  return brandDefinition(
+    { ...props, background: props.background ?? "#000000", audio: props.audio ?? { sampleRate: 48000, channels: 2, masterVolume: 1 } },
+    "composition",
+  );
 }
 
 export function compositionDuration(composition: Composition, conversion: FrameConversion): number {

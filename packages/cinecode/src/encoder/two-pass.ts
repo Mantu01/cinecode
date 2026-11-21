@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
 import { createWriteStream, type WriteStream } from "node:fs";
-import { stat, rm } from "node:fs/promises";
-import ffmpegStatic from "@ffmpeg-installer/ffmpeg";
+import { stat, statfs, rm } from "node:fs/promises";
+import { dirname } from "node:path";
+import { resolveBinary } from "../binary/resolver.js";
 import { buildVideoEncoderArgs, type EncoderOptions, type EncoderResult } from "./index.js";
 
 export interface FrameSink {
@@ -78,7 +79,7 @@ function estimateBitrateKbps(width: number, height: number, fps: number, crf: nu
 
 function runFfmpeg(args: readonly string[]): Promise<number> {
   return new Promise((resolve) => {
-    const child = spawn(ffmpegStatic.path, args, { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
+    const child = spawn(resolveBinary("ffmpeg").path, args, { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
     let stderr = "";
     child.stderr?.on("data", (chunk) => { stderr += chunk.toString(); });
     child.on("error", () => resolve(1));
@@ -92,6 +93,20 @@ function runFfmpeg(args: readonly string[]): Promise<number> {
 export async function encodeTwoPass(options: TwoPassOptions): Promise<EncoderResult> {
   const passLogFile = `${options.rawPath.replace(/\.rgba$/, "")}-pass`;
   const bitrateKbps = options.bitrateKbps ?? estimateBitrateKbps(options.width, options.height, options.fps, options.crf);
+  const rawInfo = await stat(options.rawPath).catch(() => null);
+  const estimatedBytes = (rawInfo?.size ?? options.width * options.height * 4 * options.fps * 10) * 2;
+  const targetVolume = await statfs(dirname(options.outputPath)).catch(() => null);
+  const freeBytes = targetVolume ? targetVolume.bsize * targetVolume.bavail : null;
+  if (freeBytes !== null && freeBytes < estimatedBytes) {
+    await rm(options.rawPath, { force: true });
+    return {
+      success: false,
+      outputPath: options.outputPath,
+      duration: 0,
+      fileSize: 0,
+      error: `Two-pass intermediate estimate ${estimatedBytes} bytes exceeds free disk space ${freeBytes} bytes`,
+    };
+  }
   const input = [
     "-v", "error", "-y",
     "-f", "rawvideo",
@@ -106,6 +121,11 @@ export async function encodeTwoPass(options: TwoPassOptions): Promise<EncoderRes
     ...buildVideoEncoderArgs({ ...options, pass: 1, passLogFile, bitrateKbps }),
   ]);
   if (pass1 !== 0) {
+    await rm(options.rawPath, { force: true });
+    await Promise.all([
+      rm(`${passLogFile}-0.log`, { force: true }),
+      rm(`${passLogFile}-0.log.mbtree`, { force: true }),
+    ]).catch(() => undefined);
     return { success: false, outputPath: options.outputPath, duration: 0, fileSize: 0, error: `Two-pass analysis (pass 1) failed with exit code ${pass1}` };
   }
 
@@ -118,6 +138,7 @@ export async function encodeTwoPass(options: TwoPassOptions): Promise<EncoderRes
   await Promise.all([
     rm(`${passLogFile}-0.log`, { force: true }),
     rm(`${passLogFile}-0.log.mbtree`, { force: true }),
+    rm(options.rawPath, { force: true }),
   ]).catch(() => undefined);
 
   if (pass2 !== 0) {

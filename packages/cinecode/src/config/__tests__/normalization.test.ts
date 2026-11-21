@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { collectSchemaFields } from "../json-schema.js";
-import { explicitConfigPaths, loadConfig, normalizeConfig } from "../schema.js";
+import { explicitPathsOf, loadConfig, normalizeConfig } from "../schema.js";
 import { REMOVED_CONFIG_KEYS, validateAuthoringConfig } from "../validator.js";
 import { SCHEMA_VERSION } from "../zod-schema.js";
 import { ErrorCode } from "../../errors/index.js";
@@ -18,7 +18,7 @@ const FULL: Record<string, unknown> = {
   project: { entry: "./main.ts", sourceDir: "./src", mediaDir: "./media", outputDir: "./output", cacheDir: "./.cache" },
   video: { width: 1280, height: 720, fps: 24, defaultDuration: 12, background: "#112233" },
   images: { defaultFormat: "webp", quality: 80, scaleFactor: 2 },
-  dev: { port: 4100, host: "127.0.0.1", open: true, hmr: false, metricsPort: 4101 },
+  dev: { port: 4100, host: "127.0.0.1", open: true, hmr: false },
   sourceDir: "./src",
   mediaDir: "./media",
   outputDir: "./output",
@@ -97,7 +97,7 @@ function writePath(source: Record<string, unknown>, path: string, value: unknown
 test("a fully populated config normalizes every retained field", () => {
   const config = normalizeConfig(FULL);
   const fields = collectSchemaFields().filter((field) => !["$schema", "extends", "composition"].includes(field.path));
-  const explicit = explicitConfigPaths(config);
+  const explicit = explicitPathsOf(FULL);
 
   for (const field of fields) {
     const authored = readPath(FULL, field.path);
@@ -118,7 +118,7 @@ test("a fully populated config normalizes every retained field", () => {
   assert.equal(config.audio.masterVolume, 0.8);
   assert.equal(config.ignorePatterns[0], "**/*.tmp");
   assert.equal(config.pluginPrecedence[0], "x");
-  assert.equal(explicitConfigPaths(normalizeConfig({ render: { bitrate: 900 } })).has("render.alpha"), false);
+  assert.equal(explicitPathsOf({ render: { bitrate: 900 } }).has("render.alpha"), false);
 });
 
 test("retained render fields reach the encoder plan", () => {

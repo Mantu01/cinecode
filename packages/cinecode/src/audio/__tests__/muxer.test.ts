@@ -5,12 +5,12 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import ffmpegStatic from "@ffmpeg-installer/ffmpeg";
+import { resolveBinary } from "../../binary/resolver.js";
 import { muxAudioVideo, planMuxAudio } from "../muxer.js";
 import type { AudioBuffer } from "../types.js";
 import { probeMediaFile } from "../../media/inspector.js";
 
-const ffmpegPath = ffmpegStatic.path;
+const ffmpegPath = resolveBinary("ffmpeg").path;
 
 function tone(seconds: number, amplitude = 0.5): AudioBuffer {
   const sampleRate = 48000;

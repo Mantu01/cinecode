@@ -83,6 +83,11 @@ export class PreviewEngine {
     this.scale = clampResolutionScale(scale);
   }
 
+  /** Releases this engine's canvases and caches; safe to call more than once. */
+  dispose(): void {
+    this.session.dispose();
+  }
+
   getScale(): ResolutionScale {
     return this.scale;
   }

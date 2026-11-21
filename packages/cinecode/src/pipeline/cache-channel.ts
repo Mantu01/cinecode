@@ -51,11 +51,11 @@ export interface CacheChannelOptions {
 export function attachCacheChannel(
   worker: WorkerLike,
   providerOrOptions: CacheProvider | CacheChannelOptions,
-): void {
+): () => void {
   const single = typeof providerOrOptions === "function" ? providerOrOptions : providerOrOptions.single;
   const batch = typeof providerOrOptions === "object" ? providerOrOptions.batch : undefined;
 
-  worker.on("message", (msg: unknown) => {
+  const onMessage = (msg: unknown): void => {
     if (isCacheRequest(msg)) {
       if (!single && !batch) {
         worker.postMessage({ type: "cache-response", key: msg.key, hit: false } satisfies CacheResponse);
@@ -156,11 +156,22 @@ export function attachCacheChannel(
         worker.postMessage({ type: "cache-batch-response", id: msg.id, items } satisfies CacheBatchResponse);
       }
     }
-  });
+  };
+
+  worker.on("message", onMessage);
+  return () => {
+    if (typeof worker.off === "function") {
+      worker.off("message", onMessage);
+    } else if (typeof (worker as { removeListener?: (event: string, fn: unknown) => void }).removeListener === "function") {
+      (worker as { removeListener: (event: string, fn: unknown) => void }).removeListener("message", onMessage);
+    }
+  };
 }
 
 export interface WorkerLike {
   on(event: "message", listener: (msg: unknown) => void): unknown;
+  off?(event: "message", listener: (msg: unknown) => void): unknown;
+  removeListener?(event: "message", listener: (msg: unknown) => void): unknown;
   postMessage(value: unknown): void;
 }
 

@@ -4,6 +4,7 @@ import { dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { CinecodePlugin, PluginKind, PluginManifest } from "./types.js";
 import { parsePluginModule } from "./loader.js";
+import { recordDegradation } from "../errors/degradations.js";
 
 export interface DiscoveredPlugin {
   readonly packageName: string;
@@ -240,7 +241,12 @@ async function discoverLocalPlugins(
 export async function discoverPlugins(baseDir: string): Promise<readonly CinecodePlugin[]> {
   const { plugins, warnings } = await discoverPluginsDetailed(baseDir);
   for (const warning of warnings) {
-    console.warn(`[cinecode:plugin] ${warning}`);
+    recordDegradation({
+      code: "CC7001",
+      what: "plugin discovery warning",
+      reason: warning,
+      instead: "plugin skipped",
+    });
   }
   return plugins;
 }

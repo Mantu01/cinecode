@@ -1,14 +1,9 @@
 import { spawn } from "node:child_process";
-import ffmpegStatic from "@ffmpeg-installer/ffmpeg";
+import { resolveBinary } from "../binary/resolver.js";
 import type { MediaCache } from "./cache.js";
 import { frameCacheKey, getDefaultFrameCache, type FrameCache } from "./frame-cache.js";
 import { createError, ErrorCode } from "../errors/codes.js";
 import { recordDegradation } from "../errors/degradations.js";
-
-async function getFfprobeStatic(): Promise<{ path: string }> {
-  const mod = await import("@ffprobe-installer/ffprobe");
-  return mod.default;
-}
 
 export interface FrameExtractorOptions {
   cache: MediaCache;
@@ -48,7 +43,6 @@ export async function extractFrameByIndex(
 }
 
 export async function getVideoResolution(filePath: string): Promise<{ width: number; height: number }> {
-  const ffprobeStatic = await getFfprobeStatic();
   return new Promise((resolve, reject) => {
     const args = [
       "-v", "error",
@@ -58,7 +52,7 @@ export async function getVideoResolution(filePath: string): Promise<{ width: num
       filePath,
     ];
 
-    const child = spawn(ffprobeStatic.path, args, { windowsHide: true });
+    const child = spawn(resolveBinary("ffprobe").path, args, { windowsHide: true });
     let stdout = "";
     child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
     child.on("close", (code) => {
@@ -104,7 +98,7 @@ async function extractFrameWithFfmpeg(
       "-",
     ];
 
-    const child = spawn(ffmpegStatic.path, args, { windowsHide: true });
+    const child = spawn(resolveBinary("ffmpeg").path, args, { windowsHide: true });
     const chunks: Buffer[] = [];
     let stderr = "";
 
@@ -155,7 +149,7 @@ async function extractFrameBatchWithFfmpeg(
       "-",
     ];
 
-    const child = spawn(ffmpegStatic.path, args, { windowsHide: true });
+    const child = spawn(resolveBinary("ffmpeg").path, args, { windowsHide: true });
     const chunks: Buffer[] = [];
     let stderr = "";
 
@@ -311,7 +305,7 @@ function seekToTimestamp(timestampSeconds: number): number {
 
 function collectFfmpeg(args: readonly string[]): Promise<Buffer> {
   return new Promise<Buffer>((resolve, reject) => {
-    const child = spawn(ffmpegStatic.path, [...args], { windowsHide: true });
+    const child = spawn(resolveBinary("ffmpeg").path, [...args], { windowsHide: true });
     const chunks: Buffer[] = [];
     let stderr = "";
     child.stdout.on("data", (chunk: Buffer) => {
@@ -412,7 +406,7 @@ export async function* extractFrameRange(
     "-pix_fmt", "rgba",
     "-",
   ];
-  const child = spawn(ffmpegStatic.path, args, { windowsHide: true });
+  const child = spawn(resolveBinary("ffmpeg").path, args, { windowsHide: true });
   const queue: Buffer[] = [];
   let pending: Buffer = Buffer.alloc(0);
   let stderr = "";

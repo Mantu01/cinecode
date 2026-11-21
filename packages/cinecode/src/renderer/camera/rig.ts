@@ -1,4 +1,4 @@
-import { mat4, quat, vec3 } from "wgpu-matrix";
+import { mat4, quat, vec3 } from "./math.js";
 
 export type Vec3 = readonly [number, number, number];
 export type Quat = readonly [number, number, number, number];

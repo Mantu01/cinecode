@@ -150,7 +150,7 @@ export function validateTimeline(
           position,
           hint: behavior === "strict" ? "Trim the clip or raise composition.duration" : "The clip will be clamped to the composition duration",
         });
-        issues.push(behavior === "strict" ? issue : { ...issue, severity: "warning" });
+        issues.push({ ...issue, severity: behavior === "strict" ? "error" : "warning" });
       }
     }
   }

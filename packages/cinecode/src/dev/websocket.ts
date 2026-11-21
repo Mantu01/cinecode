@@ -15,7 +15,7 @@ export interface WsClient {
     isHost?: boolean;
   };
   send(payload: unknown): void;
-  sendBinary(buffer: Buffer): void;
+  sendBinary?: (buffer: Buffer) => void;
   close(): void;
 }
 
@@ -27,6 +27,10 @@ interface ClientState {
   client: WsClient | null;
   messageTimestamps: number[];
   throttledUntil: number;
+  receiveBuffer: Buffer;
+  fragmentOpcode: number;
+  fragmentPayload: Buffer;
+  closeCode: number | null;
 }
 
 export type WsMessageHandler = (client: WsClient, data: unknown) => void;
@@ -90,6 +94,10 @@ export class WebSocketHub {
       client: null,
       messageTimestamps: [],
       throttledUntil: 0,
+      receiveBuffer: Buffer.alloc(0),
+      fragmentOpcode: 0,
+      fragmentPayload: Buffer.alloc(0),
+      closeCode: null,
     };
     this.clients.set(id, state);
 
@@ -108,7 +116,6 @@ export class WebSocketHub {
         isHost: id === 1,
       },
       send: (payload: unknown) => this.sendTo(state, payload),
-      sendBinary: (buffer: Buffer) => this.sendBinaryTo(state, buffer),
       close: () => this.closeClient(state),
     };
     state.client = client;
@@ -195,11 +202,6 @@ export class WebSocketHub {
     client.socket.write(encodeFrame(Buffer.from(text, "utf-8"), 0x1));
   }
 
-  private sendBinaryTo(client: ClientState, buffer: Buffer): void {
-    if (client.closed) return;
-    client.socket.write(encodeFrame(buffer, 0x2));
-  }
-
   private closeClient(client: ClientState): void {
     if (client.closed) return;
     client.closed = true;
@@ -282,52 +284,79 @@ export class WebSocketHub {
   }
 
   private consume(socket: Duplex, chunk: Buffer): void {
+    const state = [...this.clients.values()].find((entry) => entry.socket === socket);
+    if (!state) return;
+    state.receiveBuffer = Buffer.concat([state.receiveBuffer, chunk]);
     let offset = 0;
-    while (offset + 2 <= chunk.length) {
-      const opcode = chunk[offset]! & 0x0f;
-      const masked = (chunk[offset + 1]! & 0x80) !== 0;
-      let length = chunk[offset + 1]! & 0x7f;
+    while (offset + 2 <= state.receiveBuffer.length) {
+      const frame = state.receiveBuffer;
+      const final = (frame[offset]! & 0x80) !== 0;
+      const opcode = frame[offset]! & 0x0f;
+      const masked = (frame[offset + 1]! & 0x80) !== 0;
+      let length = frame[offset + 1]! & 0x7f;
       let headerSize = 2;
       if (length === 126) {
-        if (offset + 4 > chunk.length) return;
-        length = chunk.readUInt16BE(offset + 2);
+        if (offset + 4 > frame.length) break;
+        length = frame.readUInt16BE(offset + 2);
         headerSize = 4;
       } else if (length === 127) {
-        if (offset + 10 > chunk.length) return;
-        length = Number(chunk.readBigUInt64BE(offset + 2));
+        if (offset + 10 > frame.length) break;
+        length = Number(frame.readBigUInt64BE(offset + 2));
         headerSize = 10;
       }
       let payloadStart = offset + headerSize;
       let maskKeyOffset = -1;
       if (masked) {
-        if (payloadStart + 4 > chunk.length) return;
+        if (payloadStart + 4 > frame.length) break;
         maskKeyOffset = payloadStart;
         payloadStart += 4;
       }
-      if (payloadStart + length > chunk.length) return;
+      if (payloadStart + length > frame.length) break;
+      if (length > 1024 * 1024) {
+        socket.write(Buffer.from([0x88, 0x02, 0x03, 0xe9]));
+        socket.end();
+        state.closed = true;
+        return;
+      }
+      const body = Buffer.from(frame.subarray(payloadStart, payloadStart + length));
+      if (masked && maskKeyOffset >= 0) {
+        for (let index = 0; index < body.length; index += 1) {
+          body[index] = body[index]! ^ frame[maskKeyOffset + (index % 4)]!;
+        }
+      }
       offset = payloadStart + length;
-
       if (opcode === 0x8) {
-        socket.write(Buffer.from([0x88, 0x00]));
+        state.closeCode = body.length >= 2 ? body.readUInt16BE(0) : null;
+        socket.write(Buffer.concat([Buffer.from([0x88, body.length]), body]));
         socket.end();
         return;
       }
       if (opcode === 0x9) {
-        socket.write(Buffer.from([0x8a, 0x00]));
-      }
-      if (opcode === 0x1 && this.messageHandlers.length > 0) {
-        const client = [...this.clients.values()].find((state) => state.socket === socket)?.client ?? null;
-        if (client) {
-          const body = Buffer.from(chunk.subarray(payloadStart, payloadStart + length));
-          if (masked && maskKeyOffset >= 0) {
-            for (let i = 0; i < body.length; i += 1) {
-              body[i] = body[i]! ^ chunk[maskKeyOffset + (i % 4)]!;
-            }
-          }
-          this.dispatchMessage(client, body);
+        socket.write(encodeFrame(body, 0xA));
+      } else if (opcode === 0x1 || opcode === 0x2) {
+        if (!final) {
+          state.fragmentOpcode = opcode;
+          state.fragmentPayload = body;
+        } else if (state.fragmentPayload.length > 0 && state.fragmentOpcode === opcode) {
+          const complete = Buffer.concat([state.fragmentPayload, body]);
+          state.fragmentPayload = Buffer.alloc(0);
+          state.fragmentOpcode = 0;
+          if (state.client) this.dispatchMessage(state.client, complete);
+        } else if (state.client) {
+          this.dispatchMessage(state.client, body);
+        }
+      } else if (opcode === 0x0 && state.fragmentPayload.length > 0) {
+        state.fragmentPayload = Buffer.concat([state.fragmentPayload, body]);
+        if (final) {
+          const complete = state.fragmentPayload;
+          state.fragmentPayload = Buffer.alloc(0);
+          const fragmentOpcode = state.fragmentOpcode;
+          state.fragmentOpcode = 0;
+          if (state.client && fragmentOpcode === 0x1) this.dispatchMessage(state.client, complete);
         }
       }
     }
+    state.receiveBuffer = state.receiveBuffer.subarray(offset);
   }
 
   private assignColor(id: number): string {

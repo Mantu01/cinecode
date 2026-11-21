@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { get } from "node:https";
+import { createError, ErrorCode } from "../errors/index.js";
 
 export interface UpgradeInfo {
   readonly currentVersion: string;
@@ -50,7 +51,7 @@ export async function checkForUpgrade(currentVersion = process.env.CINECODE_VERS
     currentVersion,
     latestVersion,
     hasUpgrade,
-    changelogUrl: hasUpgrade ? "https://github.com/cinecode/cinecode/releases" : undefined,
+    changelogUrl: hasUpgrade ? "https://github.com/Mantu01/cinecode/releases" : undefined,
     breakingChanges: hasUpgrade && latestVersion.split(".")[0] !== currentVersion.split(".")[0]
       ? ["Major version bump — review the migration guide before upgrading."]
       : undefined,
@@ -60,7 +61,11 @@ export async function checkForUpgrade(currentVersion = process.env.CINECODE_VERS
 export function createUpgradeCommand(): Command {
   return new Command("upgrade")
     .description("Check npm for a newer cinecode release")
-    .action(async () => {
+    .option("--confirm", "Explicitly allow the npm network request")
+    .action(async (options: { confirm?: boolean }) => {
+      if (!options.confirm) {
+        throw createError(ErrorCode.CC7004, { reason: "Network opt-in missing: rerun `cinecode upgrade --confirm`." });
+      }
       const info = await checkForUpgrade();
       console.log(`Current version: ${info.currentVersion}`);
       console.log(`Latest version:  ${info.latestVersion}`);

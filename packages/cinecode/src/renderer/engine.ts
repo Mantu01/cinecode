@@ -6,6 +6,9 @@ import type {
   VisualClip,
   AudioClip,
   SoundClip,
+  TtsClip,
+  SceneClip,
+  Timeline,
   EffectRef,
   VideoClip,
   SvgClip,
@@ -22,9 +25,15 @@ import type {
   MultiCameraClip,
 } from "../core/types/index.js";
 import type { FrameConversion } from "../core/time/index.js";
-import { createConversion, createVfrConversion, frameToSeconds } from "../core/time/index.js";
+import {
+  createConversion,
+  createVfrConversion,
+  frameToSeconds,
+  compositionConversion,
+  compositionTotalFrames,
+} from "../core/time/index.js";
 import { resolveClipKeyframes } from "../core/keyframes/engine.js";
-import { computeClipSpan, validateComposition, compositionValidationError } from "../core/validation/index.js";
+import { CLIP_TYPES, computeClipSpan, validateComposition, compositionValidationError } from "../core/validation/index.js";
 import { extractFramesInMemory, type ExtractedFrame } from "../media/frames.js";
 import { calculateSourceFrame, type ConformParams } from "../media/conform.js";
 import type { Rgba, Gradient } from "./color/types.js";
@@ -40,7 +49,8 @@ import {
   drawPath,
 } from "./shapes/draw.js";
 import type { TextStyle } from "./text/engine.js";
-import { prepareText, checkMissingGlyphs } from "./text/engine.js";
+import { prepareText } from "./text/engine.js";
+import { preflightText } from "./text/preflight.js";
 import type { CompositedLayer, Mask, Matte } from "./composite/engine.js";
 import { createCanvas, createContext, clearCanvas, compositeLayers } from "./composite/engine.js";
 import { createEffectInput, clearTempCanvasPool } from "../effects/engine.js";
@@ -103,27 +113,26 @@ import {
 import { clampResolutionScale } from "./scale.js";
 import { renderMultiCameraFrame } from "./multi-camera.js";
 import { evictOldest, ByteBoundedCache, getRendererCacheStats } from "./pool.js";
+import {
+  type RenderSession,
+  createRenderSession,
+  getFallbackSession,
+  getLiveSessionCount,
+  resetLiveSessionCount,
+  type FrameSurfaceState,
+} from "./session.js";
 
-export { getRendererCacheStats };
+export { getRendererCacheStats, createRenderSession, getLiveSessionCount, resetLiveSessionCount };
+export type { RenderSession };
+export type RenderSessionState = RenderSession;
 
 /** Drops every renderer pool. Called between render jobs and on worker exit. */
-export function clearRendererCaches(): void {
-  imageCache.clear();
-  videoFrameCache.clear();
-  videoFrameOrigin.clear();
-  clearTempCanvasPool();
-  rgbaBufferCache.clear();
-  drawBufferCache.clear();
-  renderTargetCache.clear();
-  groupCanvasCache.clear();
-  transitionCanvasCache.clear();
-  transparentCanvasCache.clear();
-  particleCanvasCache.clear();
-  noiseTextureCache.clear();
-  skyboxCache.clear();
-  videoFrameCanvasPool.clear();
-  model3dRendererCache.clear();
-  scaledSurfaceCache.clear();
+export function clearRendererCaches(session?: RenderSession): void {
+  if (session) {
+    session.dispose();
+  } else {
+    getFallbackSession().dispose();
+  }
 }
 
 export interface RenderContext {
@@ -136,6 +145,7 @@ export interface RenderContext {
   readonly height: number;
   readonly background: string | Rgba | Gradient;
   readonly runtime?: RenderRuntime;
+  readonly session: RenderSession;
 }
 
 export interface RenderResult {
@@ -148,61 +158,26 @@ function canvasBytes(canvas: Canvas): number {
   return canvas.width * canvas.height * 4;
 }
 
-/** Decoded image canvases, byte-bounded with LRU eviction. */
-const imageCache = new ByteBoundedCache<string, Canvas>("images", 64 * 1024 * 1024, canvasBytes);
-function rememberImage(src: string, canvas: Canvas): void {
-  imageCache.set(src, canvas);
+function rememberImage(src: string, canvas: Canvas, session?: RenderSession): void {
+  (session ?? getFallbackSession()).imageCache.set(src, canvas);
 }
 
-/**
- * Per-thread RGBA buffers cached by resolution to avoid reallocating on every
- * frame. A 1920×1080 buffer is 8 MB — with many active clips and frequent
- * draws the previous approach (creating a Canvas + ImageData per frame) was
- * exhausting skia's native heap. Each worker thread now keeps one 1920×1080
- * RGBA buffer and reuses it across all video-frame draws in a chunk.
- */
-/** Reusable RGBA read buffers, byte-bounded with LRU eviction. */
-const rgbaBufferCache = new ByteBoundedCache<string, Uint8ClampedArray>(
-  "rgba-buffers",
-  64 * 1024 * 1024,
-  (buffer) => buffer.byteLength,
-);
-
-function getRgbaBuffer(resolution: string, byteSize: number): Uint8ClampedArray {
-  let buf = rgbaBufferCache.get(resolution);
+function getRgbaBuffer(resolution: string, byteSize: number, session?: RenderSession): Uint8ClampedArray {
+  const cache = (session ?? getFallbackSession()).rgbaBufferCache;
+  let buf = cache.get(resolution);
   if (!buf || buf.length !== byteSize) {
     buf = new Uint8ClampedArray(byteSize);
-    rgbaBufferCache.set(resolution, buf);
+    cache.set(resolution, buf);
   }
   return buf;
 }
 
-/**
- * In-memory video frame cache. Frames are raw RGBA (a 720×1280 source is
- * 3.7MB each), so the cache is a small LRU: a worker renders chunks in source
- * order, and `primeVideoFramesForRange` seeds the chunk's frames right before
- * they are drawn, so a handful of slots is enough and a full-length video can
- * never pin gigabytes of heap.
- */
-const videoFrameOrigin = new Map<string, string>();
-const videoFrameCache = new ByteBoundedCache<string, ExtractedFrame>(
-  "video-frames",
-  256 * 1024 * 1024,
-  (frame) => frame.buffer.byteLength,
-  (key) => videoFrameOrigin.delete(key),
-);
-
-/** Module-level media cache for video frame extraction (set by pipeline). */
-let _mediaCache: import("../media/cache.js").MediaCache | null = null;
-let _disableLocalVideoDecode = false;
-
-export function setDisableLocalVideoDecode(disable: boolean): void {
-  _disableLocalVideoDecode = disable;
+export function setDisableLocalVideoDecode(disable: boolean, session?: RenderSession): void {
+  (session ?? getFallbackSession()).disableLocalVideoDecode = disable;
 }
 
-/** Set the media cache for video frame extraction. Called by the pipeline. */
-export function setMediaCacheForRenderer(cache: import("../media/cache.js").MediaCache): void {
-  _mediaCache = cache;
+export function setMediaCacheForRenderer(cache: import("../media/cache.js").MediaCache, session?: RenderSession): void {
+  (session ?? getFallbackSession()).mediaCache = cache;
   setVisualizerMediaCache(cache);
 }
 
@@ -210,26 +185,28 @@ function videoFrameKey(src: string, sourceFrame: number): string {
   return `${src}@${sourceFrame}`;
 }
 
-function rememberVideoFrame(src: string, sourceFrame: number, frame: ExtractedFrame): void {
+function rememberVideoFrame(src: string, sourceFrame: number, frame: ExtractedFrame, session?: RenderSession): void {
+  const s = session ?? getFallbackSession();
   const key = videoFrameKey(src, sourceFrame);
-  videoFrameOrigin.set(key, src);
-  videoFrameCache.set(key, frame);
+  s.videoFrameOrigin.set(key, src);
+  s.videoFrameCache.set(key, frame);
 }
 
-export function hasVideoFrameCached(src: string, sourceFrame: number): boolean {
-  return videoFrameCache.has(videoFrameKey(src, sourceFrame));
+export function hasVideoFrameCached(src: string, sourceFrame: number, session?: RenderSession): boolean {
+  return (session ?? getFallbackSession()).videoFrameCache.has(videoFrameKey(src, sourceFrame));
 }
 
 export function storeRemoteVideoFrame(
   src: string,
   frame: ExtractedFrame,
   sourceFrame: number,
+  session?: RenderSession,
 ): void {
-  rememberVideoFrame(src, sourceFrame, frame);
+  rememberVideoFrame(src, sourceFrame, frame, session);
 }
 
-export function getMediaCacheForRenderer(): import("../media/cache.js").MediaCache | null {
-  return _mediaCache;
+export function getMediaCacheForRenderer(session?: RenderSession): import("../media/cache.js").MediaCache | null {
+  return (session ?? getFallbackSession()).mediaCache;
 }
 
 /** Source frames each video clip needs for the given composition frames. */
@@ -241,19 +218,21 @@ export interface VideoFrameRef {
 export async function videoFrameRefsFor(
   composition: Composition,
   frames: readonly number[],
+  session?: RenderSession,
 ): Promise<readonly VideoFrameRef[]> {
   if (frames.length === 0) return [];
+  const mediaCache = (session ?? getFallbackSession()).mediaCache;
   const refs: VideoFrameRef[] = [];
   const seen = new Set<string>();
   for (const track of composition.rootTimeline.tracks) {
-    if (track.kind === "audio") continue;
+    if (track.kind === "audio" || track.kind === "subtitle") continue;
     for (const clip of track.clips) {
       if (clip.type !== "video") continue;
       const src = clip.src;
       if (!src || seen.has(src)) continue;
       seen.add(src);
-      if (!_mediaCache) continue;
-      const metadata = await getVideoMetadata(src, _mediaCache);
+      if (!mediaCache) continue;
+      const metadata = await getVideoMetadata(src, mediaCache);
       if (!metadata) continue;
       const clampedMax = maxSourceFrameOf(metadata);
 
@@ -294,16 +273,17 @@ export async function videoFrameRefsFor(
   return refs;
 }
 
-function recallVideoFrame(src: string, sourceFrame: number): ExtractedFrame | undefined {
-  return videoFrameCache.get(videoFrameKey(src, sourceFrame));
+function recallVideoFrame(src: string, sourceFrame: number, session?: RenderSession): ExtractedFrame | undefined {
+  return (session ?? getFallbackSession()).videoFrameCache.get(videoFrameKey(src, sourceFrame));
 }
 
 /** Most recently drawn frame for `src` — a safe fallback when a seek fails. */
-function latestVideoFrame(src: string): ExtractedFrame | undefined {
-  const keys = Array.from(videoFrameCache.keys()).reverse();
+function latestVideoFrame(src: string, session?: RenderSession): ExtractedFrame | undefined {
+  const s = session ?? getFallbackSession();
+  const keys = Array.from(s.videoFrameCache.keys()).reverse();
   for (const key of keys) {
-    if (videoFrameOrigin.get(key) === src) {
-      const frame = videoFrameCache.get(key);
+    if (s.videoFrameOrigin.get(key) === src) {
+      const frame = s.videoFrameCache.get(key);
       if (frame) return frame;
     }
   }
@@ -346,19 +326,21 @@ function maxSourceFrameOf(metadata: import("../media/cache.js").MediaMetadata): 
 export async function primeVideoFramesForRange(
   composition: Composition,
   frames: readonly number[],
+  session?: RenderSession,
 ): Promise<void> {
-  if (_disableLocalVideoDecode || !_mediaCache || frames.length === 0) return;
+  const s = session ?? getFallbackSession();
+  if (s.disableLocalVideoDecode || !s.mediaCache || frames.length === 0) return;
 
   const seen = new Set<string>();
   for (const track of composition.rootTimeline.tracks) {
-    if (track.kind === "audio") continue;
+    if (track.kind === "audio" || track.kind === "subtitle") continue;
     for (const clip of track.clips) {
       if (clip.type !== "video") continue;
       const src = clip.src;
       if (!src || seen.has(src)) continue;
       seen.add(src);
 
-      const metadata = await getVideoMetadata(src, _mediaCache);
+      const metadata = await getVideoMetadata(src, s.mediaCache);
       if (!metadata) continue;
       const clampedMax = maxSourceFrameOf(metadata);
 
@@ -403,8 +385,8 @@ export async function primeVideoFramesForRange(
       // contiguous runs make sense for a single decode pass.
       if (last - first + 1 > frames.length * 5) continue;
       if (
-        videoFrameCache.has(videoFrameKey(src, first)) &&
-        videoFrameCache.has(videoFrameKey(src, last))
+        s.videoFrameCache.has(videoFrameKey(src, first)) &&
+        s.videoFrameCache.has(videoFrameKey(src, last))
       )
         continue;
 
@@ -417,7 +399,7 @@ export async function primeVideoFramesForRange(
           metadata.fps,
         );
         for (let i = 0; i < extracted.length; i++) {
-          rememberVideoFrame(src, first + i, extracted[i]!);
+          rememberVideoFrame(src, first + i, extracted[i]!, s);
         }
       } catch {
         // Priming is an optimization — per-frame extraction still works.
@@ -441,73 +423,22 @@ interface CompositionIndex {
   /** clip -> owning visual track index, used to resolve transition underlays. */
   readonly trackByClip: Map<VisualClip, number>;
 }
-const indexCache = new WeakMap<object, CompositionIndex>();
 const EMPTY_CLIPS: VisualClip[] = [];
 
-/**
- * Two reusable full-screen draw buffers, ping-ponged per clip inside
- * `renderFrame`. Rendering is one-frame-at-a-time per thread, so a single
- * size-keyed pair is enough; reusing them across frames removes the
- * per-clip native allocation that previously exhausted skia's heap.
- */
+function getDrawBuffers(width: number, height: number, session?: RenderSession): [Canvas, Canvas] {
+  return (session ?? getFallbackSession()).getDrawBuffers(width, height);
+}
+
+function getRenderTarget(width: number, height: number, session?: RenderSession): Canvas {
+  return (session ?? getFallbackSession()).getRenderTarget(width, height);
+}
+
+function getGroupCanvas(width: number, height: number, session?: RenderSession): Canvas {
+  return (session ?? getFallbackSession()).getGroupCanvas(width, height);
+}
+
 const MAX_POOL_SIZE = 8;
-const canvasPairBytes = (pair: [Canvas, Canvas]): number =>
-  canvasBytes(pair[0]) + canvasBytes(pair[1]);
 const POOL_CACHE_BYTES = 128 * 1024 * 1024;
-const drawBufferCache = new ByteBoundedCache<string, [Canvas, Canvas]>(
-  "draw-buffers",
-  POOL_CACHE_BYTES,
-  canvasPairBytes,
-);
-function getDrawBuffers(width: number, height: number): [Canvas, Canvas] {
-  const key = `${width}x${height}`;
-  let pair = drawBufferCache.get(key);
-  if (!pair) {
-    pair = [createCanvas(width, height), createCanvas(width, height)];
-    drawBufferCache.set(key, pair);
-  }
-  return pair;
-}
-
-/** Pooled full-screen canvas for renderFrame output — one per resolution. */
-const renderTargetCache = new ByteBoundedCache<string, Canvas>(
-  "render-targets",
-  POOL_CACHE_BYTES,
-  canvasBytes,
-);
-function getRenderTarget(width: number, height: number): Canvas {
-  const key = `${width}x${height}`;
-  let c = renderTargetCache.get(key);
-  if (!c) {
-    c = createCanvas(width, height);
-    renderTargetCache.set(key, c);
-  }
-  return c;
-}
-
-/** Pooled canvas for group clips — keyed by bounds size. */
-const groupCanvasCache = new ByteBoundedCache<string, Canvas>(
-  "group-canvases",
-  POOL_CACHE_BYTES,
-  canvasBytes,
-);
-function getGroupCanvas(width: number, height: number): Canvas {
-  const key = `${width}x${height}`;
-  let c = groupCanvasCache.get(key);
-  if (!c) {
-    c = createCanvas(width, height);
-    groupCanvasCache.set(key, c);
-  }
-  return c;
-}
-
-/** Pooled canvas for transition blending — one per resolution. */
-interface FrameSurfaceState {
-  readonly composition: object;
-  readonly frame: number;
-  readonly rects: readonly Rect[];
-  readonly canvas: Canvas;
-}
 
 const DIRTY_RECT_AREA_LIMIT = 0.6;
 
@@ -525,6 +456,7 @@ const UNBOUNDED_CLIP_TYPES = new Set([
   "sticker",
   "svg",
   "group",
+  "scene",
 ]);
 
 function isIncrementallySafe(clip: VisualClip): boolean {
@@ -550,79 +482,30 @@ function hasSubtitleTracks(composition: Composition): boolean {
   return composition.rootTimeline.tracks.some((track) => track.kind === "subtitle");
 }
 
-const transitionCanvasCache = new ByteBoundedCache<string, [Canvas, Canvas]>(
-  "transition-buffers",
-  POOL_CACHE_BYTES,
-  canvasPairBytes,
-);
-function getTransitionBuffers(width: number, height: number): [Canvas, Canvas] {
-  const key = `${width}x${height}`;
-  let pair = transitionCanvasCache.get(key);
-  if (!pair) {
-    pair = [createCanvas(width, height), createCanvas(width, height)];
-    transitionCanvasCache.set(key, pair);
-  }
-  return pair;
+function getTransitionBuffers(width: number, height: number, session?: RenderSession): [Canvas, Canvas] {
+  return (session ?? getFallbackSession()).getTransitionBuffers(width, height);
 }
 
-const transparentCanvasCache = new ByteBoundedCache<string, Canvas>(
-  "transparent-canvases",
-  POOL_CACHE_BYTES,
-  canvasBytes,
-);
-function getTransparentCanvas(width: number, height: number): Canvas {
-  const key = `${width}x${height}`;
-  let canvas = transparentCanvasCache.get(key);
-  if (!canvas) {
-    canvas = createCanvas(width, height);
-    transparentCanvasCache.set(key, canvas);
-  }
-  clearCanvas(createContext(canvas), width, height);
-  return canvas;
+function getTransparentCanvas(width: number, height: number, session?: RenderSession): Canvas {
+  return (session ?? getFallbackSession()).getTransparentCanvas(width, height);
 }
 
-/** Pooled canvas for particle clips — keyed by bounds size. */
-const particleCanvasCache = new ByteBoundedCache<string, Canvas>(
-  "particle-canvases",
-  POOL_CACHE_BYTES,
-  canvasBytes,
-);
-function getParticleCanvas(width: number, height: number): Canvas {
-  const key = `${width}x${height}`;
-  let c = particleCanvasCache.get(key);
-  if (!c) {
-    c = createCanvas(width, height);
-    particleCanvasCache.set(key, c);
-  }
-  return c;
+function getParticleCanvas(width: number, height: number, session?: RenderSession): Canvas {
+  return (session ?? getFallbackSession()).getParticleCanvas(width, height);
 }
 
-/** Cached generated noise textures keyed by params and 10fps time bucket. */
-const noiseTextureCache = new ByteBoundedCache<string, Canvas>(
-  "noise-textures",
-  64 * 1024 * 1024,
-  canvasBytes,
-);
-
-function getNoiseTexture(width: number, height: number, clip: NoiseClip, time: number): Canvas {
-  const bucket = Math.floor(time * 10);
-  const key = `${width}x${height}-${clip.params.kind}-${clip.params.dimensions}-${clip.params.scale}-${clip.params.offsetX ?? 0}-${clip.params.offsetY ?? 0}-${clip.params.animationSpeed ?? 0}-${clip.params.seed ?? 0}-${clip.params.outputType ?? "luminance"}-${bucket}`;
-  let canvas = noiseTextureCache.get(key);
-  if (canvas === undefined) {
-    canvas = generateNoiseTexture(width, height, { ...clip.params, time: bucket / 10 });
-    noiseTextureCache.set(key, canvas);
-  }
-  return canvas;
+function getNoiseTexture(width: number, height: number, clip: NoiseClip, time: number, session?: RenderSession): Canvas {
+  return (session ?? getFallbackSession()).getNoiseTexture(width, height);
 }
 
-const skyboxCache = new Map<string, Promise<CubeTexture>>();
 const SKYBOX_CACHE_MAX = 8;
 
-function resolveSkyboxTexture(composition: Composition): Promise<CubeTexture> | null {
+function resolveSkyboxTexture(composition: Composition, session?: RenderSession): Promise<CubeTexture> | null {
   const config = composition.skybox;
   if (!config) return null;
+  const s = session ?? getFallbackSession();
   const key = JSON.stringify(config);
-  const cached = skyboxCache.get(key);
+  const cached = s.skyboxCache.get(key);
   if (cached) return cached;
   const loading = (async () => {
     if (config.type === "procedural") return createProceduralSkybox();
@@ -640,8 +523,8 @@ function resolveSkyboxTexture(composition: Composition): Promise<CubeTexture> | 
     }
     return createProceduralSkybox();
   })();
-  skyboxCache.set(key, loading);
-  evictOldest(skyboxCache, SKYBOX_CACHE_MAX);
+  s.skyboxCache.set(key, loading);
+  evictOldest(s.skyboxCache, SKYBOX_CACHE_MAX);
   return loading;
 }
 
@@ -659,28 +542,23 @@ async function applySkybox(
   return texture;
 }
 
-export function compositionConversion(composition: Composition): FrameConversion {
-  return composition.tempo && composition.tempo.length > 0
-    ? createVfrConversion(composition.tempo, composition.fps)
-    : createConversion(composition.fps);
-}
+export { compositionConversion };
 
 function buildCompositionIndex(composition: Composition): CompositionIndex {
   const conversion = compositionConversion(composition);
   const activeByFrame = new Map<number, VisualClip[]>();
   const trackByClip = new Map<VisualClip, number>();
-  let totalFrames = 0;
+  const totalFrames = compositionTotalFrames(composition);
 
   const tracks = composition.rootTimeline.tracks;
   for (let trackIndex = 0; trackIndex < tracks.length; trackIndex++) {
     const track = tracks[trackIndex]!;
-    if (track.kind === "audio") continue;
+    if (track.kind === "audio" || track.kind === "subtitle") continue;
     const ordered = track.clips
       .map((clip, order) => ({ clip, order, span: computeClipSpan(clip as never, conversion) }))
       .sort((a, b) => a.span.startFrames - b.span.startFrames || a.order - b.order);
     for (const { clip, span } of ordered) {
       trackByClip.set(clip, trackIndex);
-      if (span.endFrames > totalFrames) totalFrames = span.endFrames;
       for (let f = span.startFrames; f < span.endFrames; f++) {
         let bucket = activeByFrame.get(f);
         if (!bucket) {
@@ -692,20 +570,11 @@ function buildCompositionIndex(composition: Composition): CompositionIndex {
     }
   }
 
-  if (composition.duration !== undefined) {
-    const dur =
-      typeof composition.duration === "number"
-        ? composition.duration
-        : parseFloat(composition.duration as string);
-    const durFrames = Math.ceil(dur * conversion.fpsFloat);
-    totalFrames =
-      composition.boundaryBehavior === "extend" ? Math.max(totalFrames, durFrames) : durFrames;
-  }
-
   return { totalFrames, activeByFrame, trackByClip };
 }
 
-function getCompositionIndex(composition: Composition): CompositionIndex {
+function getCompositionIndex(composition: Composition, session?: RenderSession): CompositionIndex {
+  const indexCache = (session ?? getFallbackSession()).indexCache;
   let index = indexCache.get(composition as unknown as object);
   if (!index) {
     index = buildCompositionIndex(composition);
@@ -714,13 +583,14 @@ function getCompositionIndex(composition: Composition): CompositionIndex {
   return index;
 }
 
-async function loadCachedImage(src: string): Promise<Canvas> {
-  if (imageCache.has(src)) return imageCache.get(src)!;
+async function loadCachedImage(src: string, session?: RenderSession): Promise<Canvas> {
+  const cache = (session ?? getFallbackSession()).imageCache;
+  if (cache.has(src)) return cache.get(src)!;
   const img = await loadImage(src);
   const canvas = new Canvas(img.width, img.height);
   const ctx = canvas.getContext("2d");
   ctx.drawImage(img, 0, 0);
-  rememberImage(src, canvas);
+  rememberImage(src, canvas, session);
   return canvas;
 }
 
@@ -769,7 +639,7 @@ function corePaintToRenderer(
   if (paint.type === "image") {
     const src = paint.src ?? "";
     if (src) {
-      const cached = imageCache.get(src);
+      const cached = getFallbackSession().imageCache.get(src);
       if (cached) return cached;
     }
     return "#000000";
@@ -834,6 +704,10 @@ function getClipBounds(clip: VisualClip): Rect {
   }
   if (clip.type === "text3d") {
     return { x: 0, y: 0, width: clip.width ?? 600, height: clip.height ?? clip.fontSize * 1.5 };
+  }
+  if (clip.type === "scene") {
+    const sceneClip = clip as SceneClip;
+    return { x: 0, y: 0, width: sceneClip.width ?? 100, height: sceneClip.height ?? 100 };
   }
   if (
     clip.type === "image" ||
@@ -1057,17 +931,13 @@ function getMatte(clip: VisualClip, _width: number, _height: number): Matte | un
  * one per resolution — a 60s video at 30fps is 1800 allocations saved per
  * clip, and a composition with multiple video clips compounds this.
  */
-const videoFrameCanvasPool = new ByteBoundedCache<string, Canvas>(
-  "video-frame-canvases",
-  POOL_CACHE_BYTES,
-  canvasBytes,
-);
-function getVideoFrameCanvas(width: number, height: number): Canvas {
+function getVideoFrameCanvas(width: number, height: number, session?: RenderSession): Canvas {
+  const pool = (session ?? getFallbackSession()).videoFrameCanvasPool;
   const key = `${width}x${height}`;
-  let c = videoFrameCanvasPool.get(key);
+  let c = pool.get(key);
   if (!c) {
     c = new Canvas(width, height);
-    videoFrameCanvasPool.set(key, c);
+    pool.set(key, c);
   }
   return c;
 }
@@ -1183,7 +1053,7 @@ async function drawVideoClip(
 ): Promise<void> {
   const src = clip.src;
 
-  if (!_mediaCache) {
+  if (!context.session.mediaCache) {
     throw new Error(
       `Video clip "${src}" requires a media cache — call setMediaCacheForRenderer() before rendering.`,
     );
@@ -1282,12 +1152,13 @@ async function drawModel3dClip(
 ): Promise<void> {
   const { composition } = context;
   const { Model3dRenderer } = await import("../model-3d/renderer.js");
-  let renderer = model3dRendererCache.get(clip.src);
+  const cache = context.session.model3dRendererCache;
+  let renderer = cache.get(clip.src);
   if (!renderer) {
-    evictOldest(model3dRendererCache, MAX_POOL_SIZE);
+    evictOldest(cache, MAX_POOL_SIZE);
     renderer = new Model3dRenderer();
     await renderer.loadModel(clip.src);
-    model3dRendererCache.set(clip.src, renderer);
+    cache.set(clip.src, renderer);
   }
 
   const camera = clip.camera;
@@ -1364,11 +1235,22 @@ async function drawSvgClip(
   if (clip.content !== undefined) {
     source = clip.content;
   } else if (clip.src !== undefined) {
-    source = readFileSync(clip.src, "utf8");
+    try {
+      source = readFileSync(clip.src, "utf8");
+    } catch (error) {
+      throw createError(ErrorCode.CC2003, {
+        path: clip.src,
+        reason: error instanceof Error ? error.message : String(error),
+      }, { fixHint: "Check the SVG path resolves inside the media root." });
+    }
   } else {
-    throw new Error("SVG clip requires either 'content' or 'src' property");
+    throw createError(ErrorCode.CC3007, {
+      kind: "SVG clip property",
+      id: clip.name ?? "unnamed",
+      available: "content or src",
+    }, { fixHint: "Set either `content` (inline SVG) or `src` (SVG file) on the clip." });
   }
-  const element = parseSvgSource(source);
+  const element = parseSvgSource(source, clip.src ?? clip.name ?? "SVG source");
   drawSvg(
     ctx,
     element,
@@ -1601,7 +1483,7 @@ async function extractVideoFrameCanvas(
   },
 ): Promise<{ canvas: Canvas; width: number; height: number }> {
   const { composition, frame } = context;
-  const metadata = await getVideoMetadata(src, _mediaCache!);
+  const metadata = await getVideoMetadata(src, context.session.mediaCache!);
   if (!metadata) {
     throw new Error(
       `Could not read video metadata for "${src}" — check the path and that the file is a valid video.`,
@@ -1637,9 +1519,9 @@ async function extractVideoFrameCanvas(
     ),
   );
 
-  let extractedFrame = recallVideoFrame(src, sourceFrame);
+  let extractedFrame = recallVideoFrame(src, sourceFrame, context.session);
   if (!extractedFrame) {
-    if (_disableLocalVideoDecode) {
+    if (context.session.disableLocalVideoDecode) {
       throw new Error(`[CC4001] Missing video frame ${sourceFrame} of "${src}" in worker cache; shared decode service must provide all required frames.`);
     }
     let decoded: ExtractedFrame[] | null;
@@ -1656,10 +1538,10 @@ async function extractVideoFrameCanvas(
     }
     const first = decoded && decoded.length > 0 ? decoded[0] : undefined;
     if (first) {
-      rememberVideoFrame(src, sourceFrame, first);
+      rememberVideoFrame(src, sourceFrame, first, context.session);
       extractedFrame = first;
     } else {
-      extractedFrame = latestVideoFrame(src);
+      extractedFrame = latestVideoFrame(src, context.session);
       if (!extractedFrame) {
         throw new Error(`Failed to decode frame ${sourceFrame} of "${src}".`);
       }
@@ -1681,19 +1563,8 @@ async function extractVideoFrameCanvas(
   return { canvas: frameCanvas, width: srcWidth, height: srcHeight };
 }
 
-const chromaKeyCanvasCache = new ByteBoundedCache<string, Canvas>(
-  "chroma-key-canvases",
-  POOL_CACHE_BYTES,
-  canvasBytes,
-);
-function getChromaKeyCanvas(width: number, height: number): Canvas {
-  const key = `${width}x${height}`;
-  let c = chromaKeyCanvasCache.get(key);
-  if (!c) {
-    c = createCanvas(width, height);
-    chromaKeyCanvasCache.set(key, c);
-  }
-  return c;
+function getChromaKeyCanvas(width: number, height: number, session?: RenderSession): Canvas {
+  return (session ?? getFallbackSession()).getChromaKeyCanvas(width, height);
 }
 
 async function drawChromaKeyClip(
@@ -1707,7 +1578,8 @@ async function drawChromaKeyClip(
   let sourceCanvas: Canvas;
   let srcWidth: number;
   let srcHeight: number;
-  const isVideo = _mediaCache !== null && (await getVideoMetadata(src, _mediaCache)) !== null;
+  const mediaCache = context.session.mediaCache;
+  const isVideo = mediaCache !== null && (await getVideoMetadata(src, mediaCache)) !== null;
   if (isVideo) {
     const extracted = await extractVideoFrameCanvas(
       src,
@@ -1718,10 +1590,10 @@ async function drawChromaKeyClip(
     srcWidth = extracted.width;
     srcHeight = extracted.height;
   } else {
-    const imgCanvas = await loadCachedImage(src);
+    const imgCanvas = await loadCachedImage(src, context.session);
     srcWidth = imgCanvas.width;
     srcHeight = imgCanvas.height;
-    sourceCanvas = getChromaKeyCanvas(srcWidth, srcHeight);
+    sourceCanvas = getChromaKeyCanvas(srcWidth, srcHeight, context.session);
     const sourceCtx = sourceCanvas.getContext("2d");
     sourceCtx.clearRect(0, 0, srcWidth, srcHeight);
     sourceCtx.drawImage(imgCanvas, 0, 0);
@@ -1790,19 +1662,19 @@ async function drawChromaKeyClip(
   ctx.restore();
 }
 
-function drawGroupClip(
+async function drawGroupClip(
   ctx: SKRSContext2D,
   clip: VisualClip & { children: readonly VisualClip[] },
   context: RenderContext,
   seed: number,
-): Canvas {
+): Promise<Canvas> {
   const bounds = getClipBounds(clip);
   const groupCanvas = getGroupCanvas(bounds.width, bounds.height);
   const groupCtx = createContext(groupCanvas);
 
   for (const child of clip.children) {
     if (!isAudioClip(child)) {
-      drawClip(groupCtx, child as VisualClip, context, seed);
+      await drawClip(groupCtx, child as VisualClip, context, seed);
     }
   }
 
@@ -1816,6 +1688,80 @@ function drawGroupClip(
   }
 
   return groupCanvas;
+}
+
+async function drawSceneClip(
+  ctx: SKRSContext2D,
+  clip: SceneClip,
+  bounds: Rect,
+  params: ShapeDrawParams,
+  context: RenderContext,
+  seed: number,
+): Promise<void> {
+  const nestedTimeline =
+    clip.timeline ??
+    (context.composition.scenes ? (context.composition.scenes as Record<string, Timeline>)[clip.ref] : undefined);
+  if (!nestedTimeline) {
+    throw createError(ErrorCode.CC3007, {
+      reason: `Scene "${clip.ref}" not found in composition scenes`,
+    });
+  }
+  const width = Math.max(1, Math.round(clip.width ?? bounds.width));
+  const height = Math.max(1, Math.round(clip.height ?? bounds.height));
+  const span = computeClipSpan(clip, context.conversion);
+  const nestedFrame = Math.max(0, context.frame - span.startFrames);
+  const nestedContext: RenderContext = {
+    ...context,
+    frame: nestedFrame,
+    time: nestedFrame / context.conversion.fpsFloat,
+    width,
+    height,
+  };
+
+  const sceneCanvas = createCanvas(width, height);
+  const sceneCtx = createContext(sceneCanvas);
+  clearCanvas(sceneCtx, width, height);
+  const clipBuffer = createCanvas(width, height);
+
+  for (const track of nestedTimeline.tracks) {
+    if (track.kind === "audio" || track.kind === "subtitle") continue;
+    const ordered = track.clips
+      .map((c, order) => ({ clip: c, order, span: computeClipSpan(c as Clip, context.conversion) }))
+      .filter((e) => e.span.startFrames <= nestedFrame && nestedFrame < e.span.endFrames)
+      .sort((a, b) => a.span.startFrames - b.span.startFrames || a.order - b.order);
+
+    for (const { clip: nestedClip } of ordered) {
+      if (isAudioClip(nestedClip as { type: string })) continue;
+      const activeClip = resolveClipKeyframes(nestedClip as VisualClip, nestedFrame, context.composition.fps);
+      const clipCtx = createContext(clipBuffer);
+      clearCanvas(clipCtx, width, height);
+      await drawClip(clipCtx, activeClip, nestedContext, seed);
+      const withEffects = applyEffects(clipBuffer, activeClip, nestedContext);
+      const finalCanvas = evaluateClipVisual({ clipCanvas: withEffects, clip: activeClip, context: nestedContext, underlying: null });
+      const mask = getMask(activeClip, width, height);
+      const matte = getMatte(activeClip, width, height);
+      compositeLayers(
+        sceneCtx,
+        [{
+          canvas: finalCanvas,
+          opacity: activeClip.opacity ?? 1,
+          blendMode: resolveBlendMode(activeClip.blend),
+          transform: createDefaultTransform(),
+          mask,
+          matte,
+        }],
+        width,
+        height,
+      );
+    }
+  }
+
+  ctx.save();
+  if (params.transform) {
+    applyTransform(ctx, { ...createDefaultTransform(), ...params.transform }, bounds.width, bounds.height);
+  }
+  ctx.drawImage(sceneCanvas, 0, 0, bounds.width, bounds.height);
+  ctx.restore();
 }
 
 async function drawClip(
@@ -2052,10 +1998,6 @@ async function drawClip(
         wordAccess: clip.wordAccess,
         lineAccess: clip.lineAccess,
       });
-      const missing = checkMissingGlyphs(clip.content, style);
-      if (missing.length > 0) {
-        console.warn(`CC3006: Missing glyphs in text clip: ${missing.join(", ")}`);
-      }
       applyTransform(ctx, transform, bounds.width, bounds.height);
       prepared.draw(ctx, bounds.x, bounds.y, opacity);
       break;
@@ -2100,7 +2042,14 @@ async function drawClip(
       break;
     }
     case "scene":
+      await drawSceneClip(ctx, clip as SceneClip, bounds, params, context, seed);
+      break;
     case "component":
+      throw createError(ErrorCode.CC3007, {
+        reason: `Unsupported clip type "component" (clip "${clip.name ?? "unnamed"}"): flatten the component into the timeline or render it directly`,
+      });
+    case "subtitle":
+      await renderSubtitles(ctx, [clip as SubtitleClip], context.time, bounds.width, bounds.height);
       break;
     case "model3d":
       await drawModel3dClip(ctx, clip as Model3dClip, bounds, params, context);
@@ -2150,12 +2099,54 @@ async function drawClip(
     case "text3d":
       drawText3dClip(ctx, clip, bounds, params);
       break;
+    default: {
+      const unsupported = (clip as { type: string }).type;
+      throw createError(ErrorCode.CC1014, {
+        kind: "clip type",
+        name: unsupported,
+        available: SUPPORTED_VISUAL_CLIP_TYPES.join(", "),
+      });
+    }
   }
   ctx.restore();
 }
 
-function isAudioClip(clip: { type: string }): clip is AudioClip | SoundClip {
-  return clip.type === "audio" || clip.type === "sound";
+/** Rejected by validation before a frame; never reach the dispatch. */
+export const REJECTED_CLIP_TYPES = ["component"] as const;
+
+/** Every clip type in the union must have a draw path or a validation rejection. */
+export function clipCoverageIssues(): string[] {
+  const covered = new Set<string>([...SUPPORTED_VISUAL_CLIP_TYPES, ...REJECTED_CLIP_TYPES, "audio", "sound", "tts"]);
+  return [...CLIP_TYPES]
+    .filter((type) => !covered.has(type))
+    .map((type) => `clip type "${type}" is neither renderable nor rejected at validation`);
+}
+
+export const SUPPORTED_VISUAL_CLIP_TYPES = [
+  "solid",
+  "shape",
+  "text",
+  "image",
+  "video",
+  "group",
+  "scene",
+  "model3d",
+  "multiCamera",
+  "svg",
+  "particle",
+  "noise",
+  "audioVisualizer",
+  "chromakey",
+  "subtitle",
+  "dataViz",
+  "sticker",
+  "gradient-mesh",
+  "meshwarp",
+  "text3d",
+] as const;
+
+function isAudioClip(clip: { type: string }): clip is AudioClip | SoundClip | TtsClip {
+  return clip.type === "audio" || clip.type === "sound" || clip.type === "tts";
 }
 
 function clipLocation(
@@ -2294,36 +2285,15 @@ function evaluateClipVisual({
   return resultCanvas;
 }
 
-export interface RenderSessionState {
-  lastFrameSurface: FrameSurfaceState | null;
-  consecutiveFullRedraws: number;
-}
-
-export function createRenderSession(): RenderSessionState {
-  return { lastFrameSurface: null, consecutiveFullRedraws: 0 };
-}
-
 export interface RenderFrameOptions {
   readonly resolutionScale?: number;
   readonly runtime?: RenderRuntime;
-  /** Per-render incremental state; omit to disable incremental drawing. */
-  readonly session?: RenderSessionState;
+  /** Per-render session state; omit to use fallback session. */
+  readonly session?: RenderSession;
 }
 
-/** Scaled surface pool: full-resolution frames are drawn once, then scaled. */
-const scaledSurfaceCache = new ByteBoundedCache<string, Canvas>(
-  "scaled-surfaces",
-  POOL_CACHE_BYTES,
-  canvasBytes,
-);
-function getScaledSurface(width: number, height: number): Canvas {
-  const key = `${width}x${height}`;
-  let canvas = scaledSurfaceCache.get(key);
-  if (!canvas) {
-    canvas = createCanvas(width, height);
-    scaledSurfaceCache.set(key, canvas);
-  }
-  return canvas;
+function getScaledSurface(width: number, height: number, session?: RenderSession): Canvas {
+  return (session ?? getFallbackSession()).getScaledSurface(width, height);
 }
 
 export async function renderFrame(
@@ -2332,6 +2302,11 @@ export async function renderFrame(
   seed: number,
   options: RenderFrameOptions = {},
 ): Promise<RenderResult> {
+  const validation = validateComposition(composition);
+  if (!validation.valid) throw compositionValidationError(validation);
+  preflightText(composition);
+
+  const session = options.session ?? getFallbackSession();
   const scale =
     options.resolutionScale === undefined ? 1 : clampResolutionScale(options.resolutionScale);
   const result = await renderCompositionFrame(
@@ -2339,12 +2314,12 @@ export async function renderFrame(
     frame,
     seed,
     options.runtime ?? getDefaultRenderRuntime(),
-    options.session,
+    session,
   );
   if (scale === 1) return result;
   const width = Math.max(1, Math.round(composition.width * scale));
   const height = Math.max(1, Math.round(composition.height * scale));
-  const scaled = getScaledSurface(width, height);
+  const scaled = session.getScaledSurface(width, height);
   const ctx = createContext(scaled);
   ctx.clearRect(0, 0, width, height);
   ctx.imageSmoothingEnabled = true;
@@ -2358,10 +2333,10 @@ async function renderCompositionFrame(
   frame: number,
   seed: number,
   runtime: RenderRuntime,
-  session?: RenderSessionState,
+  session?: RenderSession,
 ): Promise<RenderResult> {
-  // Clear effect cache each frame so parametric effects (DoF, bloom) stay fresh
-  clearTempCanvasPool();
+  const s = session ?? getFallbackSession();
+  s.clearTempCanvases();
   const conversion = compositionConversion(composition);
   const time = frameToSeconds(frame, conversion);
   const backgroundPaint = corePaintToRenderer(composition.background);
@@ -2383,11 +2358,12 @@ async function renderCompositionFrame(
     height: composition.height,
     background: backgroundForContext,
     runtime,
+    session: s,
   };
   if (composition.splitScreen) {
     return renderSplitScreen(composition, context, seed);
   }
-  return renderStandardFrame(composition, context, seed, session);
+  return renderStandardFrame(composition, context, seed, s);
 }
 
 function splitRegionClip(
@@ -2460,11 +2436,11 @@ export async function renderSplitScreen(
     config.padding ?? 0,
   );
   const frame = context.frame;
-  const targetCanvas = getRenderTarget(composition.width, composition.height);
+  const targetCanvas = getRenderTarget(composition.width, composition.height, context.session);
   const targetCtx = createContext(targetCanvas);
   clearCanvas(targetCtx, composition.width, composition.height);
   await applySkybox(targetCtx, composition);
-  const [bufA] = getDrawBuffers(composition.width, composition.height);
+  const [bufA] = getDrawBuffers(composition.width, composition.height, context.session);
 
   for (let regionIndex = 0; regionIndex < regions.length; regionIndex++) {
     const region = regions[regionIndex]!;
@@ -2496,9 +2472,9 @@ async function renderStandardFrame(
   session?: RenderSessionState,
 ): Promise<RenderResult> {
   const frame = context.frame;
-  const index = getCompositionIndex(composition);
+  const index = getCompositionIndex(composition, context.session);
 
-  const targetCanvas = getRenderTarget(composition.width, composition.height);
+  const targetCanvas = getRenderTarget(composition.width, composition.height, context.session);
   const targetCtx = createContext(targetCanvas);
 
   const activeClips = index.activeByFrame.get(frame) ?? EMPTY_CLIPS;
@@ -2552,7 +2528,7 @@ async function renderStandardFrame(
   // failed". Two buffers keep the peak at a handful of canvases while still
   // preserving the previous layer for the next clip's transitionIn: the prior
   // content always lives in the *other* buffer, which we don't clear.
-  const [bufA, bufB] = getDrawBuffers(composition.width, composition.height);
+  const [bufA, bufB] = getDrawBuffers(composition.width, composition.height, context.session);
   let drawBuffer: Canvas = bufA;
   let underlying: Canvas | null = null;
   let currentTrack = -1;
@@ -2826,7 +2802,8 @@ async function drawMeshWarpClip(
 ): Promise<void> {
   const src = clip.src;
   let sourceCanvas: Canvas;
-  const metadata = _mediaCache !== null ? await getVideoMetadata(src, _mediaCache) : null;
+  const mediaCache = context.session.mediaCache;
+  const metadata = mediaCache !== null ? await getVideoMetadata(src, mediaCache) : null;
   if (metadata !== null) {
     const extracted = await extractVideoFrameCanvas(
       src,
@@ -2835,7 +2812,7 @@ async function drawMeshWarpClip(
     );
     sourceCanvas = extracted.canvas;
   } else {
-    sourceCanvas = await loadCachedImage(src);
+    sourceCanvas = await loadCachedImage(src, context.session);
   }
 
   const cols = Math.max(1, Math.round(clip.cols));

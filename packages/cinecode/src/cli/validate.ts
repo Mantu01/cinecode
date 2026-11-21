@@ -6,6 +6,7 @@ import { createError, ErrorCode, type CinecodeError, formatError } from "../erro
 import { createProjectResolver, reportResolution, type MediaAccess } from "./project-resolver.js";
 import { allClips } from "../core/types/tracks.js";
 import { runReport } from "./run-report.js";
+import { pendingNotes } from "../errors/degradations.js";
 import type { ValidationIssue } from "../core/validation/index.js";
 
 export interface ValidateOptions {
@@ -110,7 +111,7 @@ export async function validateCommand(options: ValidateOptions): Promise<void> {
   const projectRoot = resolution.root;
   const resolvedConfigPath = resolution.configPath;
   const config: CinecodeConfig = resolution.config;
-  const validation = validateConfig(config, resolvedConfigPath);
+  const validation = validateConfig(config, resolvedConfigPath, projectRoot);
   const compositions = await resolver.all();
   const timelineResults = await resolver.validateCompositions();
   const timelineErrors = timelineResults.flatMap((result) =>
@@ -143,6 +144,7 @@ export async function validateCommand(options: ValidateOptions): Promise<void> {
 
   const output = {
     valid: allErrors.length === 0,
+    notes: pendingNotes(),
     errors: allErrors.map(e => ({
       code: e.code,
       severity: e.severity,

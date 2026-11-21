@@ -1,4 +1,4 @@
-import { mat4, vec3 } from "wgpu-matrix";
+import { mat4, vec3 } from "../../renderer/camera/math.js";
 import type { Camera, CameraPose, Quat, Vec3 } from "../../renderer/camera/rig.js";
 import { slerpQuaternion } from "../../renderer/camera/rig.js";
 import type { CameraSwitchEvent, CameraTransitionType, MultiCameraClip } from "../types/clips.js";

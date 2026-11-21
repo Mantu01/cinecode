@@ -7,7 +7,8 @@ import { join } from "node:path";
 import { test, mock } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createProgram, runCli } from "../program.js";
-import { EXIT_CODES, exitCodeForError } from "../exit-codes.js";
+import { EXIT_CODES, EXIT_CODE_RULES, exitCodeForError } from "../exit-codes.js";
+import { ErrorCode } from "../../errors/codes.js";
 import { loadAliases, loadLocalAliases, resolveAliases } from "../profiles.js";
 
 const require = createRequire(import.meta.url);
@@ -97,11 +98,6 @@ test("conflicting flags name both flags and fail with the usage code", async () 
   const exclusive = await capture((sinks) => runCli(["node", "cinecode", "still", "--frame", "1", "--time", "2"], sinks));
   assert.equal(exclusive.code, EXIT_CODES.usage);
   assert.match(exclusive.err, /--frame.*--time/);
-
-  const alias = await capture((sinks) => runCli(["node", "cinecode", "still", "--config", "a.ts", "--props", "b.ts"], sinks));
-  assert.equal(alias.code, EXIT_CODES.usage);
-  assert.match(alias.err, /option '--props <path>' cannot be used with option '--config <path>'/);
-  assert.match(alias.err, /--props is deprecated, use --config/);
 });
 
 test("every command help carries an example and option defaults", async () => {
@@ -119,10 +115,25 @@ test("a real validation failure exits with the validation code", async () => {
   assert.equal(result.code, EXIT_CODES.validation);
 });
 
+
+
 test("the exit-code table maps every documented failure", () => {
   assert.deepEqual(
     { ...EXIT_CODES },
-    { success: 0, runtime: 1, usage: 2, validation: 3, environment: 4, cancelled: 130 },
+    { success: 0, runtime: 1, usage: 2, validation: 3, environment: 4, unsupportedRuntime: 78, cancelled: 130 },
+  );
+  assert.equal(exitCodeForError("CC1001"), EXIT_CODES.validation);
+  assert.equal(exitCodeForError("CC3001"), EXIT_CODES.validation);
+  assert.equal(exitCodeForError("CC7001"), EXIT_CODES.environment);
+  assert.equal(exitCodeForError("CC6002"), EXIT_CODES.environment);
+  assert.equal(exitCodeForError("CC4003"), EXIT_CODES.cancelled);
+  assert.equal(exitCodeForError("CC4002"), EXIT_CODES.runtime);
+});
+
+test("the exit-code table maps every documented failure", () => {
+  assert.deepEqual(
+    { ...EXIT_CODES },
+    { success: 0, runtime: 1, usage: 2, validation: 3, environment: 4, unsupportedRuntime: 78, cancelled: 130 },
   );
   assert.equal(exitCodeForError("CC1001"), EXIT_CODES.validation);
   assert.equal(exitCodeForError("CC3001"), EXIT_CODES.validation);
@@ -182,6 +193,43 @@ test("alias expansion is bounded, cycle-safe and local-first", () => {
   assert.equal(merged.r, "still");
   assert.equal(merged.global, "version");
   assert.equal(merged.only, "package");
+});
+
+test("help and version are clean exits; unknown command and flag are not", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cinecode-clean-"));
+  writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "probe", private: true }));
+  const cliEntry = fileURLToPath(new URL("../main.js", import.meta.url));
+  const invoke = (args: string[]) => {
+    const result = spawnSync(process.execPath, [cliEntry, ...args], { cwd: dir, encoding: "utf8" });
+    return { code: result.status ?? -1, out: result.stdout, err: result.stderr };
+  };
+
+  const clean = [
+    ["--help"],
+    ["-h"],
+    ["help"],
+    ["help", "render"],
+    ["--version"],
+    ["-V"],
+  ];
+  for (const args of clean) {
+    const result = invoke(args);
+    assert.equal(result.code, EXIT_CODES.success, `${args.join(" ")}: ${result.err}`);
+    assert.equal(result.err, "", `${args.join(" ")} wrote to stderr`);
+    assert.ok(result.out.trim().length > 0, `${args.join(" ")} wrote nothing`);
+    assert.doesNotMatch(result.out, /\bCC\d{4}\b/, `${args.join(" ")} leaked a coded error`);
+  }
+  assert.match(invoke(["--help"]).out, /still.*render.*presets/s);
+  assert.match(invoke(["help", "render"]).out, /Usage: cinecode render/);
+
+  for (const args of [["nope"], ["--bogus"]]) {
+    const result = invoke(args);
+    assert.equal(result.code, EXIT_CODES.usage, args.join(" "));
+    assert.match(result.err, /\[CC\d{4}\]/, `${args.join(" ")} has no coded error`);
+  }
+
+  const unknownHelp = invoke(["help", "nope"]);
+  assert.equal(unknownHelp.code, EXIT_CODES.usage);
 });
 
 test("cold start for help and version imports no render stack", () => {

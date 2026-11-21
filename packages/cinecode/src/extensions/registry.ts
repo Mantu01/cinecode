@@ -44,6 +44,9 @@ export interface ExtensionSummary {
   readonly kind: ExtensionKind;
   readonly name: string;
   readonly implementation: unknown;
+  readonly source: "built-in" | "plugin";
+  readonly version: string | null;
+  readonly capabilities: readonly string[];
 }
 
 export class ExtensionRegistry {
@@ -82,7 +85,15 @@ export class ExtensionRegistry {
     const summaries: ExtensionSummary[] = [];
     for (const [kind, slot] of this.slots) {
       for (const { name, implementation } of slot.list()) {
-        summaries.push({ kind, name, implementation });
+        const manifest = (implementation as { manifest?: { version?: unknown; permissions?: readonly string[] } }).manifest;
+        summaries.push({
+          kind,
+          name,
+          implementation,
+          source: manifest ? "plugin" : "built-in",
+          version: typeof manifest?.version === "string" ? manifest.version : null,
+          capabilities: [...(manifest?.permissions ?? [])],
+        });
       }
     }
     return summaries;

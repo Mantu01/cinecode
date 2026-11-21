@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import ffmpegStatic from "@ffmpeg-installer/ffmpeg";
+import { resolveBinary } from "../binary/resolver.js";
 import type { AudioBuffer } from "./types.js";
 import type { MediaCache } from "../media/cache.js";
 import { createError, ErrorCode } from "../errors/codes.js";
@@ -17,18 +17,12 @@ export interface DecodedAudio {
   readonly originalChannels: number;
 }
 
-async function getFfprobeStatic(): Promise<{ path: string }> {
-  const mod = await import("@ffprobe-installer/ffprobe");
-  return mod.default;
-}
-
 export async function getAudioInfo(filePath: string): Promise<{
   duration: number;
   sampleRate: number;
   channels: number;
   codec: string;
 }> {
-  const ffprobeStatic = await getFfprobeStatic();
   return new Promise((resolve, reject) => {
     const args = [
       "-v",
@@ -42,7 +36,7 @@ export async function getAudioInfo(filePath: string): Promise<{
       filePath,
     ];
 
-    const child = spawn(ffprobeStatic.path, args, { windowsHide: true });
+    const child = spawn(resolveBinary("ffprobe").path, args, { windowsHide: true });
     let stdout = "";
     let stderr = "";
 
@@ -124,7 +118,7 @@ export async function decodeAudioFile(
       "-",
     ];
 
-    const child = spawn(ffmpegStatic.path, args, { windowsHide: true });
+    const child = spawn(resolveBinary("ffmpeg").path, args, { windowsHide: true });
     const chunks: Buffer[] = [];
     let stderr = "";
 

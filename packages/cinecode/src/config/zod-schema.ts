@@ -1,5 +1,8 @@
 import { z } from "zod";
+import { MANIFEST_SCHEMA_VERSION } from "../contracts.js";
 import { OUTPUT_FORMATS } from "../core/output-plan.js";
+import { PLATFORM_PRESET_IDS } from "../encoder/platform-presets.js";
+import { idRule } from "../manifest/ids.js";
 
 export const RESOLUTION_DIMENSIONS = {
   "720p": { width: 1280, height: 720 },
@@ -10,7 +13,7 @@ export const RESOLUTION_DIMENSIONS = {
   "square-1080": { width: 1080, height: 1080 },
 } as const;
 export const RESOLUTION_PRESETS = Object.keys(RESOLUTION_DIMENSIONS) as Array<keyof typeof RESOLUTION_DIMENSIONS>;
-export const SCHEMA_VERSION = 2 as const;
+export const SCHEMA_VERSION: 2 = MANIFEST_SCHEMA_VERSION;
 export const SCHEMA_VERSIONS = [1, SCHEMA_VERSION] as const;
 export const ASPECT_RATIOS = ["16:9", "9:16", "1:1", "4:3", "21:9"] as const;
 export const VIDEO_CODECS = ["h264", "h265", "av1", "prores", "vp9", "ffv1", "utvideo"] as const;
@@ -18,10 +21,11 @@ export const RENDER_FORMATS = OUTPUT_FORMATS;
 export const QUALITY_SETTINGS = ["draft", "preview", "medium", "final", "lossless", "low", "high"] as const;
 export const ENCODER_PRESETS = ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"] as const;
 export const HARDWARE_ACCELERATION = ["auto", "nvenc", "videotoolbox", "qsv", "off"] as const;
-export const PLATFORM_PRESETS = ["youtube-1080p", "youtube-4k", "tiktok", "instagram-reels", "instagram-post", "twitter", "custom"] as const;
+/** Derived from the one preset table: config, CLI and docs share these ids. */
+export const PLATFORM_PRESETS = PLATFORM_PRESET_IDS;
 export const AUDIO_CHANNELS = [1, 2, 6] as const;
 export const SAMPLE_RATES = [22050, 44100, 48000, 96000] as const;
-export const IMAGE_FORMATS = ["png", "jpg", "webp", "svg"] as const;
+export const IMAGE_FORMATS = ["png", "jpg", "webp"] as const;
 
 export const SchemaVersionSchema = z.union([z.literal(1), z.literal(SCHEMA_VERSION)]);
 export const ResolutionSchema = z.string().regex(
@@ -35,7 +39,7 @@ export const RenderFormatSchema = z.enum(RENDER_FORMATS);
 export const QualitySettingSchema = z.enum(QUALITY_SETTINGS);
 export const EncoderPresetSchema = z.enum(ENCODER_PRESETS);
 export const HardwareAccelerationSchema = z.enum(HARDWARE_ACCELERATION);
-export const PlatformPresetSchema = z.enum(PLATFORM_PRESETS);
+export const PlatformPresetSchema = z.enum(PLATFORM_PRESETS as [string, ...string[]]);
 export const AudioChannelsSchema = z.union([z.literal(1), z.literal(2), z.literal(6)]);
 export const SampleRateSchema = z.union([z.literal(22050), z.literal(44100), z.literal(48000), z.literal(96000)]);
 export const ImageFormatSchema = z.enum(IMAGE_FORMATS);
@@ -68,7 +72,6 @@ export const DevInputSchema = z.object({
   host: z.string().optional(),
   open: z.boolean().optional(),
   hmr: z.boolean().optional(),
-  metricsPort: z.number().int().min(0).max(65535).optional(),
 }).strict();
 
 export const ResolutionVariantInputSchema = z.object({
@@ -130,6 +133,11 @@ export const PluginEntrySchema = z.object({
   enabled: z.boolean().optional(),
 }).strict();
 
+export const BinaryConfigSchema = z.object({
+  ffmpegPath: z.string().min(1).optional(),
+  ffprobePath: z.string().min(1).optional(),
+}).strict();
+
 export const CinecodeConfigInputSchema = z.object({
   $schema: z.string().optional(),
   extends: z.string().optional(),
@@ -142,6 +150,7 @@ export const CinecodeConfigInputSchema = z.object({
   mediaDir: z.string().optional(),
   outputDir: z.string().optional(),
   cacheDir: z.string().optional(),
+  binaries: BinaryConfigSchema.optional(),
   allowCoLocatedMedia: z.boolean().optional(),
   cloudMedia: z.array(CloudMediaEntrySchema).optional(),
   render: RenderInputSchema.optional(),
@@ -154,7 +163,6 @@ export const CinecodeConfigInputSchema = z.object({
   pluginPrecedence: z.array(z.string()).optional(),
   autoDiscoverPlugins: z.boolean().optional(),
   ignorePatterns: z.array(z.string()).optional(),
-  composition: z.unknown().optional(),
 }).strict();
 
 export const ProjectConfigSchema = z.object({
@@ -184,7 +192,6 @@ export const DevConfigSchema = z.object({
   host: z.string().optional(),
   open: z.boolean().optional(),
   hmr: z.boolean(),
-  metricsPort: z.number().int().min(0).max(65535).optional(),
 }).strict();
 
 export const RenderConfigSchema = RenderInputSchema.extend({
@@ -302,8 +309,6 @@ const ManifestEntryBaseSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1).optional(),
   file: z.string().min(1).optional(),
-  tags: z.array(z.string()).optional(),
-  description: z.string().optional(),
 }).strict();
 
 export const ManifestImageEntrySchema = ManifestEntryBaseSchema.extend({
@@ -314,27 +319,63 @@ export const ManifestImageEntrySchema = ManifestEntryBaseSchema.extend({
   scaleFactor: z.number().positive().optional(),
   background: HexColorSchema.optional(),
   seed: z.number().optional(),
-}).strict();
+})
+  .strict()
+  .superRefine((entry, ctx) => {
+    if (!entry.file) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["file"],
+        message: `image "${entry.id}" declares no source; accepted source: "file"`,
+      });
+    }
+  });
 
 export const ManifestAudioEntrySchema = ManifestEntryBaseSchema.extend({
-  kind: z.enum(["voice", "music", "sfx", "other"]).optional(),
   src: z.string().min(1).optional(),
   sampleRate: z.number().int().positive().optional(),
   channels: AudioChannelsSchema.optional(),
-  gain: z.number().finite().nonnegative().optional(),
+  /** Linear gain: 0 silent, 1 unity, up to 4 (+12 dB). */
+  gain: z.number().finite().min(0).max(4).optional(),
   duration: ManifestDurationSchema.optional(),
-  format: z.enum(["wav", "mp3", "flac", "aac"]).optional(),
-}).strict();
+})
+  .strict()
+  .superRefine((entry, ctx) => {
+    const sources = [entry.file, entry.src].filter((value) => value !== undefined).length;
+    if (sources === 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["file"],
+        message: `audio "${entry.id}" declares no source; accepted sources: "file" or "src"`,
+      });
+    } else if (sources === 2) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["file"],
+        message: `audio "${entry.id}" declares both "file" and "src"; keep exactly one source`,
+      });
+    }
+  });
 
 const ManifestVisualEntrySchema = ManifestEntryBaseSchema.extend({
   duration: ManifestDurationSchema.optional(),
+  /** Accept a declared duration shorter than the content and report the dropped frames. */
+  truncate: z.boolean().optional(),
   width: ManifestDimensionSchema.optional(),
   height: ManifestDimensionSchema.optional(),
   fps: ManifestFpsSchema.optional(),
   background: HexColorSchema.optional(),
 }).strict();
 
-export const ManifestSceneEntrySchema = ManifestVisualEntrySchema.strict();
+export const ManifestSceneEntrySchema = ManifestVisualEntrySchema.strict().superRefine((entry, ctx) => {
+  if (!entry.file) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["file"],
+      message: `scene "${entry.id}" declares no source; accepted source: "file"`,
+    });
+  }
+});
 
 export const ManifestTimelineEntrySchema = ManifestVisualEntrySchema.extend({
   format: RenderFormatSchema.optional(),
@@ -342,22 +383,76 @@ export const ManifestTimelineEntrySchema = ManifestVisualEntrySchema.extend({
   quality: QualitySettingSchema.optional(),
   sceneRefs: z.array(z.string().min(1)).optional(),
   audioRef: z.array(z.string().min(1)).optional(),
-}).strict();
+})
+  .strict()
+  .superRefine((entry, ctx) => {
+    const hasFile = entry.file !== undefined;
+    const hasRefs = (entry.sceneRefs?.length ?? 0) > 0;
+    if (hasFile && hasRefs) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["sceneRefs"],
+        message: `timeline "${entry.id}" declares both "file" and "sceneRefs"; remove either "file" or "sceneRefs"`,
+      });
+    } else if (!hasFile && !hasRefs) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["file"],
+        message: `timeline "${entry.id}" declares no source; accepted sources: "file" or "sceneRefs"`,
+      });
+    }
+  });
 
 export const ManifestReservedEntrySchema = ManifestEntryBaseSchema.extend({
   props: z.record(z.string(), z.unknown()).optional(),
 }).strict();
 
-export const ManifestSchema = z.object({
-  kind: z.literal("main").optional(),
-  images: z.array(ManifestImageEntrySchema).optional(),
-  audio: z.array(ManifestAudioEntrySchema).optional(),
-  scenes: z.array(ManifestSceneEntrySchema).optional(),
-  timelines: z.array(ManifestTimelineEntrySchema).optional(),
-  characters: z.array(ManifestReservedEntrySchema).optional(),
-  motions: z.array(ManifestReservedEntrySchema).optional(),
-}).strict();
+export const ManifestSchema = z
+  .object({
+    kind: z.literal("main").optional(),
+    images: z.array(ManifestImageEntrySchema).optional(),
+    audio: z.array(ManifestAudioEntrySchema).optional(),
+    scenes: z.array(ManifestSceneEntrySchema).optional(),
+    timelines: z.array(ManifestTimelineEntrySchema).optional(),
+    characters: z.array(ManifestReservedEntrySchema).optional(),
+    motions: z.array(ManifestReservedEntrySchema).optional(),
+  })
+  .strict()
+  .superRefine((manifest, ctx) => {
+    for (const collection of ["images", "audio", "scenes", "timelines"] as const) {
+      (manifest[collection] ?? []).forEach((entry, index) => {
+        const rule = idRule(entry.id);
+        if (rule) {
+          ctx.addIssue({
+            code: "custom",
+            path: [collection, index, "id"],
+            message: `${collection} "${entry.id}" is not a filesystem-safe id: ${rule}`,
+          });
+        }
+      });
+    }
+  });
+
+/** Raster-only image output: a vector request names the command that produces vectors. */
+function vectorImageIssues(manifest: unknown): ZodValidationIssue[] {
+  const images = (manifest as { images?: unknown } | null)?.images;
+  if (!Array.isArray(images)) return [];
+  return images.flatMap((entry, index) => {
+    if (!entry || typeof entry !== "object") return [];
+    const value = entry as { id?: unknown; format?: unknown };
+    if (value.format !== "svg") return [];
+    return [{
+      path: `images.${index}.format`,
+      code: "custom",
+      message: `image "${String(value.id)}" requests vector format "svg"; image output is raster only. Use \`cinecode export-svg\` to write vector frames.`,
+    }];
+  });
+}
 
 export function validateManifestShape(manifest: unknown): ZodValidationResult {
-  return toValidationResult(ManifestSchema.safeParse(manifest));
+  const result = toValidationResult(ManifestSchema.safeParse(manifest));
+  const vector = vectorImageIssues(manifest);
+  if (vector.length === 0) return result;
+  const claimed = new Set(vector.map((issue) => issue.path));
+  return { valid: false, errors: [...result.errors.filter((issue) => !claimed.has(issue.path)), ...vector] };
 }

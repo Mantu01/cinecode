@@ -1,6 +1,5 @@
 import type { Composition } from "../../core/types/index.js";
-import { computeClipSpan } from "../../core/validation/index.js";
-import { createConversion, secondsToFrame } from "../../core/time/index.js";
+import { compositionTotalFrames } from "../../core/time/index.js";
 import { scoreFrame, type FrameScore } from "./scorer.js";
 
 export interface ThumbnailCandidate {
@@ -20,25 +19,6 @@ export interface ThumbnailOptions {
   readonly seed?: number;
   readonly frameIndices?: readonly number[];
   readonly renderFrame?: (composition: Composition, frame: number, seed: number) => Promise<Buffer>;
-}
-
-function totalFrames(composition: Composition): number {
-  const conversion = createConversion(composition.fps);
-  if (composition.duration !== undefined) {
-    const seconds = typeof composition.duration === "number"
-      ? composition.duration
-      : Number.parseFloat(composition.duration);
-    if (Number.isFinite(seconds)) return Math.max(1, Math.ceil(secondsToFrame(seconds, conversion)));
-  }
-  let max = 1;
-  for (const track of composition.rootTimeline.tracks) {
-    if (track.kind === "audio") continue;
-    for (const clip of track.clips) {
-      const span = computeClipSpan(clip, conversion);
-      if (span.endFrames > max) max = span.endFrames;
-    }
-  }
-  return max;
 }
 
 function selectFrames(total: number, options: ThumbnailOptions): number[] {
@@ -62,7 +42,7 @@ export async function selectThumbnailFrame(
   composition: Composition,
   options: ThumbnailOptions = {},
 ): Promise<ThumbnailSelection> {
-  const total = totalFrames(composition);
+  const total = Math.max(1, compositionTotalFrames(composition));
   const frames = selectFrames(total, options);
   const seed = options.seed ?? 0;
   const render = options.renderFrame ?? (async (comp, frame, renderSeed) => {

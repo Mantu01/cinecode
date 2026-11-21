@@ -6,11 +6,13 @@ import { readFile, stat } from "node:fs/promises";
 import type { Composition } from "../core/types/index.js";
 import { validateConfig as validateConfigShape } from "../config/validator.js";
 import { createConversion, type FrameConversion } from "../core/time/index.js";
-import { scanSourceForNonDeterminism } from "../core/validation/index.js";
+import { scanSourceForNonDeterminism, type CompositionValidation } from "../core/validation/index.js";
 import { validateKeyframes } from "../core/keyframes/index.js";
 import { allClips } from "../core/types/tracks.js";
 import { checkMissingGlyphs } from "../renderer/text/engine.js";
-import { createError, ErrorCode, type CinecodeError } from "../errors/index.js";
+import { createError, ErrorCode, isCinecodeError, type CinecodeError } from "../errors/index.js";
+import { pendingNotes } from "../errors/degradations.js";
+import { referenceWarnings } from "../manifest/references.js";
 import { createProjectResolver, reportResolution, type ProjectResolution } from "./project-resolver.js";
 
 /**
@@ -44,6 +46,7 @@ export interface CheckReport {
   readonly ok: boolean;
   readonly errors: readonly CheckIssue[];
   readonly warnings: readonly CheckIssue[];
+  readonly notes: readonly string[];
   readonly categories: Readonly<Record<CheckCategory, { errors: number; warnings: number }>>;
 }
 
@@ -100,32 +103,44 @@ export async function runCheck(project: ProjectResolution): Promise<CheckReport>
   const config = project.config;
 
   // --- config ---
-  const shape = validateConfigShape(config, configPath);
+  const shape = validateConfigShape(config, configPath, project.root);
   for (const error of shape.errors) errors.push(toIssue(error, "config"));
   for (const warning of shape.warnings) warnings.push(toIssue(warning, "config"));
 
   // --- authoring (compositions, timelines, keyframes, props, glyphs) ---
+  const seen = new Set<string>();
+  const pushCategorized = (issue: CheckIssue): void => {
+    const key = `${issue.code}:${issue.message}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    (issue.severity === "error" ? errors : warnings).push(issue);
+  };
+  const pushAssemblyError = (error: unknown): void => {
+    const coded = isCinecodeError(error)
+      ? error
+      : createError(ErrorCode.CC1010, { path: configPath, reason: error instanceof Error ? error.message : String(error) });
+    pushCategorized(toIssue(coded, "authoring"));
+  };
+
   let compositions: readonly Composition[] = [];
   try {
     compositions = await project.all();
   } catch (error) {
-    errors.push({
-      code: ErrorCode.CC3001,
-      severity: "error",
-      message: `Composition could not be loaded: ${error instanceof Error ? error.message : String(error)}`,
-      category: "authoring",
-      file: configPath,
-      fixHint: "Fix the manifest entry that failed to assemble, then rerun check",
-    });
+    pushAssemblyError(error);
   }
 
-  const timelineResults = await project.validateCompositions();
+  let timelineResults: readonly CompositionValidation[] = [];
+  try {
+    timelineResults = await project.validateCompositions();
+  } catch (error) {
+    pushAssemblyError(error);
+  }
   for (const composition of compositions) {
     if (typeof composition?.fps !== "number" || composition.fps <= 0) continue;
     const conversion: FrameConversion = createConversion(composition.fps);
     const result = timelineResults.find((entry) => entry.composition === composition.name);
     for (const issue of [...(result?.errors ?? []), ...(result?.warnings ?? [])]) {
-      (issue.severity === "error" ? errors : warnings).push(issueFromValidation(issue, "authoring"));
+      pushCategorized(issueFromValidation(issue, "authoring"));
     }
 
     for (const clip of allClips(composition.rootTimeline)) {
@@ -208,6 +223,13 @@ export async function runCheck(project: ProjectResolution): Promise<CheckReport>
     }
   }
 
+  // --- references (dead assets and file-overridden sceneRefs) ---
+  if (project.manifest) {
+    for (const warning of referenceWarnings(project.manifest.manifest)) {
+      warnings.push(toIssue(warning, "authoring"));
+    }
+  }
+
   // --- media (references resolve) ---
   try {
     const media = await project.media();
@@ -258,7 +280,7 @@ export async function runCheck(project: ProjectResolution): Promise<CheckReport>
   for (const issue of errors) categories[issue.category].errors += 1;
   for (const issue of warnings) categories[issue.category].warnings += 1;
 
-  return { ok: errors.length === 0, errors, warnings, categories };
+  return { ok: errors.length === 0, errors, warnings, notes: pendingNotes(), categories };
 }
 
 export async function checkCommand(options: CheckOptions): Promise<void> {
@@ -291,6 +313,7 @@ export async function checkCommand(options: CheckOptions): Promise<void> {
         console.log(line);
       }
     }
+    for (const note of report.notes) console.log(`  note  ${note}`);
     if (report.ok && report.warnings.length === 0) console.log("check passed");
     else if (report.ok) console.log(`\ncheck passed with ${report.warnings.length} warning(s)`);
     else console.log(`\ncheck failed: ${report.errors.length} error(s), ${report.warnings.length} warning(s)`);

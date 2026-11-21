@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { rm } from "node:fs/promises";
 import { extname } from "node:path";
-import ffmpegStatic from "@ffmpeg-installer/ffmpeg";
+import { resolveBinary } from "../binary/resolver.js";
 import type { AudioBuffer } from "./types.js";
 import type { PcmBitDepth } from "./encode.js";
 import { createError, ErrorCode } from "../errors/codes.js";
@@ -302,7 +302,7 @@ export async function muxAudioVideo(options: MuxerOptions): Promise<MuxResult> {
   const args = muxArgs(options, plan, videoSeconds, adjustment);
 
   return new Promise((resolve) => {
-    const child = spawn(ffmpegStatic.path, args, { windowsHide: true, stdio: ["pipe", "ignore", "pipe"] });
+    const child = spawn(resolveBinary("ffmpeg").path, args, { windowsHide: true, stdio: ["pipe", "ignore", "pipe"] });
     let stderr = "";
     let settled = false;
 
@@ -399,7 +399,7 @@ export function createAudioBufferFromVideoAudio(
       "-",
     ];
 
-    const child = spawn(ffmpegStatic.path, args, { windowsHide: true });
+    const child = spawn(resolveBinary("ffmpeg").path, args, { windowsHide: true });
     const chunks: Buffer[] = [];
     let stderr = "";
 

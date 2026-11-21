@@ -33,6 +33,26 @@ export class AtomicWriteError extends Error {
 const activeTempFiles = new Set<string>();
 const COPY_FALLBACK_ERRORS = new Set(["EXDEV", "EPERM", "ENOTSUP", "EACCES", "EINVAL", "ENOSYS"]);
 
+export async function verifyFrameSequence(directory: string, expectedCount: number): Promise<void> {
+  const entries = await readdir(directory);
+  const frameFiles = entries
+    .filter((entry) => /^(?:frame[-_.]?|image[-_.]?)(\d+)\.(?:png|jpg|jpeg|webp)$/i.test(entry))
+    .map((entry) => ({
+      name: entry,
+      index: Number(entry.match(/(\d+)(?=\.[^.]+$)/)?.[1] ?? -1),
+    }))
+    .filter((entry) => entry.index >= 0)
+    .sort((left, right) => left.index - right.index);
+  if (frameFiles.length !== expectedCount) {
+    throw new Error(`Sequence frame count: expected ${expectedCount}, observed ${frameFiles.length}`);
+  }
+  for (let index = 0; index < frameFiles.length; index += 1) {
+    if (frameFiles[index]?.index !== index) {
+      throw new Error(`Sequence gap: expected frame ${index}, observed ${frameFiles[index]?.index ?? "missing"}`);
+    }
+  }
+}
+
 export function temporaryPathFor(targetPath: string): string {
   return join(dirname(targetPath), `.${basename(targetPath)}.${randomUUID()}.tmp`);
 }

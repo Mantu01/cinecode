@@ -10,6 +10,14 @@ export interface CompositionAudio extends AudioConfig {
   readonly sidechains?: readonly SidechainConfig[];
 }
 
+/** One manifest audio bed as the mixer placed it. */
+export interface AudioPlacement {
+  readonly id: string;
+  readonly start: number;
+  readonly duration: number;
+  readonly gain: number;
+}
+
 export interface CompositionProps {
   readonly name: string;
   readonly width: number;
@@ -17,8 +25,12 @@ export interface CompositionProps {
   readonly fps: number;
   readonly background?: ColorSpec;
   readonly duration?: number | string;
+  /** Resolved end of the content, independent of the declared duration. */
+  readonly contentDuration?: number;
   readonly tempo?: readonly TempoRegion[];
   readonly audio?: CompositionAudio;
+  /** Every manifest audio bed placed by the assembler. */
+  readonly audioPlacements?: readonly AudioPlacement[];
   readonly rootTimeline: Timeline;
   readonly splitScreen?: SplitScreenConfig;
   readonly skybox?: SkyboxConfig;
@@ -28,6 +40,7 @@ export interface CompositionProps {
   readonly burnSubtitles?: boolean;
   /** How clips that extend past the composition duration are handled. */
   readonly boundaryBehavior?: "clamp" | "extend" | "strict";
+  readonly scenes?: Readonly<Record<string, Timeline>>;
 }
 
 export interface SkyboxConfig {
@@ -77,8 +90,11 @@ export interface Composition {
   readonly fps: number;
   readonly background: ColorSpec;
   readonly duration?: number | string;
+  /** Resolved end of the content, independent of the declared duration. */
+  readonly contentDuration?: number;
   readonly tempo?: readonly TempoRegion[];
   readonly audio: CompositionAudio;
+  readonly audioPlacements?: readonly AudioPlacement[];
   readonly rootTimeline: Timeline;
   readonly splitScreen?: SplitScreenConfig;
   readonly skybox?: SkyboxConfig;
@@ -86,4 +102,5 @@ export interface Composition {
   readonly postProcessing?: PostProcessingConfig;
   readonly burnSubtitles?: boolean;
   readonly boundaryBehavior?: "clamp" | "extend" | "strict";
+  readonly scenes?: Readonly<Record<string, Timeline>>;
 }

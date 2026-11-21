@@ -51,3 +51,15 @@ yt-videos
 *.log
 *.mp4
 *.webm
+
+# Generated build, cache and verification output
+output
+verify-cache
+artifacts
+test-output
+*.tsbuildinfo
+packages/*/templates/*/node_modules
+packages/*/templates/*/dist
+packages/*/templates/*/.cinecode
+packages/*/templates/*/output
+packages/*/templates/*/verify-cache

@@ -98,7 +98,7 @@ export function createBenchmarkCommand(): Command {
     .argument("<composition>", "Composition file")
     .option("-c, --composition-name <name>", "Composition name")
     .option("-n, --frames <number>", "Frames per run", (value) => parseInt(value, 10), 30)
-    .option("-r, --runs <number>", "Number of runs", (value) => parseInt(value, 10), 3)
+    .option("--runs <number>", "Number of runs", (value) => parseInt(value, 10), 3)
     .option("--seed <number>", "Deterministic seed", (value) => parseInt(value, 10))
     .option("--compare-baseline", "Compare results against historical baseline", false)
     .option("--fail-on-regression", "Exit with error code 1 if performance regresses > 5%", false)

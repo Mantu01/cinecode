@@ -1,4 +1,6 @@
 import { createError, ErrorCode } from "../errors/codes.js";
+import { recordDegradation } from "../errors/degradations.js";
+import { logger } from "../observability/logger.js";
 import { getExtensions, ExtensionRegistry } from "../extensions/index.js";
 import type { EffectProcessor } from "../effects/engine.js";
 import type { TransitionProcessor } from "../transitions/engine.js";
@@ -18,6 +20,7 @@ const NON_FATAL_HOOKS = new Set<HookName>(["onProgress", "onWarning", "onError"]
 
 type InlineHook = { readonly plugin: string; readonly handler: (data: unknown) => void | Promise<void> };
 const FRAME_HOOK_TIMEOUT_MS = 100;
+const CINECODE_PLUGIN_API_MAJOR = 1;
 
 function normalizeHandlers<K extends HookName>(
   value: CinecodePlugin["hooks"] extends undefined ? undefined : NonNullable<CinecodePlugin["hooks"]>[K],
@@ -85,18 +88,33 @@ export class PluginRegistry {
     if (newIdx !== -1 && (existingIdx === -1 || newIdx < existingIdx)) {
       this.features.set(name, { pluginName, handler });
       this.conflicts.push({ feature: name, winningPlugin: pluginName, losingPlugin: existing.pluginName, reason: "precedence" });
-      console.warn(`[CC7005] Precedence conflict: Identifier '${name}' registered by both '${existing.pluginName}' and '${pluginName}'. Selected '${pluginName}' by precedence.`);
+      recordDegradation({
+        code: "CC7005",
+        what: "plugin feature conflict",
+        reason: `Identifier '${name}' registered by both '${existing.pluginName}' and '${pluginName}'. Selected '${pluginName}' by precedence.`,
+        instead: "precedence rule resolved",
+      });
       return;
     }
 
     if (existingIdx !== -1 && (newIdx === -1 || existingIdx < newIdx)) {
       this.conflicts.push({ feature: name, winningPlugin: existing.pluginName, losingPlugin: pluginName, reason: "precedence" });
-      console.warn(`[CC7005] Precedence conflict: Identifier '${name}' registered by both '${existing.pluginName}' and '${pluginName}'. Retained '${existing.pluginName}' by precedence.`);
+      recordDegradation({
+        code: "CC7005",
+        what: "plugin feature conflict",
+        reason: `Identifier '${name}' registered by both '${existing.pluginName}' and '${pluginName}'. Retained '${existing.pluginName}' by precedence.`,
+        instead: "precedence rule resolved",
+      });
       return;
     }
 
     this.conflicts.push({ feature: name, winningPlugin: existing.pluginName, losingPlugin: pluginName, reason: "registration-order" });
-    console.warn(`[CC7005] High-priority conflict: Identifier '${name}' registered by both '${existing.pluginName}' and '${pluginName}'. Use disambiguation syntax '${pluginName}/${name}'.`);
+    recordDegradation({
+      code: "CC7005",
+      what: "high-priority plugin conflict",
+      reason: `Identifier '${name}' registered by both '${existing.pluginName}' and '${pluginName}'. Use disambiguation syntax '${pluginName}/${name}'.`,
+      instead: "disambiguation required",
+    });
   }
 
   getFeature(identifier: string): unknown | undefined {
@@ -116,6 +134,15 @@ export class PluginRegistry {
     }
     if (!plugin.manifest.kind || typeof plugin.manifest.kind !== "string") {
       throw createError(ErrorCode.CC8002, { plugin: name, reason: "manifest.kind must be a plugin kind" });
+    }
+    if (plugin.manifest.apiVersion) {
+      const major = Number.parseInt(plugin.manifest.apiVersion.split(".")[0] ?? "", 10);
+      if (Number.isFinite(major) && major > CINECODE_PLUGIN_API_MAJOR) {
+        throw createError(ErrorCode.CC8002, {
+          plugin: name,
+          reason: `plugin API major ${major} is newer than supported major ${CINECODE_PLUGIN_API_MAJOR}. Upgrade Cinecode or use a compatible plugin.`,
+        });
+      }
     }
     if (typeof plugin.setup !== "undefined" && typeof plugin.setup !== "function") {
       throw createError(ErrorCode.CC8002, { plugin: name, reason: "setup must be a function when present" });
@@ -305,7 +332,12 @@ export class PluginRegistry {
     let timer: ReturnType<typeof setTimeout> | null = null;
     const timeout = new Promise<void>((resolvePromise) => {
       timer = setTimeout(() => {
-        console.warn(`[cinecode:plugin] ${pluginName} hook ${hook} exceeded ${timeoutMs}ms; continuing`);
+        recordDegradation({
+          code: "CC7001",
+          what: "plugin hook timeout",
+          reason: `${pluginName} hook ${hook} exceeded ${timeoutMs}ms; continuing`,
+          instead: "hook execution skipped",
+        });
         resolvePromise();
       }, timeoutMs);
     });
@@ -320,7 +352,7 @@ export class PluginRegistry {
     return {
       options: entry.options,
       log: (message: string) => {
-        console.log(`[plugin:${entry.plugin.manifest.name}] ${message}`);
+        logger.debug("plugin", `[plugin:${entry.plugin.manifest.name}] ${message}`);
       },
       registerEffect: (effect: EffectProcessor) => {
         this.registerFeature(effect.name, entry.plugin.manifest.name, effect);

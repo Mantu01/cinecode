@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import ffmpegStatic from "@ffmpeg-installer/ffmpeg";
+import { resolveBinary } from "../../binary/resolver.js";
 import type { ChapterMarker } from "../../core/types/composition.js";
 import { buildChapterMetadata, normalizeChapters } from "./metadata.js";
 
@@ -15,7 +15,7 @@ export interface EmbedChaptersOptions {
 
 function runFfmpeg(args: readonly string[]): Promise<{ code: number; stderr: string }> {
   return new Promise((resolve) => {
-    const child = spawn(ffmpegStatic.path, args, { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
+    const child = spawn(resolveBinary("ffmpeg").path, args, { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
     let stderr = "";
     child.stderr?.on("data", (chunk) => { stderr += chunk.toString(); });
     child.on("error", (error) => resolve({ code: 1, stderr: error.message }));

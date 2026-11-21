@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import ffmpegStatic from "@ffmpeg-installer/ffmpeg";
+import { resolveBinary } from "../binary/resolver.js";
 import { mkdir, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import type { RenderFormat, QualityPreset, VideoCodec } from "../core/types/config.js";
@@ -241,7 +241,7 @@ export class VideoEncoder {
       ...buildVideoEncoderArgs(this.options),
     ];
 
-    this.process = spawn(ffmpegStatic.path, args, {
+    this.process = spawn(resolveBinary("ffmpeg").path, args, {
       windowsHide: true,
       stdio: ["pipe", "ignore", "pipe"],
     });
@@ -345,6 +345,7 @@ export class VideoEncoder {
     if (!this.resolved) {
       this.resolved = true;
       await rm(this.options.outputPath, { force: true }).catch(() => undefined);
+      this.promise.catch(() => undefined);
       this.rejectPromise(new Error("Encoding cancelled"));
     }
   }

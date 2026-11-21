@@ -1,5 +1,5 @@
 import type { Composition, VisualClip, EffectRef } from "../core/types/index.js";
-import { createConversion } from "../core/time/index.js";
+import { compositionConversion, compositionTotalFrames, createConversion, frameToSeconds } from "../core/time/index.js";
 import { computeClipSpan } from "../core/validation/index.js";
 
 export interface RenderGraphNode {
@@ -89,24 +89,13 @@ function getActiveEffects(clip: VisualClip, frame: number, conversion: ReturnTyp
 }
 
 export function buildRenderGraph(composition: Composition): RenderGraph {
-  const conversion = createConversion(composition.fps);
-  const totalFrames = composition.duration
-    ? Math.ceil((typeof composition.duration === "number"
-      ? composition.duration
-      : parseFloat(composition.duration as string)) * conversion.fpsFloat)
-    : composition.rootTimeline.tracks.reduce((max, track) => {
-      if (track.kind === "audio") return max;
-      for (const clip of track.clips) {
-        const span = computeClipSpan(clip, conversion);
-        if (span.endFrames > max) max = span.endFrames;
-      }
-      return max;
-    }, 0);
+  const conversion = compositionConversion(composition);
+  const totalFrames = compositionTotalFrames(composition);
 
   const frames: RenderGraphFrame[] = [];
 
   for (let frame = 0; frame < totalFrames; frame++) {
-    const time = frame / conversion.fpsFloat;
+    const time = frameToSeconds(frame, conversion);
     const nodes: RenderGraphNode[] = [];
 
     for (let trackIndex = 0; trackIndex < composition.rootTimeline.tracks.length; trackIndex++) {
@@ -159,7 +148,7 @@ export function buildRenderGraph(composition: Composition): RenderGraph {
     });
   }
 
-  const duration = totalFrames / conversion.fpsFloat;
+  const duration = frameToSeconds(totalFrames, conversion);
 
   return {
     composition,

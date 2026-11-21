@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import { TEMPLATES, renderTemplate, type CompositionTemplate } from "../templates/index.js";
 import { openFileInEditor } from "./edit.js";
+import { runReport } from "./run-report.js";
 
 export function findTemplate(name: string): CompositionTemplate | undefined {
   return TEMPLATES.find((template) => template.name === name);
@@ -25,12 +26,14 @@ export function createTemplateCommand(): Command {
     .argument("[target]", "Output file path")
     .option("--open", "Open the generated file in your editor")
     .action(async (name: string | undefined, target: string | undefined, options: { open?: boolean }) => {
-      if (!name) {
+      if (!name || name === "list") {
         console.log("Available templates\n");
         for (const template of TEMPLATES) {
           console.log(`  ${template.name.padEnd(16)} ${template.description}`);
         }
         console.log("\nScaffold one with: cinecode template <name> [file]");
+        runReport.result({ templates: TEMPLATES.map((template) => template.name) });
+        runReport.note(`${TEMPLATES.length} template(s) listed`);
         return;
       }
       const outputPath = await scaffoldTemplate(name, target, options.open);

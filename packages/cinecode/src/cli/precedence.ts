@@ -1,17 +1,19 @@
 import { join, resolve } from "node:path";
 import type {
   CinecodeConfig,
+  HardwareAcceleration,
   QualitySetting,
   RenderFormat,
   VideoCodec,
 } from "../core/types/index.js";
-import { explicitConfigPaths } from "../config/schema.js";
-import { clampCrf, resolveVideoEncoding } from "../core/quality.js";
-import { getPreset, validatePreset, type FullPlatformPreset } from "../encoder/platform-presets.js";
+import { clampCrf, normalizeQuality, resolveVideoEncoding } from "../core/quality.js";
+import { getPreset, listPresetIds, validatePreset, type FullPlatformPreset } from "../encoder/platform-presets.js";
 import { validateCodecContainer } from "../encoder/index.js";
 import { ALPHA_FORMATS, STILL_FORMATS, outputPlanFor } from "../core/output-plan.js";
 import { createError, ErrorCode } from "../errors/index.js";
-import { parseTimeInput, OUTPUT_SUBDIRS, resolveOutputDir } from "./shared.js";
+import { parseTimeArgument, OUTPUT_SUBDIRS } from "./shared.js";
+import { durationToFrames, createConversion } from "../core/time/index.js";
+import { runReport } from "./run-report.js";
 
 export type ColorManagementInput =
   | "srgb"
@@ -60,6 +62,8 @@ export interface ResolvedRenderParameters {
   readonly crf: ResolvedField<number>;
   readonly bitrate: ResolvedField<string | undefined>;
   readonly concurrency: ResolvedField<number | "auto">;
+  readonly chunkSize: ResolvedField<number>;
+  readonly hardwareAcceleration: ResolvedField<HardwareAcceleration>;
   readonly memoryBudgetMb: ResolvedField<number | undefined>;
   readonly alpha: ResolvedField<boolean>;
   readonly colorManagement: ResolvedField<ColorManagementInput>;
@@ -89,6 +93,8 @@ export interface PrecedenceFlags {
   readonly crf?: number;
   readonly bitrate?: string;
   readonly concurrency?: number | "auto";
+  readonly chunkSize?: number;
+  readonly hardwareAcceleration?: HardwareAcceleration;
   readonly memoryBudgetMb?: number;
   readonly alpha?: boolean;
   readonly colorManagement?: ColorManagementInput;
@@ -122,7 +128,10 @@ export interface PrecedenceOptions {
     readonly mode?: string;
     readonly selection?: string;
     readonly config: CinecodeConfig;
+    readonly roots?: import("./project-context.js").ProjectRoots;
   };
+  /** Key paths the author wrote; only an explicit key outranks a selection. */
+  readonly explicit?: ReadonlySet<string>;
   readonly kind?: "video" | "still";
 }
 
@@ -153,16 +162,25 @@ export function resolveRenderParameters(options: PrecedenceOptions): {
   const sel = options.selection;
   const project = options.project;
   const config = project?.config;
-  const explicit = config ? explicitConfigPaths(config) : new Set<string>();
+  const explicit = options.explicit ?? new Set<string>();
   const isStill = options.kind === "still";
 
+  /* A config preset is explicit config, so it outranks the manifest selection. */
+  const presetId = flags.preset ?? (isStill ? undefined : config?.render?.platformPreset);
   let preset: FullPlatformPreset | undefined;
-  if (flags.preset) {
-    preset = getPreset(flags.preset) ?? undefined;
-    if (!preset) throw createError(ErrorCode.CC1011, { name: flags.preset });
-    const containerErr = validatePreset(flags.preset);
+  if (presetId) {
+    preset = getPreset(presetId) ?? undefined;
+    if (!preset) {
+      throw createError(ErrorCode.CC1014, {
+        kind: "platform preset",
+        name: presetId,
+        available: listPresetIds().join(", "),
+      });
+    }
+    const containerErr = validatePreset(presetId);
     if (containerErr) throw createError(ErrorCode.CC1012, { reason: containerErr });
   }
+  const presetSource = flags.preset ? `--preset ${flags.preset}` : `render.platformPreset ${presetId ?? ""}`;
 
   // 1 & 2. Width and Height
   let flagRes: { value: { width: number; height: number }; source: string } | undefined;
@@ -171,7 +189,7 @@ export function resolveRenderParameters(options: PrecedenceOptions): {
   } else if (flags.width !== undefined && flags.height !== undefined) {
     flagRes = { value: { width: flags.width, height: flags.height }, source: "--width/--height" };
   } else if (preset) {
-    flagRes = { value: { width: preset.width, height: preset.height }, source: `--preset ${flags.preset}` };
+    flagRes = { value: { width: preset.width, height: preset.height }, source: presetSource };
   }
 
   let selRes: { value: { width: number; height: number }; source: string } | undefined;
@@ -205,7 +223,7 @@ export function resolveRenderParameters(options: PrecedenceOptions): {
   const flagFps = flags.fps !== undefined
     ? { value: flags.fps, source: "--fps" }
     : preset
-      ? { value: preset.fps, source: `--preset ${flags.preset}` }
+      ? { value: preset.fps, source: presetSource }
       : undefined;
   const selFps = sel?.fps !== undefined ? { value: sel.fps, source: "selection" } : undefined;
   let cfgFps: { value: number; key: string } | undefined;
@@ -222,7 +240,7 @@ export function resolveRenderParameters(options: PrecedenceOptions): {
   const flagFmt = flags.format !== undefined
     ? { value: flags.format, source: "--format" }
     : preset
-      ? { value: preset.format, source: `--preset ${flags.preset}` }
+      ? { value: preset.format, source: presetSource }
       : undefined;
   const selFmt = sel?.format !== undefined ? { value: sel.format, source: "selection" } : undefined;
   const cfgFmt = explicit.has("render.format") && config?.render?.format !== undefined
@@ -236,8 +254,8 @@ export function resolveRenderParameters(options: PrecedenceOptions): {
 
   const flagCodec = flags.codec !== undefined
     ? { value: flags.codec, source: "--codec" }
-    : preset
-      ? { value: preset.video.codec, source: `--preset ${flags.preset}` }
+    : preset && formatPlan.codecs.length > 0
+      ? { value: preset.video.codec, source: presetSource }
       : undefined;
   const selCodec = sel?.codec !== undefined ? { value: sel.codec, source: "selection" } : undefined;
   const cfgCodec = explicit.has("render.codec") && config?.render?.codec !== undefined
@@ -256,11 +274,17 @@ export function resolveRenderParameters(options: PrecedenceOptions): {
     ? { value: config.render.quality, key: "render.quality" }
     : undefined;
   const quality = field(flagQuality, selQuality, cfgQuality, "final" as QualitySetting);
+  if (quality.value === "low" || quality.value === "high") {
+    runReport.warn(
+      ErrorCode.CC1012,
+      `Legacy quality '${quality.value}' accepted; use '${normalizeQuality(quality.value)}' instead.`,
+    );
+  }
 
   const flagCrf = flags.crf !== undefined
     ? { value: clampCrf(flags.crf, codec.value), source: "--crf" }
     : preset
-      ? { value: preset.video.crf, source: `--preset ${flags.preset}` }
+      ? { value: preset.video.crf, source: presetSource }
       : undefined;
   const cfgCrf = explicit.has("render.crf") && config?.render?.crf !== undefined
     ? { value: clampCrf(config.render.crf, codec.value), key: "render.crf" }
@@ -288,7 +312,23 @@ export function resolveRenderParameters(options: PrecedenceOptions): {
   }
   const concurrency = field(flagConcurrency, undefined, cfgConcurrency, "auto" as number | "auto");
 
-  // 8b. Render memory budget
+  // 8b. Chunk size
+  const flagChunk = flags.chunkSize !== undefined ? { value: flags.chunkSize, source: "--chunk-size" } : undefined;
+  const cfgChunk = explicit.has("render.chunkSize") && config?.render?.chunkSize !== undefined
+    ? { value: config.render.chunkSize, key: "render.chunkSize" }
+    : undefined;
+  const chunkSize = field(flagChunk, undefined, cfgChunk, 32);
+
+  // 8c. Hardware acceleration
+  const flagAccel = flags.hardwareAcceleration !== undefined
+    ? { value: flags.hardwareAcceleration, source: "--hardware-acceleration" }
+    : undefined;
+  const cfgAccel = explicit.has("render.hardwareAcceleration") && config?.render?.hardwareAcceleration !== undefined
+    ? { value: config.render.hardwareAcceleration, key: "render.hardwareAcceleration" }
+    : undefined;
+  const hardwareAcceleration = field(flagAccel, undefined, cfgAccel, "off" as HardwareAcceleration);
+
+  // 8d. Render memory budget
   const flagMemory = flags.memoryBudgetMb !== undefined
     ? { value: flags.memoryBudgetMb, source: "--memory-budget" }
     : undefined;
@@ -321,21 +361,24 @@ export function resolveRenderParameters(options: PrecedenceOptions): {
 
   // 12. Frame Window
   const parsedFps = fps.value;
+  const conv = createConversion(parsedFps);
   let computedDurationFrames = 0;
   if (sel?.duration !== undefined) {
     const rawDur = typeof sel.duration === "number" ? sel.duration : parseFloat(String(sel.duration));
-    if (Number.isFinite(rawDur)) computedDurationFrames = Math.ceil(rawDur * parsedFps);
+    if (Number.isFinite(rawDur)) computedDurationFrames = durationToFrames(rawDur, conv);
   } else if (explicit.has("video.defaultDuration") && config?.video?.defaultDuration !== undefined) {
     const rawDur = typeof config.video.defaultDuration === "number" ? config.video.defaultDuration : parseFloat(String(config.video.defaultDuration));
-    if (Number.isFinite(rawDur)) computedDurationFrames = Math.ceil(rawDur * parsedFps);
+    if (Number.isFinite(rawDur)) computedDurationFrames = durationToFrames(rawDur, conv);
   }
 
   const startFrame = flags.from !== undefined
-    ? typeof flags.from === "number" ? flags.from : parseTimeInput(String(flags.from), parsedFps)
+    ? typeof flags.from === "number" ? flags.from : parseTimeArgument(String(flags.from), parsedFps)
     : 0;
-  const endFrame = flags.to !== undefined
-    ? typeof flags.to === "number" ? flags.to : parseTimeInput(String(flags.to), parsedFps)
-    : computedDurationFrames;
+  const endFrame = isStill
+    ? startFrame + 1
+    : flags.to !== undefined
+      ? typeof flags.to === "number" ? flags.to : parseTimeArgument(String(flags.to), parsedFps)
+      : computedDurationFrames;
 
   const resolvedWindow: ResolvedFrameWindow = {
     from: startFrame,
@@ -357,15 +400,16 @@ export function resolveRenderParameters(options: PrecedenceOptions): {
   const outName = sel?.id ?? sel?.name ?? "output";
   const previewSuffix = flags.preview ? ".preview" : "";
   const subFolder = isStill ? OUTPUT_SUBDIRS.images : OUTPUT_SUBDIRS.videos;
-  const defaultDir = config ? resolveOutputDir(config) : resolve("output");
+  const defaultDir = project?.roots?.output
+    ?? (project?.root ? resolve(project.root, config?.outputDir ?? "output") : resolve("output"));
   const fallbackPath = resolve(defaultDir, subFolder, `${outName}${previewSuffix}${targetExt}`);
 
   const flagOut = flags.out !== undefined ? { value: resolve(flags.out), source: "--out" } : undefined;
   let cfgOut: { value: string; key: string } | undefined;
   if (explicit.has("project.outputDir") && config?.project?.outputDir) {
-    cfgOut = { value: resolve(project?.root ?? process.cwd(), config.project.outputDir, subFolder, `${outName}${previewSuffix}${targetExt}`), key: "project.outputDir" };
+    cfgOut = { value: resolve(project!.root, config.project.outputDir, subFolder, `${outName}${previewSuffix}${targetExt}`), key: "project.outputDir" };
   } else if (explicit.has("outputDir") && config?.outputDir) {
-    cfgOut = { value: resolve(project?.root ?? process.cwd(), config.outputDir, subFolder, `${outName}${previewSuffix}${targetExt}`), key: "outputDir" };
+    cfgOut = { value: resolve(project!.root, config.outputDir, subFolder, `${outName}${previewSuffix}${targetExt}`), key: "outputDir" };
   }
 
   const outputPath = field(flagOut, undefined, cfgOut, fallbackPath);
@@ -380,6 +424,8 @@ export function resolveRenderParameters(options: PrecedenceOptions): {
     crf,
     bitrate,
     concurrency,
+    chunkSize,
+    hardwareAcceleration,
     memoryBudgetMb,
     alpha,
     colorManagement,
@@ -391,7 +437,7 @@ export function resolveRenderParameters(options: PrecedenceOptions): {
   validatePrecedenceConflicts(parameters, preset);
 
   const explain: ExplainReport = {
-    root: project?.root ?? resolve(process.cwd()),
+    root: project?.root ?? "",
     configPath: project?.configPath ?? "",
     manifestPath: project?.manifestPath ?? "",
     mode: project?.mode ?? "file",
@@ -472,6 +518,8 @@ export function formatExplainReport(explain: ExplainReport): string {
     `  crf:              ${p.crf.value} (origin: ${p.crf.originLabel})`,
     `  bitrate:          ${p.bitrate.value ?? "unset"} (origin: ${p.bitrate.originLabel})`,
     `  concurrency:      ${p.concurrency.value} (origin: ${p.concurrency.originLabel})`,
+    `  chunkSize:        ${p.chunkSize.value} (origin: ${p.chunkSize.originLabel})`,
+    `  hardwareAccel:    ${p.hardwareAcceleration.value} (origin: ${p.hardwareAcceleration.originLabel})`,
     `  memoryBudgetMb:   ${p.memoryBudgetMb.value ?? "auto (available memory)"} (origin: ${p.memoryBudgetMb.originLabel})`,
     `  alpha:            ${p.alpha.value} (origin: ${p.alpha.originLabel})`,
     `  colorManagement:  ${typeof p.colorManagement.value === "string" ? p.colorManagement.value : JSON.stringify(p.colorManagement.value)} (origin: ${p.colorManagement.originLabel})`,
@@ -501,6 +549,8 @@ export function describeExplainReport(explain: ExplainReport): Record<string, un
       crf: { value: p.crf.value, origin: p.crf.origin, source: p.crf.source, originLabel: p.crf.originLabel },
       bitrate: { value: p.bitrate.value ?? null, origin: p.bitrate.origin, source: p.bitrate.source, originLabel: p.bitrate.originLabel },
       concurrency: { value: p.concurrency.value, origin: p.concurrency.origin, source: p.concurrency.source, originLabel: p.concurrency.originLabel },
+      chunkSize: { value: p.chunkSize.value, origin: p.chunkSize.origin, source: p.chunkSize.source, originLabel: p.chunkSize.originLabel },
+      hardwareAcceleration: { value: p.hardwareAcceleration.value, origin: p.hardwareAcceleration.origin, source: p.hardwareAcceleration.source, originLabel: p.hardwareAcceleration.originLabel },
       memoryBudgetMb: { value: p.memoryBudgetMb.value ?? null, origin: p.memoryBudgetMb.origin, source: p.memoryBudgetMb.source, originLabel: p.memoryBudgetMb.originLabel },
       alpha: { value: p.alpha.value, origin: p.alpha.origin, source: p.alpha.source, originLabel: p.alpha.originLabel },
       colorManagement: { value: p.colorManagement.value, origin: p.colorManagement.origin, source: p.colorManagement.source, originLabel: p.colorManagement.originLabel },

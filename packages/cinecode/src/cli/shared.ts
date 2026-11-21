@@ -3,24 +3,27 @@ import { basename, dirname, extname, join, resolve } from "node:path";
 import type { CinecodeConfig, Composition, QualitySetting, RenderFormat } from "../core/types/index.js";
 import type { VideoEncoding } from "../core/quality.js";
 import { resolveVideoEncoding } from "../core/quality.js";
-import { checkFileSizeCompliance, resolvePlatformPreset } from "../encoder/presets.js";
+import { checkFileSizeCompliance } from "../encoder/presets.js";
+import { getPreset } from "../encoder/platform-presets.js";
 import { createRenderJob, type RenderJob } from "../pipeline/index.js";
 import type { ProgressHandler } from "../pipeline/progress.js";
 import { CinecodeIgnore } from "../config/ignore.js";
+import { parseDurationInput, parseTimeInput } from "../core/time-input.js";
+import { UsageError } from "./usage-error.js";
 import type { ProjectLocation } from "../config/project.js";
 
-/** Parses HH:MM:SS:FF, HH:MM:SS or seconds into a frame number. */
-export function parseTimeInput(input: string, fps: number): number {
-  if (input.includes(":")) {
-    const parts = input.split(":").map(Number);
-    if (parts.length === 4) {
-      return ((parts[0] ?? 0) * 3600 + (parts[1] ?? 0) * 60 + (parts[2] ?? 0)) * fps + (parts[3] ?? 0);
-    }
-    if (parts.length === 3) {
-      return ((parts[0] ?? 0) * 3600 + (parts[1] ?? 0) * 60 + (parts[2] ?? 0)) * fps;
-    }
-  }
-  return Math.round(parseFloat(input) * fps);
+/** Frame index for a command-line time; malformed input is a usage error. */
+export function parseTimeArgument(input: string, fps: number): number {
+  const parsed = parseTimeInput(input, fps);
+  if (!parsed.ok) throw new UsageError(parsed.error);
+  return parsed.time.frame;
+}
+
+/** Duration value as seconds; malformed input is a usage error. */
+export function parseDurationArgument(value: number | string, fps: number): number {
+  const parsed = parseDurationInput(value, fps);
+  if (!parsed.ok) throw new UsageError(parsed.error);
+  return parsed.seconds;
 }
 
 export const OUTPUT_SUBDIRS = {
@@ -29,14 +32,6 @@ export const OUTPUT_SUBDIRS = {
   images: "images",
   scenes: "scenes",
 } as const;
-
-export function resolveCacheDir(config: CinecodeConfig): string {
-  return resolve(config.cacheDir ?? ".cinecode/cache");
-}
-
-export function resolveOutputDir(config: CinecodeConfig): string {
-  return resolve(config.outputDir ?? "output");
-}
 
 /** Prints which root and config the command resolved, and how it was found. */
 export function printProjectContext(
@@ -86,13 +81,13 @@ export function resolveEncoding(
   overrides: { quality?: QualitySetting; encoding?: VideoEncoding } = {},
 ): VideoEncoding {
   if (overrides.encoding) return overrides.encoding;
-  const platform = resolvePlatformPreset(config.render?.platformPreset);
+  const platform = getPreset(config.render?.platformPreset ?? "");
   const renderConfig = platform
     ? {
         ...config.render,
-        codec: config.render?.codec ?? platform.codec,
-        crf: config.render?.crf ?? platform.crf,
-        preset: config.render?.preset ?? platform.preset,
+        codec: config.render?.codec ?? platform.video.codec,
+        crf: config.render?.crf ?? platform.video.crf,
+        preset: config.render?.preset ?? platform.video.encoderPreset,
       }
     : config.render;
   return resolveVideoEncoding({ render: renderConfig, quality: overrides.quality });
@@ -118,6 +113,7 @@ export interface StartRenderOptions {
   readonly fromFrame?: number;
   readonly toFrame?: number;
   readonly silent?: boolean;
+  readonly verbose?: boolean;
   readonly onProgress?: ProgressHandler;
   readonly twoPass?: boolean;
   readonly alpha?: boolean;
@@ -131,13 +127,17 @@ export interface StartRenderOptions {
   readonly gifDither?: "floyd-steinberg" | "sierra-2" | "atkinson" | "none";
   readonly gifMaxFrames?: number;
   readonly fonts?: readonly import("../core/types/index.js").FontEntry[];
-  readonly projectRoot?: string;
+  readonly projectRoot: string;
   readonly mediaDir?: string;
   readonly strictFonts?: boolean;
+  readonly entryContent?: string | Buffer;
 }
 
 /** Wires a composition into the multi-worker render pipeline. */
 export function startCompositionRender(options: StartRenderOptions): RenderJob {
+  if (options.resume === true && options.noCache === true) {
+    throw new UsageError("--resume requires the frame cache. Remove --no-cache or use --fresh.");
+  }
   const encoding = resolveEncoding(options.config, {
     quality: options.quality,
     encoding: options.encoding,
@@ -147,7 +147,7 @@ export function startCompositionRender(options: StartRenderOptions): RenderJob {
   const job = createRenderJob({
     composition: options.composition,
     outputPath: options.outputPath,
-    cacheDir: resolveCacheDir(options.config),
+    cacheDir: resolve(options.projectRoot, options.config.cacheDir ?? ".cinecode/cache"),
     seed: options.seed ?? 0,
     concurrency,
     chunkSize: options.chunkSize ?? options.config.render?.chunkSize ?? 32,
@@ -162,6 +162,7 @@ export function startCompositionRender(options: StartRenderOptions): RenderJob {
     fromFrame: options.fromFrame ?? 0,
     toFrame: options.toFrame,
     silent: options.silent ?? false,
+    verbose: options.verbose ?? false,
     onProgress: options.onProgress,
     twoPass: options.twoPass ?? (options.config.render?.twoPass === true),
     alpha: options.alpha ?? (options.config.render?.alpha === true),
@@ -178,9 +179,10 @@ export function startCompositionRender(options: StartRenderOptions): RenderJob {
     projectRoot: options.projectRoot,
     mediaDir: options.mediaDir,
     strictFonts: options.strictFonts,
+    entryContent: options.entryContent,
   });
 
-  const preset = resolvePlatformPreset(options.config.render?.platformPreset);
+  const preset = getPreset(options.config.render?.platformPreset ?? "");
   if (!preset?.maxFileSizeMB) return job;
   return {
     ...job,

@@ -18,9 +18,8 @@ import { createRenderCache } from "../pipeline/cache.js";
 import { runCheck, type CheckReport } from "../cli/check.js";
 import { createProjectResolver } from "../cli/project-resolver.js";
 import { WebSocketHub, type WsClient } from "./websocket.js";
-import { PreviewLoop } from "./previewLoop.js";
-import { renderInspectorHtml } from "./inspector/panel.js";
 import type { Composition } from "../core/types/index.js";
+import { compositionTotalFrames } from "../core/time/index.js";
 
 export interface DevNode {
   readonly id: string;
@@ -42,7 +41,7 @@ export interface DevServerOptions {
 interface Preview {
   readonly buffer: Buffer;
   readonly contentType: string;
-  version: number;
+  version?: number;
 }
 
 interface UpdateMessage {
@@ -94,12 +93,12 @@ export class DevServer {
   private readonly graph: ModuleGraph;
   private readonly hub = new WebSocketHub();
   private readonly previews = new Map<string, Preview>();
+  private readonly previewLru = new Map<string, Preview>();
   private readonly renderCache;
   private server: Server | null = null;
   private watcher: FSWatcher | null = null;
   private pending: ReturnType<typeof setTimeout> | null = null;
   private sourceDir: string;
-  private readonly previewLoops = new Map<number, { loop: PreviewLoop; nodeId: string }>();
   private readonly hiddenTracks = new Map<number, ReadonlySet<number>>();
 
   constructor(options: DevServerOptions) {
@@ -120,6 +119,11 @@ export class DevServer {
     }
     const host = this.options.host === "0.0.0.0" ? "127.0.0.1" : this.options.host;
     return `http://${host}:${this.options.port}`;
+  }
+
+  private urlAddressPort(): number {
+    const address = this.server?.address();
+    return address && typeof address === "object" ? address.port : this.options.port;
   }
 
   get nodes(): readonly DevNode[] {
@@ -153,7 +157,7 @@ export class DevServer {
     this.startWatching();
     // Prime the first node so the preview shows something immediately.
     const first = this.graph.nodes[0];
-    if (first) await this.renderNode(first).catch((error) => console.error(`preview failed: ${String(error)}`));
+    if (first) await this.renderNode(first).catch((error) => process.stderr.write(`preview failed: ${String(error)}\n`));
   }
 
   private startWatching(): void {
@@ -217,6 +221,9 @@ export class DevServer {
 
   private async renderNode(node: DevNode): Promise<void> {
     const preview = await this.producePreview(node, 0);
+    for (const key of [...this.previewLru.keys()]) {
+      if (key.startsWith(`${node.id}:`)) this.previewLru.delete(key);
+    }
     const existing = this.previews.get(node.id);
     const version = (existing?.version ?? 0) + 1;
     this.previews.set(node.id, { ...preview, version });
@@ -228,7 +235,7 @@ export class DevServer {
     };
     if (this.options.hmr) this.hub.broadcast(message);
     else this.hub.broadcast({ ...message, type: "update" });
-    console.log(`[hmr] ${node.kind} ${node.id} → updated (v${version})`);
+    process.stderr.write(`[hmr] ${node.kind} ${node.id} → updated (v${version})\n`);
   }
 
   private filterTracks(composition: Composition, hidden: ReadonlySet<number>): Composition {
@@ -240,6 +247,25 @@ export class DevServer {
         tracks: composition.rootTimeline.tracks.filter((_track, index) => !hidden.has(index)),
       },
     };
+  }
+
+  private previewKey(node: DevNode, frame: number, hidden: ReadonlySet<number>, version: number): string {
+    const hiddenKey = [...hidden].sort((left, right) => left - right).join(",");
+    return `${node.id}:${frame}:${hiddenKey}:${version}`;
+  }
+
+  private cachePreview(key: string, preview: Preview): Preview {
+    this.previewLru.delete(key);
+    this.previewLru.set(key, preview);
+    let bytes = 0;
+    for (const entry of this.previewLru.values()) bytes += entry.buffer.length;
+    while (this.previewLru.size > 128 || bytes > 64 * 1024 * 1024) {
+      const oldest = this.previewLru.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      bytes -= this.previewLru.get(oldest)?.buffer.length ?? 0;
+      this.previewLru.delete(oldest);
+    }
+    return preview;
   }
 
   private async producePreview(
@@ -290,18 +316,12 @@ export class DevServer {
     const rawUrl = req.url ?? "/";
     const url = new URL(rawUrl, "http://localhost");
     const pathname = url.pathname;
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'nonce-cinecode-preview'; connect-src 'self' ws:");
     if (pathname === "/" || pathname === "/index.html") {
       const html = await this.indexHtml();
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(html);
-      return;
-    }
-    if (pathname === "/inspector") {
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(renderInspectorHtml({
-        host: this.options.host === "0.0.0.0" ? "localhost" : this.options.host,
-        port: this.options.port,
-      }));
       return;
     }
     if (pathname?.startsWith("/composition/")) {
@@ -366,92 +386,6 @@ export class DevServer {
       }
       return;
     }
-    if (pathname === "/metrics") {
-      const { globalMetrics } = await import("../observability/metrics.js");
-      const metricsText = await globalMetrics.getMetricsText();
-      res.writeHead(200, { "content-type": globalMetrics.contentType });
-      res.end(metricsText);
-      return;
-    }
-    if (pathname === "/healthz") {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ status: "ok", timestamp: Date.now() }));
-      return;
-    }
-    if (pathname === "/readyz") {
-      const isReady = !!this.server && this.graph.nodes.length >= 0;
-      if (isReady) {
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ status: "ready" }));
-      } else {
-        res.writeHead(503, { "content-type": "application/json" });
-        res.end(JSON.stringify({ status: "degraded", reasons: ["Server initializing"] }));
-      }
-      return;
-    }
-    if (pathname === "/health") {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          status: "healthy",
-          uptime: process.uptime(),
-          memory: process.memoryUsage(),
-          wsClients: this.hub.size,
-          cachedPreviews: this.previews.size,
-          nodes: this.graph.nodes.length,
-          timestamp: Date.now(),
-        }),
-      );
-      return;
-    }
-    if (pathname === "/persist" || pathname?.startsWith("/persist/")) {
-      res.writeHead(405, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: "Preview server is read-only. Persistence operations are forbidden." }));
-      return;
-    }
-    if (pathname === "/export-frame") {
-      const nodeId = url.searchParams.get("node");
-      const frameStr = url.searchParams.get("frame") || "0";
-      const format = url.searchParams.get("format") || "png";
-      const frameNum = parseInt(frameStr, 10) || 0;
-      const node = nodeId ? this.graph.get(nodeId) : this.graph.nodes[0];
-      if (!node) {
-        res.writeHead(404, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: "Node not found" }));
-        return;
-      }
-      try {
-        const comp = await this.resolveComposition(node);
-        if (!comp) {
-          res.writeHead(400, { "content-type": "application/json" });
-          res.end(JSON.stringify({ error: "Node is not a composition" }));
-          return;
-        }
-        if (format === "svg") {
-          const { serializeFrameToSvg } = await import("../svg/serializer.js");
-          const svgStr = serializeFrameToSvg(comp, frameNum);
-          res.writeHead(200, {
-            "content-type": "image/svg+xml",
-            "content-disposition": `attachment; filename="${node.name}_frame_${frameNum}.svg"`,
-          });
-          res.end(svgStr);
-          return;
-        }
-        const { renderStill } = await import("../renderer/engine.js");
-        const canvas = await renderStill(comp, frameNum, 0);
-        const buf = (canvas as unknown as { toBuffer(mime: string): Buffer }).toBuffer("image/png");
-        res.writeHead(200, {
-          "content-type": "image/png",
-          "content-disposition": `attachment; filename="${node.name}_frame_${frameNum}.png"`,
-        });
-        res.end(buf);
-        return;
-      } catch (err: any) {
-        res.writeHead(500, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: err.message }));
-        return;
-      }
-    }
     if (pathname === "/nodes") {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(this.graph.nodes));
@@ -466,14 +400,27 @@ export class DevServer {
     if (pathname?.startsWith("/preview/")) {
       const id = decodeURIComponent(pathname.slice("/preview/".length));
       const node = this.graph.get(id);
+      const requestedVersion = url.searchParams.get("v");
+      const currentVersion = this.previews.get(id)?.version;
+      if (requestedVersion !== null && currentVersion !== undefined && Number(requestedVersion) !== currentVersion) {
+        res.writeHead(409, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "Stale preview version", refresh: true }));
+        return;
+      }
       const frameParam = url.searchParams.get("frame");
       // On-demand frame scrubbing: render the requested frame directly. Falls
       // back to the cached frame-0 preview when no frame is requested.
       if (node && frameParam !== null) {
         try {
           const frame = Number.parseInt(frameParam, 10);
-          const preview = await this.producePreview(node, Number.isFinite(frame) ? frame : 0);
-          res.writeHead(200, { "content-type": preview.contentType, "cache-control": "no-store" });
+          const safeFrame = Number.isFinite(frame) ? frame : 0;
+          const hiddenParam = url.searchParams.get("hidden");
+          const hidden = new Set(hiddenParam ? hiddenParam.split(",").map((value) => Number(value)).filter(Number.isFinite) : []);
+          const version = this.previews.get(id)?.version ?? 0;
+          const key = this.previewKey(node, safeFrame, hidden, version);
+          const cached = this.previewLru.get(key);
+          const preview = cached ?? this.cachePreview(key, await this.producePreview(node, safeFrame, hidden));
+          res.writeHead(200, { "content-type": preview.contentType, "cache-control": "no-cache" });
           res.end(preview.buffer);
           return;
         } catch (error) {
@@ -499,32 +446,11 @@ export class DevServer {
   private async indexHtml(): Promise<string> {
     return CLIENT_HTML
       .replace(/__HOST__/g, this.options.host)
-      .replace(/__PORT__/g, String(this.options.port));
+      .replace(/__PORT__/g, String(this.urlAddressPort()));
   }
 
   private compositionFrameCount(composition: Composition): number {
-    if (composition.duration !== undefined) {
-      const seconds = typeof composition.duration === "number"
-        ? composition.duration
-        : Number.parseFloat(composition.duration);
-      if (Number.isFinite(seconds) && seconds > 0) {
-        return Math.max(1, Math.ceil(seconds * composition.fps));
-      }
-    }
-    return this.previewFrames(composition);
-  }
-
-  private previewFrames(composition: Composition): number {
-    let frames = 0;
-    for (const track of composition.rootTimeline.tracks) {
-      if (track.kind === "audio") continue;
-      for (const clip of track.clips) {
-        const start = typeof clip.start === "number" ? clip.start : 0;
-        const duration = typeof clip.duration === "number" ? clip.duration : 1;
-        frames = Math.max(frames, Math.ceil((start + duration) * composition.fps));
-      }
-    }
-    return Math.max(1, frames);
+    return Math.max(1, compositionTotalFrames(composition));
   }
 
   private async resolveComposition(node: DevNode): Promise<Composition | null> {
@@ -578,7 +504,9 @@ export class DevServer {
       const frame = typeof message.frame === "number" ? Math.max(0, Math.floor(message.frame)) : 0;
       const started = Date.now();
       try {
-        const preview = await this.producePreview(node, frame, hidden);
+        const version = this.previews.get(node.id)?.version ?? 0;
+        const key = this.previewKey(node, frame, hidden, version);
+        const preview = this.previewLru.get(key) ?? this.cachePreview(key, await this.producePreview(node, frame, hidden));
         const composition = await this.resolveComposition(node);
         const totalFrames = composition ? this.compositionFrameCount(composition) : 1;
         client.send({
@@ -595,34 +523,9 @@ export class DevServer {
       }
       return;
     }
-    if (message.type === "preview:stop") {
-      this.previewLoops.get(client.id)?.loop.stop();
-      this.previewLoops.delete(client.id);
-      return;
-    }
-    if (message.type === "preview:scrub") {
-      const entry = this.previewLoops.get(client.id);
-      if (entry && typeof message.frame === "number") entry.loop.scrubTo(message.frame);
-      return;
-    }
-    if (message.type !== "preview:start" || typeof message.node !== "string") return;
-    const node = this.graph.get(message.node);
-    if (!node) return;
-    const resolved = await this.resolveComposition(node);
-    if (!resolved) return;
-    const composition = this.filterTracks(resolved, this.hiddenTracks.get(client.id) ?? new Set());
-    this.previewLoops.get(client.id)?.loop.stop();
-    const loop = new PreviewLoop(composition, (payload) => {
-      client.send({ type: "previewFrame", frame: payload.frame, fps: payload.fps, timestamp: payload.timestamp });
-      if (payload.buffer.length > 0) client.sendBinary(payload.buffer);
-    }, { targetFps: message.fps ?? 30 });
-    this.previewLoops.set(client.id, { loop, nodeId: node.id });
-    loop.start();
   }
 
   async stop(): Promise<void> {
-    for (const entry of this.previewLoops.values()) entry.loop.stop();
-    this.previewLoops.clear();
     this.hiddenTracks.clear();
     if (this.pending) clearTimeout(this.pending);
     this.watcher?.close();
@@ -635,7 +538,6 @@ export class DevServer {
   }
 }
 
-export { renderInspectorHtml, type InspectorPanelOptions } from "./inspector/panel.js";
 
 const CLIENT_HTML = `<!doctype html>
 <html lang="en">
@@ -676,6 +578,9 @@ const CLIENT_HTML = `<!doctype html>
   #scrub span { font-size:11px; color:#8a8781; }
   #scrub input[type=range] { flex:1; }
   #scrub input[type=number] { width:64px; background:#17171b; color:#e8e6e1; border:1px solid #232227; border-radius:6px; padding:2px 6px; }
+  #view-controls { position:absolute; right:12px; bottom:12px; display:flex; gap:6px; z-index:5; }
+  #view-controls button { background:#17171b; color:#e8e6e1; border:1px solid #232227; border-radius:6px; padding:5px 8px; cursor:pointer; }
+  #view-help { position:absolute; left:12px; bottom:12px; color:#8a8781; font-size:11px; z-index:5; }
 </style>
 </head>
 <body>
@@ -685,10 +590,14 @@ const CLIENT_HTML = `<!doctype html>
 </header>
 <main>
   <aside id="list"></aside>
-  <section class="preview" id="preview"><span class="empty">Select an asset</span></section>
+  <section class="preview" id="preview">
+    <span class="empty">Select an asset</span>
+    <div id="view-controls"><button id="fitView" title="Fit">Fit</button><button id="resetView" title="Reset (R)">Reset</button></div>
+    <div id="view-help">Drag: pan &nbsp; Wheel: zoom &nbsp; R: reset &nbsp; F: fit</div>
+  </section>
 </main>
 <div id="overlay"></div>
-<script>
+<script nonce="cinecode-preview">
   const HOST = "__HOST__";
   const PORT = "__PORT__";
   const list = document.getElementById("list");
@@ -707,7 +616,19 @@ const CLIENT_HTML = `<!doctype html>
 
   function updateTransform(el) {
     if (!el) return;
-    el.style.transform = "scale(" + zoomLevel + ") translate(" + panX + "px, " + panY + "px)";
+    el.style.transform = "translate(" + panX + "px, " + panY + "px) scale(" + zoomLevel + ")";
+  }
+
+  function resetView() {
+    zoomLevel = 1;
+    panX = 0;
+    panY = 0;
+    var img = preview.querySelector("img");
+    updateTransform(img);
+  }
+
+  function fitView() {
+    resetView();
   }
 
   function render(type, node, frame) {
@@ -726,27 +647,40 @@ const CLIENT_HTML = `<!doctype html>
 
       img.onwheel = function (e) {
         e.preventDefault();
-        var delta = e.deltaY < 0 ? 0.1 : -0.1;
-        zoomLevel = Math.max(0.1, Math.min(10, zoomLevel + delta));
+        var rect = img.getBoundingClientRect();
+        var cursorX = e.clientX - rect.left - rect.width / 2;
+        var cursorY = e.clientY - rect.top - rect.height / 2;
+        var worldX = (cursorX - panX) / zoomLevel;
+        var worldY = (cursorY - panY) / zoomLevel;
+        var nextZoom = Math.max(0.1, Math.min(10, zoomLevel * (e.deltaY < 0 ? 1.1 : 0.9)));
+        panX = cursorX - worldX * nextZoom;
+        panY = cursorY - worldY * nextZoom;
+        zoomLevel = nextZoom;
         updateTransform(img);
       };
 
       img.onmousedown = function (e) {
         if (e.button !== 0) return;
         isDragging = true;
-        startX = e.clientX - panX * zoomLevel;
-        startY = e.clientY - panY * zoomLevel;
+        startX = e.clientX - panX;
+        startY = e.clientY - panY;
       };
 
       window.onmousemove = function (e) {
         if (!isDragging) return;
-        panX = (e.clientX - startX) / zoomLevel;
-        panY = (e.clientY - startY) / zoomLevel;
+        panX = e.clientX - startX;
+        panY = e.clientY - startY;
         updateTransform(img);
       };
 
       window.onmouseup = function () {
         isDragging = false;
+      };
+      document.getElementById("fitView").onclick = fitView;
+      document.getElementById("resetView").onclick = resetView;
+      window.onkeydown = function (e) {
+        if (e.key.toLowerCase() === "r") resetView();
+        if (e.key.toLowerCase() === "f") fitView();
       };
 
       preview.appendChild(img);
@@ -807,7 +741,16 @@ const CLIENT_HTML = `<!doctype html>
     for (const node of nodes) {
       const el = document.createElement("div");
       el.className = "node"; el.dataset.id = node.id;
-      el.innerHTML = '<span class="kind">' + node.kind + '</span><span>' + node.name + '</span><span class="dirty"></span>';
+      var kind = document.createElement("span");
+      kind.className = "kind";
+      kind.textContent = node.kind;
+      var name = document.createElement("span");
+      name.textContent = node.name;
+      var dirty = document.createElement("span");
+      dirty.className = "dirty";
+      el.appendChild(kind);
+      el.appendChild(name);
+      el.appendChild(dirty);
       el.onclick = () => select(node);
       list.appendChild(el);
     }

@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { runReport } from "./run-report.js";
 import { createProjectResolver, reportResolution } from "./project-resolver.js";
 import { inspectMedia, type MediaFileType } from "../media/index.js";
@@ -52,7 +53,7 @@ export async function mediaListCommand(options: MediaListOptions): Promise<void>
 
     if (entry.type === "video" || entry.type === "image" || entry.type === "audio") {
       try {
-        const metadata = await inspectMedia(entry.absolutePath, { cache: access.cache, sourceDir: resolution.config.sourceDir });
+        const metadata = await inspectMedia(entry.absolutePath, { cache: access.cache, sourceDir: resolution.context.roots.source });
         duration = metadata.duration ?? 0;
         resolutionStr = metadata.width && metadata.height ? `${metadata.width}x${metadata.height}` : "unknown";
       } catch {
@@ -73,18 +74,19 @@ export async function mediaListCommand(options: MediaListOptions): Promise<void>
   }
 
   runReport.result({ media: output });
+  const outPath = options.out ? resolve(resolution.context.root, options.out) : undefined;
   if (options.json) {
-    if (options.out) {
-      writeFileSync(options.out, JSON.stringify(output, null, 2));
-      runReport.artifact({ kind: "media-list", path: options.out, units: output.length, unit: "entries" });
+    if (outPath) {
+      writeFileSync(outPath, JSON.stringify(output, null, 2));
+      runReport.artifact({ kind: "media-list", path: outPath, units: output.length, unit: "entries" });
     }
     return;
   }
 
   const table = formatTable(output);
-  if (options.out) {
-    writeFileSync(options.out, table);
-    console.log(`Written to ${options.out}`);
+  if (outPath) {
+    writeFileSync(outPath, table);
+    console.log(`Written to ${outPath}`);
   } else {
     console.log(table);
   }

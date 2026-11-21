@@ -1,4 +1,5 @@
 import { createError, ErrorCode, type ErrorLocation } from "../errors/codes.js";
+import type { CommandOutcome } from "./command-registry.js";
 import {
   pendingDegradations,
   pendingWarnings,
@@ -8,7 +9,15 @@ import {
   type WarningRecord,
 } from "../errors/degradations.js";
 
-export const MACHINE_SCHEMA_VERSION = 1;
+export { MACHINE_SCHEMA_VERSION } from "../contracts.js";
+import { MACHINE_SCHEMA_VERSION } from "../contracts.js";
+
+export interface CommandDescriptor {
+  readonly name: string;
+  readonly outcome: CommandOutcome;
+  readonly network: boolean;
+  readonly destructive: boolean;
+}
 
 export interface ProjectRecord {
   readonly root: string;
@@ -47,6 +56,7 @@ export interface MachineReport {
   readonly artifacts: readonly ArtifactRecord[];
   readonly warnings: readonly WarningRecord[];
   readonly degradations: readonly Degradation[];
+  readonly descriptor: CommandDescriptor | null;
   readonly timing: { readonly startedAt: string; readonly durationMs: number };
   readonly error?: MachineErrorRecord;
 }
@@ -60,10 +70,18 @@ export class RunReport {
   private artifacts: ArtifactRecord[] = [];
   private expectedArtifacts = 0;
   private expectedArtifactKinds: string[] = [];
+  private descriptorRecord: CommandDescriptor | null = null;
+  private informationalNote: string | undefined;
+  private cacheDirRecord: string | undefined;
   private machine = false;
 
-  start(command: string, machine = false): void {
+  /** Resets per-invocation diagnostics; called once, before any command work. */
+  reset(): void {
     resetDiagnostics();
+  }
+
+  /** Starts or re-labels the report without dropping collected diagnostics. */
+  start(command: string, machine = false): void {
     this.command = command;
     this.startedAt = new Date();
     this.projectRecord = null;
@@ -72,7 +90,29 @@ export class RunReport {
     this.artifacts = [];
     this.expectedArtifacts = 0;
     this.expectedArtifactKinds = [];
+    this.descriptorRecord = null;
+    this.informationalNote = undefined;
+    this.cacheDirRecord = undefined;
     this.machine = machine;
+  }
+
+  /** Alias resolution renames the run without restarting the collection. */
+  relabel(command: string): void {
+    this.command = command;
+  }
+
+  /** The registry declares what the command produces; the summary reads it here. */
+  describe(spec: CommandDescriptor): void {
+    this.descriptorRecord = { name: spec.name, outcome: spec.outcome, network: spec.network, destructive: spec.destructive };
+  }
+
+  descriptor(): CommandDescriptor | null {
+    return this.descriptorRecord;
+  }
+
+  /** A command that returned early because the user asked for information. */
+  note(message: string): void {
+    this.informationalNote = message;
   }
 
   setMachine(machine: boolean): void {
@@ -81,6 +121,14 @@ export class RunReport {
 
   isMachine(): boolean {
     return this.machine;
+  }
+
+  setCacheDir(dir: string): void {
+    this.cacheDirRecord = dir;
+  }
+
+  cacheDir(): string | undefined {
+    return this.cacheDirRecord;
   }
 
   getCommand(): string {
@@ -152,6 +200,7 @@ export class RunReport {
       artifacts: [...this.artifacts],
       warnings: [...warnings],
       degradations: [...degradations],
+      descriptor: this.descriptorRecord,
       timing: { startedAt: this.startedAt.toISOString(), durationMs: Date.now() - this.startedAt.getTime() },
     };
   }
@@ -169,6 +218,7 @@ export class RunReport {
       artifacts: [...this.artifacts],
       warnings: [...warnings],
       degradations,
+      descriptor: this.descriptorRecord,
       timing: { startedAt: this.startedAt.toISOString(), durationMs: Date.now() - this.startedAt.getTime() },
       error,
     };
@@ -182,7 +232,12 @@ export class RunReport {
 
   summary(report: MachineReport): string {
     const lines: string[] = [];
-    if (report.artifacts.length === 0) {
+    const outcome = report.descriptor?.outcome;
+    if (outcome === "none" || outcome === "report") {
+      lines.push(`${report.ok ? "✔" : "✗"} ${report.command}: ${outcome === "report" ? "reported" : "done"}`);
+    } else if (this.informationalNote !== undefined) {
+      lines.push(`${report.ok ? "✔" : "✗"} ${report.command}: ${this.informationalNote}`);
+    } else if (report.artifacts.length === 0) {
       lines.push(`${report.ok ? "✔" : "✗"} ${report.command}: no artifacts produced`);
     } else {
       lines.push(`✔ ${report.command}: ${report.artifacts.length} artifact(s)`);
@@ -220,6 +275,15 @@ export function validateMachineReport(value: unknown): string[] {
   }
   const timing = report.timing as Record<string, unknown> | undefined;
   if (!timing || typeof timing.startedAt !== "string" || typeof timing.durationMs !== "number") problems.push("timing must carry startedAt and durationMs");
+  const descriptor = report.descriptor as Record<string, unknown> | null | undefined;
+  if (descriptor !== null && descriptor !== undefined) {
+    if (typeof descriptor.name !== "string" || !["none", "artifact", "report"].includes(String(descriptor.outcome))) {
+      problems.push("descriptor must carry a name and a known outcome kind");
+    }
+    if (typeof descriptor.network !== "boolean" || typeof descriptor.destructive !== "boolean") {
+      problems.push("descriptor must carry the network and destructive flags");
+    }
+  }
   if (report.ok === false) {
     const error = report.error as Record<string, unknown> | undefined;
     if (!error || typeof error.code !== "string" || typeof error.message !== "string") problems.push("failed report must carry error.code and error.message");

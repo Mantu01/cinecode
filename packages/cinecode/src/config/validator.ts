@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { resolve, sep } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import type { CinecodeConfig } from "../core/types/index.js";
 import { createError, ErrorCode, type CinecodeError, type ErrorLocation } from "../errors/index.js";
 import {
@@ -9,10 +9,8 @@ import {
   type ZodValidationIssue,
   type ZodValidationResult,
 } from "./zod-schema.js";
+import { authoredRoots, validateProjectRoots, validateRootFilenames } from "./roots.js";
 
-const RESERVED_NAMES = new Set(["CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"]);
-const INVALID_CHARS = /[<>:"|?*]/;
-const TRAILING_DOT_OR_SPACE = /[. ]+$/;
 const CINEMATIC_FPS = new Set([23.976, 29.97, 59.94]);
 
 /** Keys removed because they had no implemented effect, with the replacement. */
@@ -32,11 +30,13 @@ export const REMOVED_CONFIG_KEYS: Readonly<Record<string, string>> = {
   "render.enforceAspectRatio": "Removed; use render.platformPreset or explicit video.width/video.height.",
   "render.variants": "Removed; run `cinecode multi-res` for per-variant renders.",
   "dev.historyDepth": "Removed; the canvas editor owns its history depth.",
+  "dev.metricsPort": "Removed; Prometheus metrics are served on the dev port at /metrics.",
   logLevel: "Removed; use the CLI --verbose flag.",
   "audio.normalize": "Removed; apply audio processing in the timeline mixer.",
   "audio.limiter": "Removed; apply audio processing in the timeline mixer.",
   "audio.sidechains": "Removed; apply audio processing in the timeline mixer.",
   security: "Removed; plugin verification is controlled by local capabilities.",
+  composition: "Removed; select a composition with --composition or render the file directly.",
   telemetry: "Removed in Phase 32; telemetry has been removed.",
   pluginPermissions: "Removed; sandbox permissions are configured per plugin.",
 };
@@ -75,13 +75,23 @@ function schemaErrors(result: ZodValidationResult, configPath?: string): Cinecod
   return errors;
 }
 
+let authoringValidations = 0;
+let normalizedValidations = 0;
+
+/** How many times each schema ran in this process; the boundary tests assert one. */
+export function configValidationCounts(): { readonly authoring: number; readonly normalized: number } {
+  return { authoring: authoringValidations, normalized: normalizedValidations };
+}
+
 /** Validates the document a user writes. Used by load, validate and the helper. */
 export function validateAuthoringConfig(raw: unknown, configPath?: string): ValidationResult {
+  authoringValidations += 1;
   return { errors: schemaErrors(validateConfigWithZod(raw), configPath), warnings: [] };
 }
 
 /** Validates the normalized document consumers receive. */
 export function validateNormalizedConfig(config: unknown, configPath?: string): ValidationResult {
+  normalizedValidations += 1;
   return { errors: schemaErrors(validateNormalizedConfigWithZod(config), configPath), warnings: [] };
 }
 
@@ -103,36 +113,12 @@ function findConfigLocation(configPath: string, keyPath: string): ErrorLocation 
   return { file: configPath };
 }
 
-function validatePath(key: string, path: string, configPath: string, kind: "source" | "output" = "output"): CinecodeError[] {
-  const errors: CinecodeError[] = [];
-
-  if (INVALID_CHARS.test(path)) {
-    errors.push(createError(ErrorCode.CC1003, { key, path, reason: "contains invalid characters <>:\"|?*" }, { location: { file: configPath } }));
-  }
-
-  const parts = path.split(/[/\\]/);
-  for (const part of parts) {
-    if (part === "." || part === "..") continue;
-    if (RESERVED_NAMES.has(part.toUpperCase())) {
-      errors.push(createError(ErrorCode.CC1003, { key, path, reason: `contains reserved Windows name: ${part}` }, { location: { file: configPath } }));
-    }
-    if (TRAILING_DOT_OR_SPACE.test(part)) {
-      errors.push(createError(ErrorCode.CC1003, { key, path, reason: "has trailing dots or spaces" }, { location: { file: configPath } }));
-    }
-  }
-
-  if (resolve(path) === resolve(".")) {
-    errors.push(createError(ErrorCode.CC1003, { key, path, reason: "cannot be project root" }, { location: { file: configPath } }));
-  }
-  if (kind !== "source" && resolve(path) === resolve("src")) {
-    errors.push(createError(ErrorCode.CC1003, { key, path, reason: "cannot be src directory" }, { location: { file: configPath } }));
-  }
-
-  return errors;
-}
-
 /** The one validation entry point used by validate, check and doctor. */
-export function validateConfig(config: CinecodeConfig, configPath: string): ValidationResult {
+export function validateConfig(
+  config: CinecodeConfig,
+  configPath: string,
+  root: string = dirname(resolve(configPath)),
+): ValidationResult {
   const { errors } = validateNormalizedConfig(config, configPath);
   const warnings: CinecodeError[] = [];
 
@@ -140,16 +126,12 @@ export function validateConfig(config: CinecodeConfig, configPath: string): Vali
     warnings.push(createError(ErrorCode.CC1004, { version: "1", expected: "2" }, { location: findConfigLocation(configPath, "schemaVersion"), fixHint: "Schema v2 adds project/video/images/dev blocks; v1 still works.", severity: "warning" }));
   }
 
-  errors.push(...validatePath("sourceDir", config.sourceDir, configPath, "source"));
+  errors.push(...validateProjectRoots(root, config, { configPath }));
+  errors.push(...validateRootFilenames(config, { configPath }));
 
-  const dirs = [config.sourceDir, config.outputDir, config.cacheDir];
-  if (new Set(dirs.map((dir) => resolve(dir))).size !== dirs.length) {
-    errors.push(createError(ErrorCode.CC1003, { key: "sourceDir/outputDir/cacheDir", path: dirs.join(", "), reason: "all three directories must be different" }, { location: { file: configPath } }));
-  }
-
-  for (const [key, value] of [["outputDir", config.outputDir], ["cacheDir", config.cacheDir]] as const) {
-    errors.push(...validatePath(key, value, configPath));
-    if (!resolve(value).startsWith(resolve(".") + sep)) {
+  const authored = authoredRoots(config);
+  for (const [key, value] of [["sourceDir", authored.source], ["mediaDir", authored.media], ["outputDir", authored.output], ["cacheDir", authored.cache]] as const) {
+    if (isAbsolute(value)) {
       warnings.push(createError(ErrorCode.CC1003, { key, path: value, reason: "relative paths recommended for portability" }, { location: findConfigLocation(configPath, key), severity: "warning" }));
     }
   }

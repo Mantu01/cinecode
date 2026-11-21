@@ -29,7 +29,6 @@ children carry the effect. Field paths match `docs/config-reference.md`.
 | `dev.host` | `dev.host` | `cinecode dev` bind host. |
 | `dev.open` | `dev.open` | Opens the dev URL in a browser. |
 | `dev.hmr` | `dev.hmr` | Enables hot reload. |
-| `dev.metricsPort` | `dev.metricsPort` | Prometheus metrics port. |
 | `sourceDir` | `sourceDir` | Authored source code root. |
 | `mediaDir` | `mediaDir` | Media assets root. |
 | `outputDir` | `outputDir` | Render output root. |
@@ -81,7 +80,6 @@ children carry the effect. Field paths match `docs/config-reference.md`.
 | `pluginPrecedence` | `pluginPrecedence` | Plugin feature-conflict order. |
 | `autoDiscoverPlugins` | `autoDiscoverPlugins` | Plugin auto-discovery toggle. |
 | `ignorePatterns` | `ignorePatterns` | Media-index ignore predicate. |
-| `composition` | `composition` | Legacy composition passthrough for `defineConfig`. |
 
 ## Removed keys
 
@@ -96,8 +94,10 @@ These keys had no consumer and are rejected with the replacement hint.
 | `render.enforceAspectRatio` | Use `render.platformPreset` or explicit geometry. |
 | `render.variants` | Run `cinecode multi-res`. |
 | `dev.historyDepth` | Canvas editor owns its history depth. |
+| `dev.metricsPort` | Prometheus metrics are served on the dev port at `/metrics`. |
 | `logLevel` | Use the CLI `--verbose` flag. |
 | `audio.normalize`, `audio.limiter`, `audio.sidechains` | Apply audio processing in the timeline mixer. |
 | `security`, `security.pluginVerification`, `security.trustedKeys` | Marketplace client controls verification. |
 | `telemetry`, `telemetry.enabled`, `telemetry.endpoint` | Use `cinecode telemetry`. |
 | `pluginPermissions` | Sandbox permissions are configured per plugin. |
+| `composition` | Select a composition with `--composition`; do not embed it in config. |

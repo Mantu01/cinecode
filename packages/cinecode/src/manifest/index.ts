@@ -8,6 +8,7 @@ import type {
   Composition,
   MainManifest,
   Timeline,
+  AudioPlacement,
 } from "../core/types/index.js";
 import type { AudioBuffer } from "../audio/types.js";
 import type { AudioDef, ImageDef, SceneDef } from "../core/define/definitions.js";
@@ -21,6 +22,10 @@ import { createConversion } from "../core/time/index.js";
 import { computeClipSpan } from "../core/validation/index.js";
 import { loadModuleFile, resolveEntryFile } from "./loader.js";
 import { hotReloadEnabled } from "../loader/index.js";
+import { assertMainContract } from "./contract.js";
+import { assertDeterministicAuthoredModules } from "./determinism.js";
+import { idRule } from "./ids.js";
+import { checkDeclaredDuration } from "./duration.js";
 import { createError, ErrorCode } from "../errors/index.js";
 import {
   parseAndValidateDuration,
@@ -62,8 +67,22 @@ export async function loadManifestProject(
   if (!existsSync(entryPath)) {
     return { rootDir, entryPath, config, manifest: normalizeManifest({}, entryPath), hasManifest: false };
   }
-  const raw = await loadModuleFile<MainManifest>(entry, rootDir, { fresh: hotReloadEnabled() });
-  return { rootDir, entryPath, config, manifest: normalizeManifest(raw, entryPath), hasManifest: true, rawManifest: raw };
+  const raw = await loadModuleFile<unknown>(entry, rootDir, { fresh: hotReloadEnabled() });
+  const definition = assertMainContract(raw, entryPath);
+  assertDeterministicAuthoredModules(definition, entryPath, rootDir);
+  return {
+    rootDir,
+    entryPath,
+    config,
+    manifest: normalizeManifest(definition, entryPath),
+    hasManifest: true,
+    rawManifest: definition,
+  };
+}
+
+export function assertSelectorId(kind: string, id: string): void {
+  const rule = idRule(id);
+  if (rule) throw createError(ErrorCode.CC1012, { reason: `Invalid ${kind} id "${id}": ${rule}` });
 }
 
 export function findEntry<T extends { id: string }>(
@@ -71,6 +90,7 @@ export function findEntry<T extends { id: string }>(
   id: string,
   kind: string,
 ): T {
+  assertSelectorId(kind, id);
   const found = entries?.find((entry) => entry.id === id);
   if (!found) {
     const available = (entries ?? []).map((entry) => entry.id).join(", ") || "none";
@@ -165,6 +185,8 @@ export interface ResolvedScene {
   readonly name: string;
   readonly timeline: Timeline;
   readonly duration: number;
+  readonly declaredDuration?: number;
+  readonly contentDuration: number;
 }
 
 /** Loads a scene entry and resolves it to a duration-bearing timeline. */
@@ -180,10 +202,17 @@ export async function resolveScene(
   const resolved = resolveEntryFile(scene.file, rootDir);
   const raw = moduleCache?.get(resolved) ?? moduleCache?.get(scene.file) ?? await loadModuleFile<unknown>(scene.file, rootDir, { fresh: hotReloadEnabled() });
   const timeline = await resolveTimelineValue(raw, scene.file);
-  const explicit =
+  const declared =
     toSeconds(scene.duration, fps) ?? (isSceneDef(raw) ? toSeconds(raw.duration, fps) : undefined);
-  const duration = explicit ?? timelineDurationSeconds(timeline, fps);
-  return { id: scene.id, name: scene.name ?? scene.id, timeline, duration };
+  const content = timelineDurationSeconds(timeline, fps);
+  return {
+    id: scene.id,
+    name: scene.name ?? scene.id,
+    timeline,
+    duration: declared ?? content,
+    declaredDuration: declared,
+    contentDuration: content,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -218,19 +247,41 @@ export async function assembleTimelineComposition(
     const resolved = resolveEntryFile(entry.file, rootDir);
     const raw = project.moduleCache?.get(resolved) ?? project.moduleCache?.get(entry.file) ?? await loadModuleFile<unknown>(entry.file, rootDir, { fresh: hotReloadEnabled() });
     if (isComposition(raw)) {
-      return { ...raw, name: raw.name ?? entry.id };
+      const content = timelineDurationSeconds(raw.rootTimeline, fps);
+      const issues = checkDeclaredDuration({
+        kind: "timeline",
+        id: entry.id,
+        declared: toSeconds(entry.duration, fps) ?? toSeconds(raw.duration, fps),
+        content,
+        fps,
+        truncate: entry.truncate,
+        manifestPath: project.entryPath,
+      });
+      if (issues.length > 0) throw issues[0];
+      return { ...raw, name: raw.name ?? entry.id, contentDuration: content };
     }
     timeline = await resolveTimelineValue(raw, entry.file);
   } else {
     timeline = await assembleTimelineFromRefs(project, entry);
   }
 
-  const explicitDuration = toSeconds(entry.duration, fps) ?? toSeconds(timeline.duration, fps);
-  const resolvedDuration = explicitDuration ?? timelineDurationSeconds(timeline, fps);
+  const declaredDuration = toSeconds(entry.duration, fps) ?? toSeconds(timeline.duration, fps);
+  const contentDuration = timelineDurationSeconds(timeline, fps);
+  const durationIssues = checkDeclaredDuration({
+    kind: "timeline",
+    id: entry.id,
+    declared: toSeconds(entry.duration, fps) ?? toSeconds(timeline.duration, fps),
+    content: contentDuration,
+    fps,
+    truncate: entry.truncate,
+    manifestPath: project.entryPath,
+  });
+  if (durationIssues.length > 0) throw durationIssues[0];
+  const resolvedDuration = declaredDuration ?? contentDuration;
 
-  const audioTracks = await assembleAudioTracks(project, entry.audioRef, resolvedDuration || 1);
+  const audio = await assembleAudioTracks(project, entry.audioRef, resolvedDuration || 1);
 
-  const allTracks: AnyTrack[] = [...timeline.tracks, ...audioTracks];
+  const allTracks: AnyTrack[] = [...timeline.tracks, ...audio.tracks];
 
   return makeComposition({
     name: entry.id,
@@ -239,6 +290,8 @@ export async function assembleTimelineComposition(
     fps,
     background,
     duration: resolvedDuration > 0 ? resolvedDuration : undefined,
+    contentDuration,
+    audioPlacements: audio.placements,
     audio: {
       sampleRate: config.audio?.sampleRate ?? 48000,
       channels: config.audio?.channels ?? 2,
@@ -259,6 +312,16 @@ async function assembleTimelineFromRefs(
   for (const sceneId of entry.sceneRefs ?? []) {
     const sceneEntry = findEntry(manifest.scenes, sceneId, "scene");
     const scene = await resolveScene(sceneEntry, rootDir, fps, project.moduleCache);
+    const issues = checkDeclaredDuration({
+      kind: "scene",
+      id: sceneEntry.id,
+      declared: scene.declaredDuration,
+      content: scene.contentDuration,
+      fps,
+      truncate: sceneEntry.truncate,
+      manifestPath: project.entryPath,
+    });
+    if (issues.length > 0) throw issues[0];
     const shifted = shiftTimeline(scene.timeline, cursor);
     tracks.push(...shifted.tracks);
     cursor += scene.duration;
@@ -383,33 +446,39 @@ function renderSoundDef(def: { generate: (ctx: unknown, params: unknown) => void
   return { sampleRate, channels, length, data };
 }
 
+/** Every registered bed starts at 0 and spans the timeline; the report proves it. */
 async function assembleAudioTracks(
   project: ManifestProject,
   audioRef: readonly string[] | undefined,
   duration: number,
-): Promise<AnyTrack[]> {
-  if (!audioRef || audioRef.length === 0) return [];
+): Promise<{ tracks: AnyTrack[]; placements: AudioPlacement[] }> {
+  if (!audioRef || audioRef.length === 0) return { tracks: [], placements: [] };
   const { manifest } = project;
   const clips: AudioClip[] = [];
+  const placements: AudioPlacement[] = [];
 
   for (const audioId of audioRef) {
     const entry = findEntry(manifest.audio, audioId, "audio");
-    const volume = entry.gain ?? 1;
+    const gain = entry.gain ?? 1;
+    placements.push({ id: audioId, start: 0, duration, gain });
     if (entry.src && !entry.file) {
       clips.push({
         type: "audio",
         src: resolveMediaFilePath(entry.src, project.rootDir, project.config),
         start: 0,
         duration,
-        volume,
+        volume: gain,
       });
       continue;
     }
     const buffer = await resolveAudioBuffer(project, audioId);
-    clips.push({ type: "audio", src: "", buffer, start: 0, duration, volume });
+    clips.push({ type: "audio", src: "", buffer, start: 0, duration, volume: gain });
   }
 
-  return clips.length > 0 ? [makeAudioTrack("timeline-audio", clips)] : [];
+  return {
+    tracks: clips.length > 0 ? [makeAudioTrack("timeline-audio", clips)] : [],
+    placements,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -424,6 +493,16 @@ export async function composeSceneComposition(
   const sceneEntry = findEntry(manifest.scenes, sceneId, "scene");
   const fps = sceneEntry.fps ?? config.video?.fps ?? 30;
   const scene = await resolveScene(sceneEntry, rootDir, fps, project.moduleCache);
+  const durationIssues = checkDeclaredDuration({
+    kind: "scene",
+    id: sceneEntry.id,
+    declared: scene.declaredDuration,
+    content: scene.contentDuration,
+    fps,
+    truncate: sceneEntry.truncate,
+    manifestPath: project.entryPath,
+  });
+  if (durationIssues.length > 0) throw durationIssues[0];
   return makeComposition({
     name: sceneEntry.id,
     width: sceneEntry.width ?? config.video?.width ?? 1920,
@@ -431,6 +510,7 @@ export async function composeSceneComposition(
     fps,
     background: sceneEntry.background ?? config.video?.background ?? "#000000",
     duration: scene.duration,
+    contentDuration: scene.contentDuration,
     audio: {
       sampleRate: config.audio?.sampleRate ?? 48000,
       channels: config.audio?.channels ?? 2,

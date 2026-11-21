@@ -6,7 +6,7 @@ import { generateThumbnail } from "../encoder/thumbnail/index.js";
 import { createError, ErrorCode } from "../errors/index.js";
 import { runReport } from "./run-report.js";
 import { createProjectResolver, reportResolution } from "./project-resolver.js";
-import { resolveOutputDir } from "./shared.js";
+import { OUTPUT_SUBDIRS } from "./shared.js";
 
 interface ThumbnailCliOptions {
   composition?: string;
@@ -24,7 +24,9 @@ export async function thumbnailCommand(file: string, options: ThumbnailCliOption
   const resolution = await resolver.resolve();
   reportResolution(resolution, false);
   const composition = selectComposition([...resolution.compositions], options.composition);
-  const outputDir = resolve(options.outputDir ?? resolveOutputDir(resolution.config));
+  const outputDir = options.outputDir
+    ? resolve(resolution.context.root, options.outputDir)
+    : join(resolution.context.roots.output, OUTPUT_SUBDIRS.images);
   await mkdir(outputDir, { recursive: true });
   runReport.setProject({ root: resolution.root, manifest: resolution.manifestPath ?? resolve(file) });
   runReport.expectArtifact("thumbnail");

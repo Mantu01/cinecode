@@ -380,6 +380,11 @@ export function createScaffoldCommand(): Command {
       ) => {
         const targetDir = resolve(directory);
 
+        if (opts.ts && opts.js) {
+          console.error("Conflicting flags: --ts and --js cannot be used together.");
+          process.exitCode = 2;
+          return;
+        }
         let language: Language | undefined;
         if (opts.ts) language = "typescript";
         if (opts.js) language = "javascript";

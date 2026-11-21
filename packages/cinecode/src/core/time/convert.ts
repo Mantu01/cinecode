@@ -51,7 +51,7 @@ export function timeInputToFrames(value: number | string | FramesMarker, convers
   return secondsToFrames(value, conversion);
 }
 
-export function framesToSeconds(frameCount: number, conversion: FrameConversion): number {
+function rawFramesToSeconds(frameCount: number, conversion: FrameConversion): number {
   return frameCount / conversion.fpsFloat;
 }
 
@@ -71,7 +71,7 @@ export function secondsToSamples(secondsValue: number, conversion: SampleConvers
 }
 
 export function framesToSamples(frameCount: number, conversion: FrameConversion, samples: SampleConversion): number {
-  const secondsValue = framesToSeconds(frameCount, conversion);
+  const secondsValue = rawFramesToSeconds(frameCount, conversion);
   return secondsToSamples(secondsValue, samples);
 }
 
@@ -80,7 +80,7 @@ export function samplesToSeconds(sampleCount: number, samples: SampleConversion)
 }
 
 export function syncDriftFrames(totalFrames: number, conversion: FrameConversion, samples: SampleConversion): number {
-  const drift = samplesToSeconds(framesToSamples(totalFrames, conversion, samples), samples) - framesToSeconds(totalFrames, conversion);
+  const drift = samplesToSeconds(framesToSamples(totalFrames, conversion, samples), samples) - rawFramesToSeconds(totalFrames, conversion);
   return Math.abs(drift) / conversion.fpsFloat;
 }
 

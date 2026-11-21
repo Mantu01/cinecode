@@ -4,15 +4,17 @@ import { runReport } from "./run-report.js";
 import { platform, arch, freemem } from "node:os";
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { resolve } from "node:path";
-import { access, constants, statfs } from "node:fs/promises";
-import ffmpegStatic from "@ffmpeg-installer/ffmpeg";
+import { access, constants, rm, statfs } from "node:fs/promises";
+import { resolveBinary } from "../binary/resolver.js";
 import type { CinecodeConfig } from "../core/types/index.js";
 import { validateConfig } from "../config/validator.js";
 import { checkGitignoreEntries, ensureGitignoreEntries } from "../config/gitignore.js";
 import { createProjectResolver, reportResolution, type MediaAccess } from "./project-resolver.js";
 import { createMediaCache } from "../media/cache.js";
-import { renderVideo, type RenderOptions } from "../pipeline/index.js";
+import { authoredRoots, type ProjectRoots } from "../config/roots.js";
 import { checkRuntime } from "../loader/index.js";
 
 interface DoctorCheck {
@@ -70,34 +72,17 @@ async function checkRenderer(): Promise<DoctorCheck> {
 
 async function checkEncoder(): Promise<DoctorCheck> {
   try {
-    const testOptions: RenderOptions = {
-      composition: {
-        name: "doctor-test",
-        width: 128,
-        height: 128,
-        fps: 30,
-        duration: 1 / 30,
-        background: "#000000",
-        audio: { sampleRate: 48000, channels: 2, masterVolume: 1 },
-        rootTimeline: { tracks: [] },
-      },
-      outputPath: resolve(".cinecode", "doctor-test.mp4"),
-      cacheDir: resolve(".cinecode", "cache"),
-      seed: 0,
-      concurrency: 1,
-      chunkSize: 1,
-      quality: "preview",
-      overwrite: true,
-      fresh: true,
-      noCache: true,
-      fromFrame: 0,
-      toFrame: 1,
-      silent: true,
-    };
-    await renderVideo(testOptions);
-    return { name: "Encoder", status: "PASS", message: "Test encode successful" };
+    const execFileAsync = promisify(execFile);
+    const ffmpeg = resolveBinary("ffmpeg");
+    const { stdout } = await execFileAsync(ffmpeg.path, ["-hide_banner", "-encoders"], { timeout: 2000 });
+    const required = ["libx264", "libx265", "libvpx-vp9", "libaom-av1", "prores_ks", "ffv1"];
+    const missing = required.filter((name) => !stdout.includes(name));
+    if (missing.length > 0) {
+      return { name: "Encoder", status: "WARN", message: `Missing encoder capabilities: ${missing.join(", ")}` };
+    }
+    return { name: "Encoder", status: "PASS", message: `Encoder probe: ${required.join(", ")}` };
   } catch (e) {
-    return { name: "Encoder", status: "FAIL", message: `Test encode failed: ${e instanceof Error ? e.message : "Unknown error"}`, fixable: false };
+    return { name: "Encoder", status: "FAIL", message: `Encoder capability probe failed: ${e instanceof Error ? e.message : "Unknown error"}`, fixable: false };
   }
 }
 
@@ -128,16 +113,13 @@ async function checkFonts(config: CinecodeConfig, root: string): Promise<DoctorC
   };
 }
 
-async function checkFolders(config: CinecodeConfig, projectRoot: string): Promise<DoctorCheck> {
-  const outputDir = config.outputDir ?? "output";
-  const cacheDir = config.cacheDir ?? ".cinecode/cache";
-  const mediaDir = config.mediaDir ?? "media";
-  const dirs = [config.sourceDir, mediaDir, outputDir, cacheDir];
+async function checkFolders(roots: ProjectRoots): Promise<DoctorCheck> {
+  const dirs = [roots.source, roots.media, roots.output, roots.cache];
   const issues: string[] = [];
 
   for (const dir of dirs) {
     try {
-      await access(resolve(projectRoot, dir), constants.W_OK);
+      await access(dir, constants.W_OK);
     } catch {
       issues.push(dir);
     }
@@ -162,12 +144,12 @@ async function checkDiskSpace(projectRoot: string): Promise<DoctorCheck> {
   }
 }
 
-async function checkConfig(config: CinecodeConfig, configPath: string): Promise<DoctorCheck> {
-  const validation = validateConfig(config, configPath);
+async function checkConfig(config: CinecodeConfig, configPath: string, root: string): Promise<DoctorCheck> {
+  const validation = validateConfig(config, configPath, root);
   if (validation.errors.length === 0) {
     return { name: "Config", status: "PASS", message: "Configuration valid" };
   }
-  return { name: "Config", status: "FAIL", message: `${validation.errors.length} error(s)`, fixable: false };
+  return { name: "Config", status: "FAIL", message: validation.errors.map((error) => error.message).join(" | "), fixable: false };
 }
 
 async function checkMedia(load: () => Promise<MediaAccess>): Promise<DoctorCheck> {
@@ -180,10 +162,12 @@ async function checkMedia(load: () => Promise<MediaAccess>): Promise<DoctorCheck
 }
 
 async function checkGitignore(config: CinecodeConfig, projectRoot: string): Promise<DoctorCheck> {
+  const authored = authoredRoots(config);
   const result = await checkGitignoreEntries({
-    sourceDir: config.sourceDir,
-    outputDir: config.outputDir ?? "output",
-    cacheDir: config.cacheDir ?? ".cinecode/cache",
+    sourceDir: authored.source,
+    mediaDir: authored.media,
+    outputDir: authored.output,
+    cacheDir: authored.cache,
     projectRoot,
     enabled: config.gitignore ?? true,
   });
@@ -214,12 +198,31 @@ function runFfmpegVersion(binary: string): Promise<string | null> {
 }
 
 async function checkFfmpeg(): Promise<DoctorCheck> {
-  const banner = await runFfmpegVersion(ffmpegStatic.path);
+  const resolution = resolveBinary("ffmpeg");
+  const banner = await runFfmpegVersion(resolution.path);
   if (!banner) {
-    return { name: "FFmpeg", status: "FAIL", message: `ffmpeg not executable at ${ffmpegStatic.path}`, fixable: false };
+    return { name: "FFmpeg", status: "FAIL", message: `ffmpeg not executable at ${resolution.path}`, fixable: false };
   }
   const version = /ffmpeg version (\S+)/.exec(banner)?.[1] ?? "unknown";
-  return { name: "FFmpeg", status: "PASS", message: `ffmpeg ${version}` };
+  return { name: "FFmpeg", status: "PASS", message: `ffmpeg ${version} at ${resolution.path} (${resolution.provenance})` };
+}
+
+async function checkFFprobe(): Promise<DoctorCheck> {
+  try {
+    const resolution = resolveBinary("ffprobe");
+    return {
+      name: "FFprobe",
+      status: "PASS",
+      message: `ffprobe ${resolution.version} at ${resolution.path} (${resolution.provenance})`,
+    };
+  } catch (error) {
+    return {
+      name: "FFprobe",
+      status: "FAIL",
+      message: error instanceof Error ? error.message : "ffprobe binary unavailable",
+      fixable: false,
+    };
+  }
 }
 
 const DEPRECATED_PATTERNS: readonly { readonly pattern: RegExp; readonly hint: string }[] = [
@@ -240,9 +243,9 @@ async function checkDeprecatedUsage(configPath: string): Promise<DoctorCheck> {
   return { name: "Deprecated API", status: "WARN", message: found.join("; ") };
 }
 
-async function checkCache(config: CinecodeConfig, projectRoot: string): Promise<DoctorCheck> {
+async function checkCache(roots: ProjectRoots): Promise<DoctorCheck> {
   try {
-    const cache = createMediaCache(resolve(projectRoot, config.cacheDir ?? ".cinecode/cache"));
+    const cache = createMediaCache(roots.cache);
     await cache.initialize();
     const stats = await cache.getStats();
     return {
@@ -261,35 +264,38 @@ export async function doctorCommand(options: { config?: string; root?: string; f
   const resolution = await resolver.resolve();
   reportResolution(resolution, options.verbose === true);
   const config = resolution.config;
+  const roots = resolution.context.roots;
 
-  const checks = await Promise.all([
-    checkNodeVersion(),
-    checkAuthoringContract(),
-    checkPlatform(),
-    checkRenderer(),
-    checkEncoder(),
-    checkFfmpeg(),
-    checkFonts(config, resolution.root),
-    checkFolders(config, resolution.root),
-    checkDiskSpace(resolution.root),
-    checkConfig(config, resolution.configPath),
-    checkMedia(() => resolution.media()),
-    checkCache(config, resolution.root),
-    checkGitignore(config, resolution.root),
-    checkCloudUrls(config),
-    checkDeprecatedUsage(resolution.configPath),
-  ]);
+  const runChecks = (): Promise<DoctorCheck[]> =>
+    Promise.all([
+      checkNodeVersion(),
+      checkAuthoringContract(),
+      checkPlatform(),
+      checkRenderer(),
+      checkEncoder(),
+      checkFfmpeg(),
+      checkFFprobe(),
+      checkFonts(config, resolution.root),
+      checkFolders(roots),
+      checkDiskSpace(resolution.root),
+      checkConfig(config, resolution.configPath, resolution.root),
+      checkMedia(() => resolution.media()),
+      checkCache(roots),
+      checkGitignore(config, resolution.root),
+      checkCloudUrls(config),
+      checkDeprecatedUsage(resolution.configPath),
+    ]);
+
+  let checks = await runChecks();
 
   if (options.fix) {
-    for (const check of checks) {
+    const fixable = checks.filter((check) => check.fixable && check.status !== "PASS");
+    for (const check of fixable) {
       if (check.fixable && check.status !== "PASS") {
         if (check.name === "Folders") {
-          const outputDir = config.outputDir ?? "output";
-          const cacheDir = config.cacheDir ?? ".cinecode/cache";
-          const mediaDir = config.mediaDir ?? "media";
-          for (const dir of [config.sourceDir, mediaDir, outputDir, cacheDir]) {
+          for (const dir of [roots.source, roots.media, roots.output, roots.cache]) {
             try {
-              await import("node:fs/promises").then(fs => fs.mkdir(resolve(dir), { recursive: true }));
+              await import("node:fs/promises").then(fs => fs.mkdir(dir, { recursive: true }));
             } catch {
               void 0;
             }
@@ -297,17 +303,18 @@ export async function doctorCommand(options: { config?: string; root?: string; f
           console.log("Fixed: Created missing folders");
         }
         if (check.name === "Cache") {
-          const cache = createMediaCache(resolve(config.cacheDir ?? ".cinecode/cache"));
+          const cache = createMediaCache(roots.cache);
           await cache.initialize();
           const removed = await cache.pruneMissingSources();
           console.log(`Fixed: Pruned ${removed} dangling cache entries`);
         }
         if (check.name === ".gitignore") {
+          const authored = authoredRoots(config);
           await ensureGitignoreEntries({
-            sourceDir: config.sourceDir,
-            mediaDir: config.mediaDir ?? "media",
-            outputDir: config.outputDir ?? "output",
-            cacheDir: config.cacheDir ?? ".cinecode/cache",
+            sourceDir: authored.source,
+            mediaDir: authored.media,
+            outputDir: authored.output,
+            cacheDir: authored.cache,
             projectRoot: resolution.root,
             enabled: config.gitignore ?? true,
           });
@@ -315,6 +322,8 @@ export async function doctorCommand(options: { config?: string; root?: string; f
         }
       }
     }
+    /* --fix reports success only after the checks it touched pass again. */
+    if (fixable.length > 0) checks = await runChecks();
   }
 
   runReport.result({ checks });
@@ -322,17 +331,13 @@ export async function doctorCommand(options: { config?: string; root?: string; f
     if (check.status !== "PASS") runReport.warn(String(check.name).startsWith("ffmpeg") ? ErrorCode.CC7002 : ErrorCode.CC7004, check.message);
   }
 
-  if (options.json) {
-    const failed = checks.filter(c => c.status === "FAIL");
-    if (failed.length > 0) throw createError(ErrorCode.CC7004, { reason: `${failed.map(c => `${c.name}: ${c.message}`).join(", ")}` });
-    return;
-  }
-
-  for (const check of checks) {
-    const statusColor = check.status === "PASS" ? "\x1b[32m" : check.status === "WARN" ? "\x1b[33m" : "\x1b[31m";
-    const reset = "\x1b[0m";
-    const fixable = check.fixable ? " (fixable)" : "";
-    console.log(`${statusColor}[${check.status}]${reset} ${check.name}: ${check.message}${fixable}`);
+  if (!runReport.isMachine()) {
+    for (const check of checks) {
+      const statusColor = check.status === "PASS" ? "\x1b[32m" : check.status === "WARN" ? "\x1b[33m" : "\x1b[31m";
+      const reset = "\x1b[0m";
+      const fixable = check.fixable ? " (fixable)" : "";
+      console.log(`${statusColor}[${check.status}]${reset} ${check.name}: ${check.message}${fixable}`);
+    }
   }
 
   const failed = checks.filter(c => c.status === "FAIL");

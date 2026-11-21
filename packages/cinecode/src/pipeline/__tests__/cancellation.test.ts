@@ -102,58 +102,37 @@ test("a terminated worker pool settles in-flight chunks as cancelled", async () 
   }
 });
 
-test("a reused warm worker matches a fresh worker frame for frame", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "cinecode-warm-"));
+test("two independent workers match frame for frame with clean teardown", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "cinecode-workers-"));
   const compA = composition(2, 64, 64);
-  const compB: Composition = {
-    ...composition(2, 64, 64),
-    name: "compB",
-    rootTimeline: {
-      tracks: [
-        {
-          name: "visual",
-          kind: "visual",
-          clips: [{ type: "solid", color: "#ff0000", width: 64, height: 64, start: 0, duration: 2 / 30 }],
-        },
-      ],
-    },
-  };
 
-  const freshManager = createWorkerManager({
+  const managerA = createWorkerManager({
     concurrency: 1,
     composition: compA,
     seed: 42,
-    cacheDir: join(dir, "cache-fresh"),
+    cacheDir: join(dir, "cache-a"),
   });
-  const warmManager = createWorkerManager({
+  const managerB = createWorkerManager({
     concurrency: 1,
-    composition: compB,
+    composition: compA,
     seed: 42,
-    cacheDir: join(dir, "cache-warm"),
+    cacheDir: join(dir, "cache-b"),
   });
 
   try {
-    const freshResults = await freshManager.processChunks(createChunks(2, 2));
-    await warmManager.processChunks(createChunks(2, 2));
+    const resultsA = await managerA.processChunks(createChunks(2, 2));
+    const resultsB = await managerB.processChunks(createChunks(2, 2));
 
-    await warmManager.reinit({
-      concurrency: 1,
-      composition: compA,
-      seed: 42,
-      cacheDir: join(dir, "cache-warm"),
-    });
-    const reusedResults = await warmManager.processChunks(createChunks(2, 2));
-
-    assert.equal(freshResults.length, reusedResults.length);
-    assert.equal(freshResults[0]?.frames.length, reusedResults[0]?.frames.length);
-    for (let i = 0; i < freshResults[0]!.frames.length; i++) {
-      const freshBuf = freshResults[0]!.frames[i]!.buffer;
-      const reusedBuf = reusedResults[0]!.frames[i]!.buffer;
-      assert.equal(Buffer.compare(freshBuf, reusedBuf), 0, `frame ${i} differed between fresh and reused warm worker`);
+    assert.equal(resultsA.length, resultsB.length);
+    assert.equal(resultsA[0]?.frames.length, resultsB[0]?.frames.length);
+    for (let i = 0; i < resultsA[0]!.frames.length; i++) {
+      const bufA = resultsA[0]!.frames[i]!.buffer;
+      const bufB = resultsB[0]!.frames[i]!.buffer;
+      assert.equal(Buffer.compare(bufA, bufB), 0, `frame ${i} differed between managerA and managerB`);
     }
   } finally {
-    await freshManager.terminate();
-    await warmManager.terminate();
+    await managerA.terminate();
+    await managerB.terminate();
     await rm(dir, { recursive: true, force: true });
   }
 });

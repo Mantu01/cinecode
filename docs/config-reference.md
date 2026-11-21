@@ -22,19 +22,21 @@ For manifest documentation, see [manifest-reference.md](./manifest-reference.md)
 | `video.defaultDuration` | number or string | — | no |
 | `video.background` | string (pattern) | — | no |
 | `images` | object (defaultFormat, quality, scaleFactor) | — | no |
-| `images.defaultFormat` | "png" \| "jpg" \| "webp" \| "svg" | `"png"`, `"jpg"`, `"webp"`, `"svg"` | no |
+| `images.defaultFormat` | "png" \| "jpg" \| "webp" | `"png"`, `"jpg"`, `"webp"` | no |
 | `images.quality` | integer | — | no |
 | `images.scaleFactor` | number | — | no |
-| `dev` | object (port, host, open, hmr, metricsPort) | — | no |
+| `dev` | object (port, host, open, hmr) | — | no |
 | `dev.port` | integer | — | no |
 | `dev.host` | string | — | no |
 | `dev.open` | boolean | — | no |
 | `dev.hmr` | boolean | — | no |
-| `dev.metricsPort` | integer | — | no |
 | `sourceDir` | string | — | no |
 | `mediaDir` | string | — | no |
 | `outputDir` | string | — | no |
 | `cacheDir` | string | — | no |
+| `binaries` | object (ffmpegPath, ffprobePath) | — | no |
+| `binaries.ffmpegPath` | string | — | no |
+| `binaries.ffprobePath` | string | — | no |
 | `allowCoLocatedMedia` | boolean | — | no |
 | `cloudMedia` | array<object (url, name, sha256)> | — | no |
 | `cloudMedia[]` | object (url, name, sha256) | — | no |
@@ -55,7 +57,7 @@ For manifest documentation, see [manifest-reference.md](./manifest-reference.md)
 | `render.memoryBudgetMb` | integer | — | no |
 | `render.alpha` | boolean | — | no |
 | `render.twoPass` | boolean | — | no |
-| `render.platformPreset` | "youtube-1080p" \| "youtube-4k" \| "tiktok" \| "instagram-reels" \| "instagram-post" \| "twitter" \| "custom" | `"youtube-1080p"`, `"youtube-4k"`, `"tiktok"`, `"instagram-reels"`, `"instagram-post"`, `"twitter"`, `"custom"` | no |
+| `render.platformPreset` | "youtube-1080p" \| "youtube-4k" \| "youtube-shorts" \| "tiktok" \| "instagram-reels" \| "instagram-feed-square" \| "instagram-feed-portrait" \| "instagram-post" \| "linkedin" \| "twitter" \| "vimeo-pro" \| "broadcast-sdi" \| "archival-master" \| "web-gif" \| "web-webp" | `"youtube-1080p"`, `"youtube-4k"`, `"youtube-shorts"`, `"tiktok"`, `"instagram-reels"`, `"instagram-feed-square"`, `"instagram-feed-portrait"`, `"instagram-post"`, `"linkedin"`, `"twitter"`, `"vimeo-pro"`, `"broadcast-sdi"`, `"archival-master"`, `"web-gif"`, `"web-webp"` | no |
 | `render.bitrate` | integer | — | no |
 | `render.colorManagement` | object (workingColorSpace, outputColorSpace, enabled) | — | no |
 | `render.colorManagement.workingColorSpace` | "srgb" \| "linear-srgb" \| "rec709" \| "acescg" | `"srgb"`, `"linear-srgb"`, `"rec709"`, `"acescg"` | no |
@@ -82,4 +84,3 @@ For manifest documentation, see [manifest-reference.md](./manifest-reference.md)
 | `pluginPrecedence` | array<string> | — | no |
 | `autoDiscoverPlugins` | boolean | — | no |
 | `ignorePatterns` | array<string> | — | no |
-| `composition` | any | — | no |

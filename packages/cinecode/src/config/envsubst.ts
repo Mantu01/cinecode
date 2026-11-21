@@ -1,3 +1,6 @@
+import { recordDegradation } from "../errors/degradations.js";
+import { createError, ErrorCode } from "../errors/index.js";
+
 const ENV_PATTERN = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::?-([^}]*))?\}/g;
 const SENSITIVE_NAME = /(key|token|secret|password|credential)/i;
 
@@ -42,11 +45,18 @@ export function substituteEnvVarsWithReport(
     if (resolved.missing) {
       missing.push(name);
       if (SENSITIVE_NAME.test(name) && options.warnOnShortSecrets) {
-        console.warn(`[cinecode] environment variable ${name} looks sensitive but is not set`);
+        recordDegradation({
+          code: "CC1003",
+          what: "unresolved sensitive environment variable",
+          reason: `environment variable ${name} looks sensitive but is not set`,
+          instead: "empty string substituted",
+        });
       }
       if (onMissing === "throw") {
-        throw new Error(
-          `Missing required environment variable '${name}'. Set it before running cinecode: export ${name}=...`,
+        throw createError(
+          ErrorCode.CC1003,
+          { key: name, path: "environment", reason: `Missing required environment variable '${name}'` },
+          { fixHint: `Set it before running cinecode: export ${name}=...` },
         );
       }
       if (onMissing === "keep") return match;

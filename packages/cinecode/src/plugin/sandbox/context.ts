@@ -197,7 +197,7 @@ export class PluginSandbox {
         registerEffect(effect as Parameters<typeof registerEffect>[0]);
       },
       log: (msg: string) => {
-        console.log(`[Plugin:${this.pluginId}] ${msg}`);
+        logger.debug("plugin", `[Plugin:${this.pluginId}] ${msg}`);
       },
       store: this.store.for(this.pluginId),
       events: {
@@ -215,10 +215,10 @@ export class PluginSandbox {
 
     const sandboxGlobals: Record<string, unknown> = {
       console: {
-        log: (...args: unknown[]) => console.log(`[Plugin:${this.pluginId}]`, ...args),
-        warn: (...args: unknown[]) => console.warn(`[Plugin:${this.pluginId}]`, ...args),
-        error: (...args: unknown[]) => console.error(`[Plugin:${this.pluginId}]`, ...args),
-        info: (...args: unknown[]) => console.info(`[Plugin:${this.pluginId}]`, ...args),
+        log: (...args: unknown[]) => logger.debug(`plugin:${this.pluginId}`, args.map(String).join(" ")),
+        warn: (...args: unknown[]) => logger.warn(`plugin:${this.pluginId}`, args.map(String).join(" ")),
+        error: (...args: unknown[]) => logger.error(`plugin:${this.pluginId}`, args.map(String).join(" ")),
+        info: (...args: unknown[]) => logger.info(`plugin:${this.pluginId}`, args.map(String).join(" ")),
       },
       URL,
       URLSearchParams,

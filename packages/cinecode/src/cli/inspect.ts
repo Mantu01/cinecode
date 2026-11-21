@@ -1,10 +1,21 @@
 import { Command } from "commander";
 import type { VisualClip, AudioClip, SoundClip, Clip } from "../core/types/index.js";
-import { parseTimeInput } from "./shared.js";
+import { parseTimeArgument, parseDurationArgument } from "./shared.js";
+
+/** Converts a manifest clip duration value to frames. */
+export function manifestClipDurationFrames(value: unknown, fps: number): number {
+  if (typeof value === "number") return Math.round(value * fps);
+  return parseTimeArgument(String(value), fps);
+}
+
+
+import { compositionTotalFrames, createConversion, durationToFrames } from "../core/time/index.js";
+import { TIME_GRAMMAR } from "../core/time-input.js";
 import { allClips } from "../core/types/tracks.js";
 import { runReport } from "./run-report.js";
 import { createProjectResolver, reportResolution } from "./project-resolver.js";
 import { resolveRenderParameters, describeExplainReport } from "./precedence.js";
+import { referenceWarnings } from "../manifest/references.js";
 
 interface InspectOptions {
   composition?: string;
@@ -15,7 +26,6 @@ interface InspectOptions {
   time?: string;
   config?: string;
   root?: string;
-  props?: string;
   json?: boolean;
   deep?: boolean;
   format?: "dot" | "mermaid" | "ascii";
@@ -105,21 +115,18 @@ function formatTimecode(frame: number, fps: number): string {
 
 function getClipStartFrame(clip: Clip, fps: number): number {
   const start = clip.start ?? 0;
-  return typeof start === "number" ? Math.round(start * fps) : parseTimeInput(start, fps);
+  return typeof start === "number" ? Math.round(start * fps) : parseTimeArgument(start, fps);
 }
 
 function getClipEndFrame(clip: Clip, fps: number, compositionDuration?: number | string): number {
   if (clip.end !== undefined) {
-    return typeof clip.end === "number" ? Math.round(clip.end * fps) : parseTimeInput(clip.end, fps);
+    return typeof clip.end === "number" ? Math.round(clip.end * fps) : parseTimeArgument(clip.end, fps);
   }
   if (clip.duration !== undefined) {
-    const startFrame = getClipStartFrame(clip, fps);
-    const dur = typeof clip.duration === "number" ? clip.duration : parseFloat(clip.duration);
-    return startFrame + Math.round(dur * fps);
+    return getClipStartFrame(clip, fps) + manifestClipDurationFrames(clip.duration, fps);
   }
   if (compositionDuration) {
-    const dur = typeof compositionDuration === "number" ? compositionDuration : parseFloat(compositionDuration);
-    return Math.ceil(dur * fps);
+    return durationToFrames(parseDurationArgument(compositionDuration, fps), createConversion(fps));
   }
   return getClipStartFrame(clip, fps) + 1;
 }
@@ -218,7 +225,7 @@ function describeAudioClip(clip: AudioClip | SoundClip, fps: number): string[] {
 export async function inspectCommand(options: InspectOptions): Promise<void> {
   const resolver = createProjectResolver({
     root: options.root,
-    config: options.config ?? options.props,
+    config: options.config,
     file: options.file,
     composition: options.composition,
     timeline: options.timeline,
@@ -246,17 +253,22 @@ export async function inspectCommand(options: InspectOptions): Promise<void> {
       mode: resolution.mode,
       selection: resolution.selection.id ? `${resolution.selection.kind} ${resolution.selection.id}` : resolution.selection.kind,
       config: resolution.config,
+      roots: resolution.context.roots,
     },
+    explicit: resolution.context.explicit,
   });
   runReport.result({ explain: describeExplainReport(explain) });
   const fps = parameters.fps.value;
   const width = parameters.width.value;
   const height = parameters.height.value;
-  const totalFrames = composition.duration ? Math.ceil((typeof composition.duration === "number" ? composition.duration : parseFloat(composition.duration as string)) * fps) : 0;
+  const totalFrames = compositionTotalFrames(composition);
 
   let targetFrame: number | null = null;
   if (options.frame !== undefined) targetFrame = options.frame;
-  if (options.time) targetFrame = parseTimeInput(options.time, fps);
+  if (options.time) targetFrame = parseTimeArgument(options.time, fps);
+
+  const references = resolution.manifest ? referenceWarnings(resolution.manifest.manifest) : [];
+  for (const warning of references) runReport.warn(warning.code, warning.message, resolution.manifestPath);
 
   if (options.deep) {
     const graphStr = generateDeepGraph(composition, options.format || "ascii");
@@ -273,6 +285,7 @@ export async function inspectCommand(options: InspectOptions): Promise<void> {
       duration: composition.duration,
       totalFrames,
       background: composition.background,
+      references: references.map((warning) => ({ code: warning.code, severity: warning.severity, message: warning.message })),
       validation: timelineValidation
         ? {
             valid: timelineValidation.valid,
@@ -315,6 +328,10 @@ export async function inspectCommand(options: InspectOptions): Promise<void> {
       console.log(`  ${issue.severity} [${issue.code}] ${issue.message}${where ? ` (${where})` : ""}`);
     }
   }
+  if (references.length > 0) {
+    console.log("Reference warnings:");
+    for (const warning of references) console.log(`  warn [${warning.code}] ${warning.message}`);
+  }
   console.log("");
 
   const clips = allClips(composition.rootTimeline);
@@ -340,7 +357,7 @@ export function createInspectCommand(): Command {
     .option("--timeline <id>", "Timeline id from main.ts")
     .option("--scene <id>", "Scene id from main.ts")
     .option("-f, --frame <number>", "Show clips active at frame", (v) => parseInt(v, 10))
-    .option("-t, --time <timecode|seconds>", "Show clips active at time (HH:MM:SS:FF or seconds)")
+    .option("--time <time>", `Show clips active at time (${TIME_GRAMMAR})`)
     .option("--deep", "Generate deep dependency graph across audio, visual, and effects", false)
     .option("--format <format>", "Graph output format: dot, mermaid, ascii")
     .action(async (options: InspectOptions) => {

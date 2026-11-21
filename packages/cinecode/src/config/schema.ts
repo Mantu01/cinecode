@@ -17,10 +17,14 @@ import { RESOLUTION_DIMENSIONS, SCHEMA_VERSION } from "./zod-schema.js";
 
 export { SCHEMA_VERSION };
 import { validateAuthoringConfig, validateNormalizedConfig } from "./validator.js";
+import { rootOfConfig, validateProjectRoots } from "./roots.js";
+import { isConfigValidated } from "./validated.js";
 
 export interface LoadConfigOptions {
   readonly configPath?: string;
   readonly fresh?: boolean;
+  /** Project root the four roots resolve against; defaults to the config folder. */
+  readonly root?: string;
 }
 
 export const DEFAULT_PROJECT: ProjectConfig = {
@@ -59,7 +63,6 @@ export const DEFAULT_DEV: DevConfig = {
   host: "localhost",
   open: false,
   hmr: true,
-  metricsPort: undefined,
 };
 
 const DEFAULT_CONFIG: CinecodeConfig = {
@@ -89,11 +92,15 @@ const DEFAULT_CONFIG: CinecodeConfig = {
   ignorePatterns: [],
 };
 
-const EXPLICIT_PATHS = Symbol("cinecode.config.explicitPaths");
+/** The loader's result: the normalized config plus the keys the author actually wrote. */
+export interface LoadedConfig {
+  readonly config: CinecodeConfig;
+  readonly explicit: ReadonlySet<string>;
+}
 
-/** Authoring paths that were present in the source config, for precedence. */
-export function explicitConfigPaths(config: CinecodeConfig): ReadonlySet<string> {
-  return (config as CinecodeConfig & { [EXPLICIT_PATHS]?: ReadonlySet<string> })[EXPLICIT_PATHS] ?? new Set();
+/** Authoring paths present in a source document, for the precedence engine. */
+export function explicitPathsOf(raw: unknown): ReadonlySet<string> {
+  return new Set(collectExplicitPaths(raw ?? {}));
 }
 
 function collectExplicitPaths(value: unknown, prefix = ""): string[] {
@@ -106,7 +113,10 @@ function collectExplicitPaths(value: unknown, prefix = ""): string[] {
   );
 }
 
-export async function loadConfig(configPath: string, options: LoadConfigOptions = {}): Promise<CinecodeConfig> {
+export async function loadConfigDocument(
+  configPath: string,
+  options: LoadConfigOptions = {},
+): Promise<LoadedConfig> {
   const resolvedPath = resolve(configPath);
   const ext = extname(resolvedPath).toLowerCase();
 
@@ -143,6 +153,7 @@ export async function loadConfig(configPath: string, options: LoadConfigOptions 
     assertEnvVarsPresent(findMissingEnvVarsWithPaths(rawConfig), resolvedPath);
     const withEnv = substituteEnvVarsDeep(rawConfig);
     const merged = await mergeConfigInheritance(resolvedPath, withEnv);
+    const validatedInPlace = isConfigValidated(rawConfig) && merged === withEnv;
     const declaredVersion = merged.schemaVersion;
     if (typeof declaredVersion === "number" && declaredVersion > SCHEMA_VERSION) {
       throw createError(
@@ -151,11 +162,18 @@ export async function loadConfig(configPath: string, options: LoadConfigOptions 
         { location: { file: resolvedPath }, fixHint: `This Cinecode release supports schema version ${SCHEMA_VERSION}; upgrade cinecode or lower schemaVersion.` },
       );
     }
-    assertAuthoringSchema(merged, resolvedPath);
+    if (!validatedInPlace) assertAuthoringSchema(merged, resolvedPath);
     const config = normalizeConfig(merged);
     const normalized = validateNormalizedConfig(config, resolvedPath);
     if (normalized.errors.length > 0) throw normalized.errors[0];
-    return config;
+    const rootErrors = validateProjectRoots(options.root ?? rootOfConfig(resolvedPath), config, {
+      configPath: resolvedPath,
+    });
+    if (rootErrors.length > 0) {
+      (rootErrors[0] as { issues?: readonly unknown[] }).issues = rootErrors;
+      throw rootErrors[0];
+    }
+    return { config, explicit: explicitPathsOf(merged) };
   } catch (e) {
     if (isCinecodeError(e)) throw e;
     const reason = e instanceof Error ? e.message : String(e);
@@ -165,6 +183,10 @@ export async function loadConfig(configPath: string, options: LoadConfigOptions 
       { location: { file: resolvedPath }, cause: e },
     );
   }
+}
+
+export async function loadConfig(configPath: string, options: LoadConfigOptions = {}): Promise<CinecodeConfig> {
+  return (await loadConfigDocument(configPath, options)).config;
 }
 
 function assertAuthoringSchema(raw: Record<string, unknown>, configPath: string): void {
@@ -297,7 +319,6 @@ export function normalizeConfig(raw: Record<string, unknown>): CinecodeConfig {
       host: rawDev.host ?? DEFAULT_DEV.host,
       open: rawDev.open ?? DEFAULT_DEV.open,
       hmr: rawDev.hmr ?? DEFAULT_DEV.hmr,
-      metricsPort: rawDev.metricsPort ?? DEFAULT_DEV.metricsPort,
     },
     sourceDir,
     mediaDir,
@@ -322,7 +343,6 @@ export function normalizeConfig(raw: Record<string, unknown>): CinecodeConfig {
     ignorePatterns: (raw.ignorePatterns as string[] | undefined) ?? DEFAULT_CONFIG.ignorePatterns,
   };
 
-  Object.defineProperty(config, EXPLICIT_PATHS, { value: new Set(collectExplicitPaths(raw)), enumerable: false });
   return config;
 }
 

@@ -201,7 +201,7 @@ export {
   parseIgnoreContent,
 } from "./config/ignore.js";
 
-export { defineConfig, scaffoldConfigFile } from "./config/scaffold.js";
+export { defineConfig } from "./config/scaffold.js";
 
 export { ConfigMigrationEngine } from "./config/migration/engine.js";
 

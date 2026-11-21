@@ -1,22 +1,26 @@
 import type { Clip, ColorSpec, Composition } from "../core/types/index.js";
 import { allClips } from "../core/types/tracks.js";
-import { createConversion, type FrameConversion } from "../core/time/index.js";
+import { compositionConversion, compositionTotalFrames, createConversion, durationToFrames, frameToSeconds, type FrameConversion } from "../core/time/index.js";
 import { formatTimecode } from "../core/time/format.js";
 import { mkdir, writeFile, access } from "node:fs/promises";
 import { dirname } from "node:path";
-
-function parseSeconds(value: number | string | undefined, fallback = 0): number {
-  if (value === undefined) return fallback;
-  if (typeof value === "number") return Number.isFinite(value) ? value : fallback;
-  const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
+import { parseTimeInput, parseDurationInput } from "../core/time-input.js";
 
 function toSecondsOrFrames(value: number | string | undefined, fps: number, fallbackFrames: number): number {
   if (value === undefined) return fallbackFrames;
-  if (typeof value === "number") return Math.round(value * fps);
-  const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) ? Math.round(parsed * fps) : fallbackFrames;
+  if (typeof value === "number") return Number.isFinite(value) ? Math.round(value * fps) : fallbackFrames;
+  const parsed = parseTimeInput(value, fps);
+  return parsed.ok ? Math.round(parsed.time.frame) : fallbackFrames;
+}
+
+function manifestDurationSeconds(value: number | string | undefined, fps: number, fallback = 0): number {
+  if (value === undefined) return fallback;
+  if (typeof value === "number") return Number.isFinite(value) ? value : fallback;
+  if (typeof value === "string") {
+    const parsed = parseDurationInput(value, fps);
+    return parsed.ok ? parsed.seconds : fallback;
+  }
+  return fallback;
 }
 
 export interface ManifestJsonExport {
@@ -86,14 +90,14 @@ function clipEndFrame(clip: Clip, fps: number, compositionDuration: number | str
   if (clip.end !== undefined) return toSecondsOrFrames(clip.end, fps, 0);
   const startFrame = clipStartFrame(clip, fps);
   if (clip.duration !== undefined) return startFrame + toSecondsOrFrames(clip.duration, fps, 0);
-  const durationSeconds = parseSeconds(compositionDuration, 0);
-  if (durationSeconds > 0) return Math.round(durationSeconds * fps);
+  const durationSeconds = manifestDurationSeconds(compositionDuration, fps);
+  if (durationSeconds > 0) return durationToFrames(durationSeconds, createConversion(fps));
   return startFrame + 1;
 }
 
 export function exportClipReport(composition: Composition): ClipReport {
-  const conversion = createConversion(composition.fps);
-  const totalFrames = Math.round(parseSeconds(composition.duration, 0) * composition.fps);
+  const conversion = compositionConversion(composition);
+  const totalFrames = compositionTotalFrames(composition);
   const clips = allClips(composition.rootTimeline);
   const entries: ClipReportEntry[] = clips.map((clip, index) => {
     const startFrame = Math.max(0, clipStartFrame(clip, composition.fps));
@@ -119,11 +123,11 @@ export interface TimecodeLogEntry {
 }
 
 export function exportTimecodeLog(composition: Composition, conversion?: FrameConversion): readonly TimecodeLogEntry[] {
-  const conv = conversion ?? createConversion(composition.fps);
-  const totalFrames = Math.round(parseSeconds(composition.duration, 0) * composition.fps);
+  const conv = conversion ?? compositionConversion(composition);
+  const totalFrames = compositionTotalFrames(composition);
   const log: TimecodeLogEntry[] = [];
   for (let frame = 0; frame < totalFrames; frame += 1) {
-    log.push({ frame, timecode: formatTimecode(frame, conv), seconds: frame / composition.fps });
+    log.push({ frame, timecode: formatTimecode(frame, conv), seconds: frameToSeconds(frame, conv) });
   }
   return log;
 }

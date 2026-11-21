@@ -1,3 +1,4 @@
+import "./runtime-guard.js";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { runCli } from "./program.js";

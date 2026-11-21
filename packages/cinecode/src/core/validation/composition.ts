@@ -11,7 +11,7 @@ import {
 } from "./errors.js";
 import { computeClipSpan } from "./timeline.js";
 
-const CLIP_TYPES = new Set([
+export const CLIP_TYPES = new Set([
   "video",
   "image",
   "text",
@@ -217,7 +217,51 @@ export function validateComposition(
         );
       }
 
+      if (type === "component") {
+        errors.push(
+          issueAt(
+            authoringIssue(
+              AUTHORING_CODES.invalidComposition,
+              `Unsupported clip type "component" (clip "${name}"): flatten the component into the timeline or render it directly`,
+              {
+                hint: "Flatten the component into the timeline or render it directly.",
+              },
+            ),
+            name,
+            track.name,
+            span.startFrames,
+            fps,
+          ),
+        );
+        continue;
+      }
+
+      if (type === "scene") {
+        const sceneClip = clip as { ref?: string; timeline?: unknown };
+        const scenes = composition.scenes as Record<string, unknown> | undefined;
+        const hasNested = Boolean(sceneClip.timeline || (sceneClip.ref && scenes && scenes[sceneClip.ref]));
+        if (!hasNested) {
+          errors.push(
+            issueAt(
+              authoringIssue(
+                AUTHORING_CODES.invalidComposition,
+                `Clip "${name}" (scene) references unresolved scene "${sceneClip.ref ?? "unnamed"}": provide scene in composition or flatten the scene into the timeline or render it directly`,
+                {
+                  hint: "Provide the referenced scene in composition.scenes, or flatten the scene into the timeline or render it directly.",
+                },
+              ),
+              name,
+              track.name,
+              span.startFrames,
+              fps,
+            ),
+          );
+          continue;
+        }
+      }
+
       for (const property of REQUIRED_PROPERTIES[type] ?? []) {
+        if (type === "audio" && property === "src" && (clip as { buffer?: unknown }).buffer) continue;
         const value = (clip as unknown as Record<string, unknown>)[property];
         if (value === undefined || value === null || (typeof value === "string" && value.trim() === "")) {
           errors.push(
@@ -319,7 +363,9 @@ export function validateComposition(
               hint: behavior === "strict" ? "Trim the clip or raise composition.duration" : "The clip will be clamped to the composition duration",
             },
           );
-          (behavior === "strict" ? errors : warnings).push(issue);
+          (behavior === "strict" ? errors : warnings).push(
+            behavior === "strict" ? issue : { ...issue, severity: "warning" },
+          );
         }
       }
     }

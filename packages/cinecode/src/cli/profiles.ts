@@ -66,7 +66,19 @@ export function loadGlobalAliases(): Record<string, string> {
 }
 
 export function loadAliases(projectDir = process.cwd()): Record<string, string> {
-  return { ...loadGlobalAliases(), ...loadLocalAliases(projectDir) };
+  const local = loadLocalAliases(projectDir);
+  const global = loadGlobalAliases();
+  if (Object.keys(global).length > 0) {
+    const file = path.join(projectDir, "cinecode.json");
+    const existing = readJson(file) ?? {};
+    existing.aliases = { ...global, ...aliasTable(existing.aliases), ...local };
+    fs.writeFileSync(file, JSON.stringify(existing, null, 2), "utf8");
+    const cfg = loadGlobalConfig();
+    delete cfg.aliases;
+    saveGlobalConfig(cfg);
+    process.stderr.write("Migrated global CLI aliases to project-local cinecode.json\n");
+  }
+  return loadLocalAliases(projectDir);
 }
 
 export function aliasesEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -79,20 +91,24 @@ export function loadEnabledAliases(projectDir = process.cwd(), env: NodeJS.Proce
 }
 
 export function setAlias(name: string, expansion: string): void {
-  const globalCfg = loadGlobalConfig();
-  if (!globalCfg.aliases) globalCfg.aliases = {};
-  globalCfg.aliases[name] = expansion;
-  saveGlobalConfig(globalCfg);
+  const file = path.join(process.cwd(), "cinecode.json");
+  const local = readJson(file) ?? {};
+  const aliases = aliasTable(local.aliases);
+  aliases[name] = expansion;
+  local.aliases = aliases;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(local, null, 2), "utf8");
 }
 
 export function removeAlias(name: string): boolean {
-  const globalCfg = loadGlobalConfig();
-  if (globalCfg.aliases && name in globalCfg.aliases) {
-    delete globalCfg.aliases[name];
-    saveGlobalConfig(globalCfg);
-    return true;
-  }
-  return false;
+  const file = path.join(process.cwd(), "cinecode.json");
+  const local = readJson(file) ?? {};
+  const aliases = aliasTable(local.aliases);
+  if (!(name in aliases)) return false;
+  delete aliases[name];
+  local.aliases = aliases;
+  fs.writeFileSync(file, JSON.stringify(local, null, 2), "utf8");
+  return true;
 }
 
 export interface AliasResolution {

@@ -90,8 +90,7 @@
           "enum": [
             "png",
             "jpg",
-            "webp",
-            "svg"
+            "webp"
           ]
         },
         "quality": {
@@ -122,11 +121,6 @@
         },
         "hmr": {
           "type": "boolean"
-        },
-        "metricsPort": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 65535
         }
       },
       "additionalProperties": false
@@ -142,6 +136,20 @@
     },
     "cacheDir": {
       "type": "string"
+    },
+    "binaries": {
+      "type": "object",
+      "properties": {
+        "ffmpegPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ffprobePath": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
     },
     "allowCoLocatedMedia": {
       "type": "boolean"
@@ -284,11 +292,19 @@
           "enum": [
             "youtube-1080p",
             "youtube-4k",
+            "youtube-shorts",
             "tiktok",
             "instagram-reels",
+            "instagram-feed-square",
+            "instagram-feed-portrait",
             "instagram-post",
+            "linkedin",
             "twitter",
-            "custom"
+            "vimeo-pro",
+            "broadcast-sdi",
+            "archival-master",
+            "web-gif",
+            "web-webp"
           ]
         },
         "bitrate": {
@@ -470,11 +486,9 @@
       "items": {
         "type": "string"
       }
-    },
-    "composition": {}
+    }
   },
   "additionalProperties": false,
-  "$id": "https://cinecode.dev/schemas/cinecode.schema.json",
   "title": "Cinecode Configuration",
   "description": "JSON Schema for Cinecode configs, generated from the runtime Zod schema."
 }

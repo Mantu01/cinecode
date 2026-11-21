@@ -28,17 +28,33 @@ export function createMemoryBudget(options: MemoryBudgetOptions = {}): MemoryBud
   };
 }
 
+export type ReservationOutcome =
+  | { readonly ok: true; readonly bytes: number }
+  | {
+      readonly ok: false;
+      readonly reason: "over-limit" | "exhausted";
+      readonly requestedBytes: number;
+      readonly limitBytes: number;
+      readonly availableBytes: number;
+    };
+
 /**
  * Single byte budget shared by the encoder frame queue and in-flight worker
- * chunks. Reservations are FIFO: a producer that cannot reserve waits for
- * earlier reservations to be released, so frames are never dropped or
- * reordered.
+ * chunks. Reservations are exact (no clamping); requests exceeding the limit
+ * receive a typed refusal. Releases are defensive against underflow.
  */
 export class ByteBudget {
   private readonly limit: number;
   private used = 0;
   private peak = 0;
-  private readonly waiters: { bytes: number; resolve: () => void }[] = [];
+  private waitCountValue = 0;
+  private waitDurationMsValue = 0;
+  private underflowReported = false;
+  private readonly waiters: {
+    bytes: number;
+    waitStart: number;
+    resolve: (outcome: ReservationOutcome) => void;
+  }[] = [];
 
   constructor(limitBytes: number) {
     this.limit = Math.max(1, Math.floor(limitBytes));
@@ -56,40 +72,97 @@ export class ByteBudget {
     return this.peak;
   }
 
-  /** Reserves bytes if they fit now; returns false instead of waiting. */
-  tryReserve(bytes: number): boolean {
-    const size = Math.min(Math.max(0, Math.floor(bytes)), this.limit);
-    if (this.waiters.length > 0 || this.used + size > this.limit) return false;
-    this.used += size;
-    this.peak = Math.max(this.peak, this.used);
-    return true;
+  get waitCount(): number {
+    return this.waitCountValue;
   }
 
-  /** Reserves bytes, waiting for earlier reservations to drain if needed. */
-  async reserve(bytes: number): Promise<void> {
-    if (this.tryReserve(bytes)) return;
-    const size = Math.min(Math.max(0, Math.floor(bytes)), this.limit);
-    await new Promise<void>((resolve) => {
-      this.waiters.push({ bytes: size, resolve });
+  get waitDurationMs(): number {
+    return this.waitDurationMsValue;
+  }
+
+  /** Reserves exact bytes if they fit now; returns typed refusal if over limit or exhausted. */
+  tryReserve(bytes: number): ReservationOutcome {
+    const size = Math.floor(bytes);
+    if (size <= 0) return { ok: true, bytes: 0 };
+    if (size > this.limit) {
+      return {
+        ok: false,
+        reason: "over-limit",
+        requestedBytes: size,
+        limitBytes: this.limit,
+        availableBytes: Math.max(0, this.limit - this.used),
+      };
+    }
+    if (this.waiters.length > 0 || this.used + size > this.limit) {
+      return {
+        ok: false,
+        reason: "exhausted",
+        requestedBytes: size,
+        limitBytes: this.limit,
+        availableBytes: Math.max(0, this.limit - this.used),
+      };
+    }
+    this.used += size;
+    this.peak = Math.max(this.peak, this.used);
+    return { ok: true, bytes: size };
+  }
+
+  /** Reserves exact bytes, waiting for earlier reservations to drain if needed. */
+  async reserve(bytes: number): Promise<ReservationOutcome> {
+    const immediate = this.tryReserve(bytes);
+    if (immediate.ok || immediate.reason === "over-limit") {
+      return immediate;
+    }
+    const size = Math.floor(bytes);
+    const waitStart = Date.now();
+    this.waitCountValue += 1;
+    return new Promise<ReservationOutcome>((resolve) => {
+      this.waiters.push({
+        bytes: size,
+        waitStart,
+        resolve,
+      });
     });
   }
 
   release(bytes: number): void {
-    this.used = Math.max(0, this.used - Math.max(0, Math.floor(bytes)));
+    const size = Math.floor(bytes);
+    if (size <= 0) return;
+    if (size > this.used) {
+      if (!this.underflowReported) {
+        this.underflowReported = true;
+        process.stderr.write(
+          `[CC7005] ByteBudget programming error: attempted to release ${size} bytes but only ${this.used} bytes currently reserved\n`,
+        );
+      }
+      this.used = 0;
+    } else {
+      this.used -= size;
+    }
+    this.drainWaiters();
+  }
+
+  private drainWaiters(): void {
     while (this.waiters.length > 0) {
       const next = this.waiters[0]!;
       if (this.used + next.bytes > this.limit) break;
       this.waiters.shift();
       this.used += next.bytes;
       this.peak = Math.max(this.peak, this.used);
-      next.resolve();
+      this.waitDurationMsValue += Date.now() - next.waitStart;
+      next.resolve({ ok: true, bytes: next.bytes });
     }
   }
 
   reset(): void {
     this.used = 0;
     this.peak = 0;
-    for (const waiter of this.waiters.splice(0)) waiter.resolve();
+    this.waitCountValue = 0;
+    this.waitDurationMsValue = 0;
+    this.underflowReported = false;
+    for (const waiter of this.waiters.splice(0)) {
+      waiter.resolve({ ok: true, bytes: waiter.bytes });
+    }
   }
 }
 

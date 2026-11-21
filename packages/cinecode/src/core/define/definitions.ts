@@ -6,6 +6,9 @@ import type { MainManifest } from "../types/manifest.js";
 import type { AudioBuffer } from "../../audio/types.js";
 import type { InferredCinecodeConfig } from "../../config/zod-schema.js";
 import { validateAuthoringConfig } from "../../config/validator.js";
+import { markConfigValidated } from "../../config/validated.js";
+import { markMainDefinition, validateMainDefinition } from "../../manifest/contract.js";
+import { brandDefinition } from "../../manifest/brands.js";
 
 export interface TimelineFactory<P> {
   readonly props?: P;
@@ -17,13 +20,16 @@ export type TimelineDef<P> = (props: P) => Timeline;
 /**
  * Creates a timeline definition that builds a Timeline from optional props.
  *
+ * `timelines[].sceneRefs` sequences scenes back to back in array order with no
+ * implicit overlap; build cross-scene transitions inside one scene.
+ *
  * @param build - Function that constructs the timeline from props
  * @returns A TimelineDef that can be registered in main.ts
  */
 export function defineTimeline<P = Record<string, never>>(
   build: (props: P) => Timeline,
 ): TimelineDef<P> {
-  return build;
+  return brandDefinition(build, "timeline");
 }
 
 /**
@@ -33,7 +39,7 @@ export function defineTimeline<P = Record<string, never>>(
  * @returns A timeline builder with no parameters
  */
 export function defineTimelineNoProps(build: () => Timeline): () => Timeline {
-  return build;
+  return brandDefinition(build, "timeline");
 }
 
 export interface SceneDef<P> extends TimelineFactory<P> {
@@ -45,6 +51,10 @@ export interface SceneDef<P> extends TimelineFactory<P> {
 /**
  * Creates a scene definition — a named timeline with fixed duration.
  *
+ * Scenes referenced by a timeline play back-to-back in `sceneRefs` order with
+ * no implicit overlap. `duration` must equal the built timeline's content;
+ * a mismatch of more than one frame is a validation error.
+ *
  * @param name - Scene name identifier
  * @param duration - Scene duration in seconds or time string
  * @param build - Function to build the scene's timeline
@@ -55,7 +65,7 @@ export function defineScene<P>(
   duration: number | string,
   build: (props: P) => Timeline,
 ): SceneDef<P> {
-  return { kind: "scene", name, duration, build };
+  return brandDefinition({ kind: "scene", name, duration, build }, "scene");
 }
 
 export interface ComponentDef<P> {
@@ -114,6 +124,7 @@ export function defineConfig(config: unknown): unknown {
   if (typeof config === "object" && config !== null && !("rootTimeline" in config)) {
     const { errors } = validateAuthoringConfig(config);
     if (errors.length > 0) throw errors[0];
+    markConfigValidated(config);
   }
   return config;
 }
@@ -147,7 +158,7 @@ export interface ImageDef {
 
 /** Declares a standalone still image. No timeline or muxer required. */
 export function defineImage(build: ImageFactory): ImageDef {
-  return { kind: "image", build };
+  return brandDefinition({ kind: "image", build }, "image");
 }
 
 // ---------------------------------------------------------------------------
@@ -172,7 +183,7 @@ export interface AudioDef {
 
 /** Declares a standalone audio generator producing an `AudioBuffer`. */
 export function defineAudio(build: AudioFactory): AudioDef {
-  return { kind: "audio", build };
+  return brandDefinition({ kind: "audio", build }, "audio");
 }
 
 // ---------------------------------------------------------------------------
@@ -190,6 +201,7 @@ export interface MainDef extends MainManifest {
  * @returns A MainDef wrapping the manifest
  */
 export function defineMain(manifest: MainManifest): MainDef {
+  validateMainDefinition(manifest);
   const def: MainDef = {
     kind: "main",
     images: manifest.images ?? [],
@@ -203,5 +215,5 @@ export function defineMain(manifest: MainManifest): MainDef {
   if (manifest.motions !== undefined) {
     (def as any).motions = manifest.motions;
   }
-  return def;
+  return markMainDefinition(def);
 }

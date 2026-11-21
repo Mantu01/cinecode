@@ -2,6 +2,14 @@
 
 This document specifies the supported execution environments, formats, codecs, audio constraints, fonts, and explicit boundaries for Cinecode. Every statement is verified by automated test suites.
 
+## Bundled FFmpeg and FFprobe
+
+Cinecode ships the platform FFmpeg and FFprobe installer packages with the framework.
+Resolution order: `CINECODE_FFMPEG_PATH` or `CINECODE_FFPROBE_PATH`, project `binaries.ffmpegPath` or `binaries.ffprobePath`, bundled installer package, then system `PATH`.
+The resolved absolute path, version and provenance are reported by `cinecode doctor`.
+
+LGPL licence notices ship in `THIRD_PARTY_NOTICES.md`. The full binary build provenance is provided by each platform installer package.
+
 ## Supported Environments
 
 | Environment | Requirement | Notes |

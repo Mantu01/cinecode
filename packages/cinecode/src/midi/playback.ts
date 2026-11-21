@@ -3,6 +3,7 @@ import type { Keyframe } from "../core/keyframes/types.js";
 import type { MidiMessage, MidiMessageType } from "./message.js";
 import { resolveMidiMapping, type MidiMapping } from "./map.js";
 import type { MidiDeviceManager } from "./device.js";
+import { recordDegradation } from "../errors/degradations.js";
 
 export interface ParsedMidiEvent {
   readonly tick: number;
@@ -360,9 +361,12 @@ export class MidiPlayback {
     if (this.driftWindowStart < 0) this.driftWindowStart = raw;
     if (Math.abs(raw - this.driftWindowStart) >= DRIFT_WINDOW_SECONDS) {
       if (this.driftAccumMs > DRIFT_WARN_MS) {
-        console.warn(
-          `[cinecode] MIDI transport drift ${this.driftAccumMs.toFixed(2)}ms exceeded ${DRIFT_WARN_MS}ms over ${DRIFT_WINDOW_SECONDS}s`,
-        );
+        recordDegradation({
+          code: "CC5001",
+          what: "MIDI transport drift",
+          reason: `MIDI transport drift ${this.driftAccumMs.toFixed(2)}ms exceeded ${DRIFT_WARN_MS}ms over ${DRIFT_WINDOW_SECONDS}s`,
+          instead: "snapped timestamp used",
+        });
       }
       this.driftWindowStart = raw;
       this.driftAccumMs = 0;

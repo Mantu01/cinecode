@@ -75,13 +75,13 @@ test("missing entry, missing media and unsupported format are coded", async () =
 
   const format = run(project({ "composition.json": COMPOSITION }), [
     "still",
-    "--config",
+    "--file",
     "composition.json",
     "--format",
     "bogus",
   ]);
   assert.equal(format.status, EXIT_CODES.validation);
-  assert.match(format.err, /\[CC2002\]/);
+  assert.match(format.err, /\[CC1008\]/);
 });
 
 test("failed mux maps to a coded runtime error", () => {
@@ -107,15 +107,20 @@ test("a degradation is recorded in human summary and machine output", () => {
   assert.deepEqual(validateMachineReport(report), []);
 });
 
-test("machine output is one schema-valid document per command", () => {
+test("informational commands print text and emit no machine envelope", () => {
   const dir = project({});
-  for (const args of [["version", "--json"], ["presets", "--json"], ["license", "--json"]]) {
+  for (const args of [["version", "--json"], ["license", "--json"]]) {
     const result = run(dir, args);
     assert.equal(result.status, EXIT_CODES.success, result.err);
-    const report = parseMachine(result.out);
-    assert.equal(report.ok, true);
-    assert.equal(report.command, args[0]);
+    assert.equal(result.err, "");
+    assert.doesNotMatch(result.out, /"schemaVersion"/);
+    assert.ok(result.out.trim().length > 0);
   }
+  const presets = run(dir, ["presets", "--json"]);
+  assert.equal(presets.status, EXIT_CODES.success, presets.err);
+  const report = parseMachine(presets.out);
+  assert.equal(report.ok, true);
+  assert.equal(report.command, "presets");
 });
 
 test("a degraded run appears in machine output and its error record", () => {

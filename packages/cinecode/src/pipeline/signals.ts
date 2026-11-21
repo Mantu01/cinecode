@@ -23,6 +23,8 @@ export class CancellationController {
   private readonly handler = (signal: TerminationSignal): void => {
     void this.handleSignal(signal);
   };
+  private readonly onSigint = (): void => this.handler("SIGINT");
+  private readonly onSigterm = (): void => this.handler("SIGTERM");
 
   constructor(options: CancellationOptions) {
     this.options = options;
@@ -35,15 +37,15 @@ export class CancellationController {
   install(): void {
     if (this.installed) return;
     this.installed = true;
-    process.on("SIGINT", this.handler);
-    process.on("SIGTERM", this.handler);
+    process.on("SIGINT", this.onSigint);
+    process.on("SIGTERM", this.onSigterm);
   }
 
   dispose(): void {
     if (!this.installed) return;
     this.installed = false;
-    process.off("SIGINT", this.handler);
-    process.off("SIGTERM", this.handler);
+    process.off("SIGINT", this.onSigint);
+    process.off("SIGTERM", this.onSigterm);
   }
 
   private exitCodeFor(signal: TerminationSignal): number {

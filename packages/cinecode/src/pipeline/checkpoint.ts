@@ -2,6 +2,7 @@ import { mkdir, readdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomic } from "../encoder/output.js";
 import { recordDegradation } from "../errors/degradations.js";
+import { CACHE_FORMAT } from "./cache.js";
 
 export interface EncoderCheckpointState {
   readonly framesEncoded: number;
@@ -18,6 +19,7 @@ export interface AudioCheckpointState {
 
 export interface RenderCheckpoint {
   readonly version: 2;
+  readonly cacheFormat: number;
   readonly renderSessionId: string;
   readonly compositionId: string;
   readonly compositionHash: string;
@@ -129,6 +131,17 @@ export class CheckpointManager {
     try {
       const raw = await readFile(this.checkpointPath, "utf-8");
       const checkpoint = JSON.parse(raw) as RenderCheckpoint;
+      const reason = this.incompatibility(checkpoint);
+      if (reason) {
+        recordDegradation({
+          code: "CC4006",
+          what: "render checkpoint discarded",
+          reason,
+          input: this.checkpointPath,
+          instead: "rendering starts without the saved checkpoint",
+        });
+        return null;
+      }
       this.hydrate(checkpoint);
       return checkpoint;
     } catch (error) {
@@ -145,17 +158,31 @@ export class CheckpointManager {
     }
   }
 
+  private incompatibility(checkpoint: RenderCheckpoint): string | null {
+    if (checkpoint.compositionHash !== this.compositionHash) return "checkpoint belongs to a different composition identity";
+    if (checkpoint.cacheFormat !== CACHE_FORMAT) {
+      return `checkpoint cache format ${String(checkpoint.cacheFormat ?? "unknown")} does not match ${CACHE_FORMAT}`;
+    }
+    if (checkpoint.totalFrames !== this.totalFrames) return "checkpoint frame count does not match the current render";
+    if (checkpoint.from !== this.from || checkpoint.to !== this.to) return "checkpoint frame window does not match the current render";
+    return null;
+  }
+
   async findLatestCheckpoint(): Promise<RenderCheckpoint | null> {
     const files = await readdir(this.checkpointsDir).catch(() => []);
     let latest: RenderCheckpoint | null = null;
+    let discarded: string | null = null;
     for (const file of files) {
       if (!file.endsWith(".json")) continue;
       try {
         const raw = await readFile(join(this.checkpointsDir, file), "utf-8");
         const checkpoint = JSON.parse(raw) as RenderCheckpoint;
-        if (checkpoint.compositionHash !== this.compositionHash) continue;
-        if (checkpoint.totalFrames !== this.totalFrames) continue;
-        if (checkpoint.from !== this.from || checkpoint.to !== this.to) continue;
+        if (checkpoint.compositionId !== this.compositionId) continue;
+        const reason = this.incompatibility(checkpoint);
+        if (reason) {
+          discarded ??= `${file}: ${reason}`;
+          continue;
+        }
         if (latest === null || checkpoint.timestamp > latest.timestamp) latest = checkpoint;
       } catch (error) {
         recordDegradation({
@@ -170,8 +197,18 @@ export class CheckpointManager {
     if (latest) {
       this.sessionId = latest.renderSessionId;
       this.hydrate(latest);
+      return latest;
     }
-    return latest;
+    if (discarded) {
+      recordDegradation({
+        code: "CC4006",
+        what: "render checkpoint discarded",
+        reason: discarded,
+        input: this.checkpointsDir,
+        instead: "rendering starts without the saved checkpoint",
+      });
+    }
+    return null;
   }
 
   private hydrate(checkpoint: RenderCheckpoint): void {
@@ -231,6 +268,7 @@ export class CheckpointManager {
     const renderedFrames = this.getCompletedFrames();
     return {
       version: 2,
+      cacheFormat: CACHE_FORMAT,
       renderSessionId: this.sessionId,
       compositionId: this.compositionId,
       compositionHash: this.compositionHash,

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdirSync, rmSync, existsSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
-import ffmpegStatic from "@ffmpeg-installer/ffmpeg";
+import { resolveBinary } from "../../binary/resolver.js";
 import { createMediaCache } from "../cache.js";
 import {
   createSharedDecodeService,
@@ -15,7 +15,7 @@ import type { Composition } from "../../core/types/index.js";
 function createTestVideo(outputPath: string, durationSec: number = 2, fps: number = 30): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(
-      ffmpegStatic.path,
+      resolveBinary("ffmpeg").path,
       [
         "-y",
         "-f", "lavfi",

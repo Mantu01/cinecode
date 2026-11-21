@@ -38,7 +38,8 @@ test("an empty manifest is rejected instead of defaulting to the config file", a
   await assert.rejects(createProjectResolver({ root }).resolve(), (error: any) => {
     assert.equal(error.code, ErrorCode.CC1010);
     assert.equal(error.location.file, join(root, "main.ts"));
-    assert.match(error.message, /registers no timelines/);
+    assert.match(error.message, /empty object/);
+    assert.match(error.message, /defineMain/);
     return true;
   });
 });

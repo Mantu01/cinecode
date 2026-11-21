@@ -112,6 +112,11 @@ export async function collectFrameCacheGarbage(options: CacheGcOptions): Promise
       accessByHash.set(entry.hash, Math.max(accessByHash.get(entry.hash) ?? 0, entry.access));
       sizeByHash.set(entry.hash, entry.size);
     }
+    for (const chunk of Object.values(state.index.chunks)) {
+      if (!chunk.payloadHash) continue;
+      accessByHash.set(chunk.payloadHash, Math.max(accessByHash.get(chunk.payloadHash) ?? 0, chunk.timestamp));
+      sizeByHash.set(chunk.payloadHash, chunk.payloadSize ?? 0);
+    }
   }
 
   const evicted = new Set<string>();

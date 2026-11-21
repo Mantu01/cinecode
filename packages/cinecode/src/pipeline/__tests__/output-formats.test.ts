@@ -5,8 +5,7 @@ import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Canvas, loadImage } from "@napi-rs/canvas";
-import ffmpegStatic from "@ffmpeg-installer/ffmpeg";
-import ffprobeStatic from "@ffprobe-installer/ffprobe";
+import { resolveBinary } from "../../binary/resolver.js";
 import { renderVideo, type RenderOptions } from "../index.js";
 import type { Composition } from "../../core/types/index.js";
 import {
@@ -94,7 +93,7 @@ async function withTemp<T>(run: (dir: string) => Promise<T>): Promise<T> {
 
 function probe(file: string): { container: string; codec?: string; width?: number; height?: number; duration: number } {
   const result = spawnSync(
-    ffprobeStatic.path,
+    resolveBinary("ffprobe").path,
     ["-v", "error", "-show_entries", "format=format_name,duration:stream=codec_name,width,height", "-of", "json", file],
     { encoding: "utf8" },
   );
@@ -115,7 +114,7 @@ function probe(file: string): { container: string; codec?: string; width?: numbe
 
 function decodeAll(file: string, width = WIDTH, height = HEIGHT): { count: number; frame: Buffer } {
   const result = spawnSync(
-    ffmpegStatic.path,
+    resolveBinary("ffmpeg").path,
     ["-v", "error", "-i", file, "-vsync", "0", "-f", "rawvideo", "-pix_fmt", "rgba", "-"],
     { maxBuffer: 512 * 1024 * 1024 },
   );
@@ -128,7 +127,7 @@ function decodeAll(file: string, width = WIDTH, height = HEIGHT): { count: numbe
 async function alphaRange(file: string, dir: string, decoder?: string): Promise<{ transparent: boolean; opaque: boolean }> {
   const target = join(dir, "alpha-probe.png");
   const result = spawnSync(
-    ffmpegStatic.path,
+    resolveBinary("ffmpeg").path,
     ["-v", "error", "-y", ...(decoder ? ["-c:v", decoder] : []), "-i", file, "-frames:v", "1", "-pix_fmt", "rgba", target],
     { encoding: "utf8" },
   );

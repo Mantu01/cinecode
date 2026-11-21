@@ -26,9 +26,7 @@ export class AuditLogger {
   private lastHash = "0000000000000000000000000000000000000000000000000000000000000000";
 
   constructor(workspaceDir = process.cwd()) {
-    const dir = path.resolve(workspaceDir, ".cinecode");
-    fs.mkdirSync(dir, { recursive: true });
-    this.logPath = path.join(dir, "audit.log");
+    this.logPath = path.join(path.resolve(workspaceDir, ".cinecode"), "audit.log");
     this.initLastHash();
   }
 
@@ -69,6 +67,7 @@ export class AuditLogger {
     };
 
     this.lastHash = entryHash;
+    fs.mkdirSync(path.dirname(this.logPath), { recursive: true });
     fs.appendFileSync(this.logPath, JSON.stringify(entry) + "\n", "utf8");
     return entry;
   }

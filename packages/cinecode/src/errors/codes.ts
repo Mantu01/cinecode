@@ -26,6 +26,8 @@ export enum ErrorCode {
   CC3006 = "CC3006",
   CC3007 = "CC3007",
   CC3008 = "CC3008",
+  CC3009 = "CC3009",
+  CC3010 = "CC3010",
   CC4001 = "CC4001",
   CC4002 = "CC4002",
   CC4003 = "CC4003",
@@ -82,6 +84,8 @@ export const ErrorMessages: Record<ErrorCode, string> = {
   [ErrorCode.CC3006]: "Font {family} is missing glyphs for characters: {missing}",
   [ErrorCode.CC3007]: "Unknown {kind} \"{id}\". Registered: {available}",
   [ErrorCode.CC3008]: "Module \"{path}\" does not export {expected}",
+  [ErrorCode.CC3009]: "Unreferenced {kind} \"{id}\": no timeline or scene references it",
+  [ErrorCode.CC3010]: "Timeline \"{timeline}\" references scene \"{scene}\" but its file replaces the references",
   [ErrorCode.CC4001]: "Frame {frame} from clip '{source}' failed to decode: {reason}",
   [ErrorCode.CC4002]: "FFmpeg encoder error: {details}",
   [ErrorCode.CC4003]: "Render cancelled",
@@ -186,6 +190,10 @@ const FIX_HINTS: Partial<Record<ErrorCode, string>> = {
     "Use one of the registered ids, or register the missing entry in `main.ts`.",
   [ErrorCode.CC3008]:
     "Export the expected value (default export, `defineTimeline`, `defineScene`, `defineImage` or `defineAudio`).",
+  [ErrorCode.CC3009]:
+    "Reference the entry from a timeline, or keep it as a standalone target; `check` lists it once per command.",
+  [ErrorCode.CC3010]:
+    "A timeline compiles either its file or its sceneRefs, never both; remove one.",
   [ErrorCode.CC4001]:
     "Verify the source video is not corrupted. Run `cinecode inspect <file>` to check metadata. Update ffmpeg or re-export from source.",
   [ErrorCode.CC4002]:

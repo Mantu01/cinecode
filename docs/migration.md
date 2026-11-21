@@ -42,10 +42,11 @@ The following keys were removed because they were inert, duplicated, or violated
 | `audio.limiter` / `audio.sidechains` | Removed. Audio limiter is always enabled by default; configure sidechains in track definitions. |
 | `security` | Removed. Plugin verification is controlled by local capabilities. |
 | `telemetry` | Removed in Phase 32. All telemetry has been excised. |
+| `composition` | Removed. Select a composition with `--composition` or pass it directly to the render API. |
 | `pluginPermissions` | Removed. Sandbox permissions are configured per plugin. |
 
 ## CLI Flag Migrations
 
-- `--props <path>`: Deprecated. Use `--config <path>`.
+- `--props <path>`: Removed. Use `--config <path>`.
 - `--auto` on `cinecode upgrade`: Removed. `cinecode upgrade` only checks version status without network child process spawns.
 - `--all`: Supported on `cinecode render` and `cinecode generate` to process all declared assets.

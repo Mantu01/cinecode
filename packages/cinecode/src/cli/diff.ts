@@ -45,7 +45,7 @@ export function createDiffCommand(): Command {
     .description("Semantic comparison between two compositions or git revisions")
     .argument("<sourceA>", "First composition file or git revision")
     .argument("[sourceB]", "Second composition file or git revision (defaults to working copy if sourceA is a git ref)")
-    .option("-f, --format <format>", "Output format: text or markdown (use --json for machine output)", "text")
+    .option("--format <format>", "Output format: text or markdown (use --json for machine output)", "text")
     .option("--side-by-side", "Display terminal diff side-by-side", false)
     .action(async (srcA: string, srcB?: string, options = {}) => {
       const targetB = srcB || (fs.existsSync(srcA) ? srcA : "HEAD");

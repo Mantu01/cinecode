@@ -1,5 +1,7 @@
 export const MIN_NODE_VERSION = "22.18.0";
 
+export const RUNTIME_UNSUPPORTED = "CINECODE_RUNTIME_UNSUPPORTED";
+
 export const AUTHORING_CONTRACT = "erasable TypeScript syntax only";
 
 export type LoaderMode = "native-type-stripping";
@@ -13,7 +15,10 @@ export interface RuntimeCheck {
 }
 
 function parse(version: string): number[] {
-  return version.replace(/^v/, "").split(".").map((part) => Number.parseInt(part, 10) || 0);
+  return version
+    .replace(/^v/, "")
+    .split(".")
+    .map((part) => Number.parseInt(part, 10) || 0);
 }
 
 export function checkRuntime(version: string = process.version): RuntimeCheck {
@@ -38,7 +43,7 @@ export function checkRuntime(version: string = process.version): RuntimeCheck {
 
 export function formatUnsupportedRuntime(check: RuntimeCheck): string {
   return [
-    `[CINECODE_RUNTIME_UNSUPPORTED] Node.js ${check.version} is not supported.`,
+    `[${RUNTIME_UNSUPPORTED}] Node.js ${check.version} is not supported.`,
     `required: ${check.minimum}`,
     `actual:   ${check.version}`,
     `authoring: ${check.authoringContract} (${check.loaderMode})`,
@@ -46,8 +51,31 @@ export function formatUnsupportedRuntime(check: RuntimeCheck): string {
   ].join("\n");
 }
 
-export function assertSupportedRuntime(version: string = process.version): RuntimeCheck {
+export class UnsupportedRuntimeError extends Error {
+  readonly code = RUNTIME_UNSUPPORTED;
+  readonly runtime: RuntimeCheck;
+
+  constructor(check: RuntimeCheck) {
+    super(formatUnsupportedRuntime(check));
+    this.name = "UnsupportedRuntimeError";
+    this.runtime = check;
+  }
+}
+
+export function runtimeVersion(): string {
+  const override = process.env.CINECODE_TEST_NODE_VERSION;
+  if (process.env.NODE_ENV === "test" && override) {
+    try {
+      return override;
+    } finally {
+      // keep this branch testable under node --test
+    }
+  }
+  return process.version;
+}
+
+export function assertSupportedRuntime(version: string = runtimeVersion()): RuntimeCheck {
   const check = checkRuntime(version);
-  if (!check.supported) throw new Error(formatUnsupportedRuntime(check));
+  if (!check.supported) throw new UnsupportedRuntimeError(check);
   return check;
 }

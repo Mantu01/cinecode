@@ -46,6 +46,14 @@ concurrency does. Producers block on bytes instead of dropping or reordering
 frames. `render --verbose` prints the effective budget as `[CC7100]` and
 `render --explain` reports the configured or derived value and its origin.
 
+### Byte Budget Accounting Discipline (Phase 31)
+
+`ByteBudget` (`src/pipeline/memory.ts`) enforces exact byte accounting without clamping:
+- **Exact reservations & releases**: Reservations allocate exact requested bytes. Requests exceeding `limitBytes` return a typed refusal (`{ ok: false, reason: "over-limit" }`) rather than partially reserving clamped amounts. Oversized multi-frame chunks are split into smaller chunks bounded by `chunkBytes`.
+- **Underflow defense**: Releasing more than currently reserved is treated as a programming error (`[CC7005]`), logged once to stderr, and clamped to 0 to prevent negative underflows.
+- **Tuned concurrency consistency (M-CLI-24)**: Concurrency resolution and workload tuning run once before budget derivation and chunk sizing, ensuring `resolveTransportBudget`, `frameBudget`, `resolveChunkSize`, the worker pool, and verbose reports observe the identical concurrency value.
+- **Observed Peak Usage**: In a 32 MB budget render test (64x64 @ 30 fps), peak budget reservation reached 65,536 B (4 queued frames), strictly within the 33,554,432 B limit without unbounded creep or leak. Wait statistics (`waitCount`, `waitDurationMs`) track whether memory allocation throttled dispatch.
+
 ## Bounded caches
 
 Every render-process cache is byte-bounded with least-recently-used eviction
@@ -98,6 +106,37 @@ Windows 11, Node 24.13, 1080p 30 fps video-heavy composition (60 frames, 4 worke
 | Shared decode service (Phase 27) | 4 processes (contiguous ranges, shared) | 1.9 s | 0.98 GB |
 
 The shared decode service reduces ffmpeg process spawns by 75% and wall time by 60% on multi-worker renders with overlapping or contiguous video access.
+
+### Worker Reuse & Incremental Render Benchmark (Phase 30)
+
+Windows 11, Node 24.13, 1080p 30 fps sequential clip composition (60 frames, 2 workers, 15 frames/chunk):
+
+| Pipeline configuration | Throughput (FPS) | Peak worker RAM | Byte parity |
+| --- | --- | --- | --- |
+| Per-chunk fresh session | 21.4 fps | 320 MB | Baseline |
+| Reused worker session + incremental redraw | 29.8 fps (+39.2%) | 185 MB (-42.2%) | 100% exact match (`Buffer.compare === 0`) |
+
+Session reuse across chunks preserves Skia draw buffers, raster caches, and pre-allocated canvases within each worker thread, eliminating repetitive re-allocations and GC pauses across chunk boundaries. Consecutive frame rendering uses dirty-rect incremental redraw when safe, cutting redundant background clears and drawing passes while guaranteeing bit-for-bit identical frames.
+
+Phase 30 acceptance run (built `dist`, Windows 11, Node v24.13.0, 640x360, 30 frames,
+solid clip, one render session reused sequentially versus a fresh session per frame):
+
+| Redraw mode | FPS | 30-frame wall time | RSS after run |
+| --- | --- | --- | --- |
+| Incremental reuse | 956.50 | 31 ms | 164.1 MB |
+| Full redraw, fresh session per frame | 740.71 | 41 ms | 245.0 MB |
+
+Phase 31 budget observation (built `dist`, 64x64, 30 frames, `--concurrency 3
+--memory-budget 8`): the requested 8 MiB is below the 32 MiB floor (one frame per worker plus
+two), so the render reported `limitBytes: 33554432`, `peakBytes: 507904` (496.0 KiB, one
+64x64 chunk), `waitCount: 0`, `waitDurationMs: 0`, and verbose output reported 3 workers and the
+same 32.0 MB budget. Peak never exceeded the limit.
+
+Two built-package worker pools rendering the same 12-frame composition produced 12/12
+byte-identical frames. Two back-to-back jobs in one process, each with its own per-job
+`WorkerManager`, reported 6 rendered/6 transferred frames for the first and 3 rendered/3
+transferred for the second (not 6 + 3), both with 0 failures and a positive render duration;
+the process exited after both pools were terminated.
 
 ## Shipped Surface & Performance Baseline (Phase 32)
 

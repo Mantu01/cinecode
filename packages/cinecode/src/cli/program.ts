@@ -1,11 +1,12 @@
 import { Command, CommanderError, Option } from "commander";
 import { CINECODE_VERSION } from "../version.js";
-import { COMMANDS, findCommand, suggestCommand, type CommandSpec } from "./command-registry.js";
-import { EXIT_CODES, ExitSignal, exitCodeForError } from "./exit-codes.js";
+import { COMMANDS, findCommand, suggestCommand, type CommandSpec, commandNames } from "./command-registry.js";
+import { EXIT_CODES, EXIT_CODE_MEANINGS, ExitSignal, exitCodeForError } from "./exit-codes.js";
 import { UsageError } from "./usage-error.js";
 import { loadEnabledAliases, resolveAliases } from "./profiles.js";
 import { createError, ErrorCode, formatError, isCinecodeError, type CinecodeError } from "../errors/index.js";
-import { runReport, type MachineErrorRecord, type MachineReport } from "./run-report.js";
+import { runReport, validateMachineReport, type MachineErrorRecord, type MachineReport } from "./run-report.js";
+import { StdoutCapture } from "./machine-capture.js";
 
 const LICENSE = `Cinecode is MIT licensed.
 
@@ -34,13 +35,10 @@ function longFlagOf(flags: string): string {
 }
 
 /** Adds the global options, the deprecated alias and the in-process exit guard. */
-export function applyGlobalOptions(command: Command, spec?: Pick<CommandSpec, "props">): Command {
+export function applyGlobalOptions(command: Command): Command {
   for (const [flags, description] of GLOBAL_OPTIONS) {
     const long = longFlagOf(flags);
     if (!command.options.some((option) => option.long === long)) command.option(flags, description);
-  }
-  if (spec?.props && !command.options.some((option) => option.long === "--props")) {
-    command.addOption(new Option("--props <path>", "Deprecated alias of --config").conflicts("config"));
   }
   command.exitOverride();
   for (const child of command.commands) applyGlobalOptions(child);
@@ -63,9 +61,15 @@ function attachHelp(command: Command, example: string): void {
 }
 
 function describeCommand(command: Command, spec: CommandSpec): Command {
-  applyGlobalOptions(command, spec);
+  applyGlobalOptions(command);
   attachHelp(command, spec.example);
+  attachListPresetsAlias(command, spec);
   return command;
+}
+
+function attachListPresetsAlias(command: Command, spec: CommandSpec): void {
+  if (spec.name !== "presets") return;
+  command.option("--list-presets", "list platform deliverable presets");
 }
 
 function registerStubs(program: Command): void {
@@ -191,7 +195,10 @@ function describeFailure(error: unknown): Failure {
   };
 }
 
+/** The document is validated before it is written, exactly once per invocation. */
 function writeMachine(doc: MachineReport, write: (text: string) => void): void {
+  const problems = validateMachineReport(doc);
+  if (problems.length > 0) throw createError(ErrorCode.CC9002, { reason: problems.join("; ") });
   write(`${JSON.stringify(doc, null, 2)}\n`);
 }
 
@@ -205,12 +212,15 @@ function reportError(error: unknown, verbose: boolean, color: boolean, machine: 
   return failure.exitCode;
 }
 
-function withCapturedOutput(report: MachineReport, captured: string): MachineReport {
-  if (Object.keys(report.result).length > 0 || captured.trim().length === 0) return report;
-  return { ...report, result: { output: captured.trim() } };
+/** Adds the incidental stdout to the document; the command payload always wins. */
+function withCapturedOutput(report: MachineReport, capture: StdoutCapture): MachineReport {
+  const payload = capture.drain();
+  if (Object.keys(payload).length === 0) return report;
+  return { ...report, result: { ...payload, ...report.result } };
 }
 
-const NO_SUMMARY = new Set(["help", "version", "license"]);
+/** Informational commands print text only: no envelope, no summary, no error line. */
+export const INFORMATIONAL_COMMANDS = new Set(["help", "version", "license"]);
 
 export interface RunCliOptions {
   readonly cwd?: string;
@@ -245,7 +255,7 @@ export async function runCli(argv: readonly string[] = process.argv, options: Ru
   const previousVerbose = process.env.CINECODE_VERBOSE;
   const machine = raw.includes("--json");
   const stdoutWrite = options.stdout ?? (process.stdout.write.bind(process.stdout) as (text: string) => void);
-  let captured = "";
+  const capture = new StdoutCapture(() => runReport.cacheDir());
   let restored = false;
   const restoreStdout = (): void => {
     if (restored) return;
@@ -253,13 +263,23 @@ export async function runCli(argv: readonly string[] = process.argv, options: Ru
     process.stdout.write = originalStdoutWrite;
   };
   const originalStdoutWrite = process.stdout.write;
-  if (machine) {
-    process.stdout.write = ((chunk: string | Uint8Array) => {
-      const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
-      if (captured.length < 262144) captured += text;
-      return true;
-    }) as typeof process.stdout.write;
-  }
+  const interceptor = ((chunk: string | Uint8Array) => {
+    const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+    capture.write(text);
+    return true;
+  }) as typeof process.stdout.write;
+  if (machine) process.stdout.write = interceptor;
+  let documents = 0;
+  /** Exactly one machine document per run; a second attempt is refused loudly. */
+  const documentWrite = (text: string): void => {
+    if (documents > 0) {
+      process.stderr.write("cinecode: machine mode already wrote its document; refusing a second one\n");
+      return;
+    }
+    documents += 1;
+    stdoutWrite(text);
+  };
+  runReport.reset();
   runReport.start("cinecode", machine);
   let jsonMode = false;
   let args = [...raw];
@@ -291,13 +311,11 @@ export async function runCli(argv: readonly string[] = process.argv, options: Ru
 
     const tokenIndex = commandIndex(args);
     const token = tokenIndex >= 0 ? args[tokenIndex] : undefined;
-    runReport.start(token ?? "cinecode", machine);
+    runReport.relabel(token ?? "cinecode");
     const spec = token ? findCommand(token) : undefined;
-    if (spec?.props && args.includes("--props")) {
-      console.error("cinecode: --props is deprecated, use --config instead.");
-    }
 
     if (spec) {
+      runReport.describe(spec);
       program.addCommand(describeCommand(await spec.load(), spec));
     } else if (token === "help") {
       const target = args[1] ? findCommand(args[1]) : undefined;
@@ -321,15 +339,32 @@ export async function runCli(argv: readonly string[] = process.argv, options: Ru
     });
 
     await program.parseAsync(["node", "cinecode", ...hoistGlobalOptions(args, tokenIndex)]);
-    const report = withCapturedOutput(runReport.finish(), captured);
+    if (machine && process.stdout.write !== interceptor) {
+      throw createError(ErrorCode.CC9002, { reason: "machine mode stdout was replaced during the command" });
+    }
+    const report = withCapturedOutput(runReport.finish(), capture);
     restoreStdout();
-    if (machine) writeMachine(report, stdoutWrite);
-    else if (!token || !NO_SUMMARY.has(token)) stdoutWrite(`\n${runReport.summary(report)}\n`);
+    const informational = token !== undefined && INFORMATIONAL_COMMANDS.has(token);
+    if (informational) {
+      if (capture.bytes() > 0) stdoutWrite(capture.text());
+    } else if (machine) {
+      writeMachine(report, documentWrite);
+    } else {
+      for (const warning of report.warnings) {
+        process.stderr.write(`⚠ [${warning.code}] ${warning.message}\n`);
+      }
+      stdoutWrite(`\n${runReport.summary(report)}\n`);
+    }
     return EXIT_CODES.success;
   } catch (error) {
     const verbose = program.opts().verbose === true || args.includes("--verbose");
     restoreStdout();
-    return reportError(error, verbose, !noColor, machine, stdoutWrite);
+    /* Help and version are clean exits at the reporting boundary, not failures. */
+    if (error instanceof CommanderError && error.exitCode === 0) {
+      if (capture.bytes() > 0) stdoutWrite(capture.text());
+      return EXIT_CODES.success;
+    }
+    return reportError(error, verbose, !noColor, machine, documentWrite);
   } finally {
     restoreStdout();
     if (jsonMode) {
@@ -356,6 +391,14 @@ export function createProgram(): Command {
     .exitOverride();
 
   applyGlobalOptions(program);
+  program.addHelpText(
+    "after",
+    `\nCommands:\n${commandNames()
+      .map((name) => `  ${name.padEnd(22)}${COMMANDS.find((c) => c.name === name)?.summary ?? ""}`)
+      .join("\n")}\n\nProject discovery:\n  --root <dir> or --config <path> wins. Otherwise the nearest cinecode config is used,\n  searching upward stops at package.json or .git, and parent projects are never searched.\n\nExit codes:\n${Object.entries(EXIT_CODES)
+      .map(([name, code]) => `  ${String(code).padStart(3)}  ${EXIT_CODE_MEANINGS[name as keyof typeof EXIT_CODE_MEANINGS]}`)
+      .join("\n")}`,
+  );
 
   const version = program
     .command("version")

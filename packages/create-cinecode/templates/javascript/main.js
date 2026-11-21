@@ -4,7 +4,9 @@ const WIDTH = {{WIDTH}};
 const HEIGHT = {{HEIGHT}};
 
 /**
- * Root manifest. Every entry points at an isolated file that can be generated,
+ * Root manifest - the one accepted entry shape. Export nothing else from this
+ * file: compositions, timelines and assets live in the files referenced below.
+ * Every entry points at an isolated file that can be generated,
  * previewed, and cached on its own:
  *   cinecode generate image      → output/images/*.png
  *   cinecode generate audio      → output/audio/*.wav
@@ -20,7 +22,6 @@ export default defineMain({
       width: WIDTH,
       height: HEIGHT,
       format: "png",
-      tags: ["marketing"],
     },
   ],
 
@@ -29,12 +30,10 @@ export default defineMain({
       id: "ambient",
       name: "Ambient Pad",
       file: "./src/audio/ambient.js",
-      kind: "music",
       sampleRate: 48000,
       channels: 2,
       gain: 0.6,
       duration: 6,
-      tags: ["music"],
     },
   ],
 
@@ -44,7 +43,6 @@ export default defineMain({
       name: "Intro Scene",
       file: "./src/scenes/intro.js",
       duration: 6,
-      tags: ["intro"],
     },
   ],
 
@@ -55,7 +53,6 @@ export default defineMain({
       duration: 6,
       sceneRefs: ["intro"],
       audioRef: ["ambient"],
-      tags: ["master"],
     },
   ],
 });

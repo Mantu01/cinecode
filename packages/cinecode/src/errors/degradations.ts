@@ -16,13 +16,17 @@ export interface WarningRecord {
 
 const degradations: Degradation[] = [];
 const warnings: WarningRecord[] = [];
+const notes: string[] = [];
 
 export function recordDegradation(degradation: Degradation): void {
   degradations.push(degradation);
 }
 
 export function recordWarning(warning: WarningRecord): void {
-  warnings.push(warning);
+  const seen = warnings.some(
+    (entry) => entry.code === warning.code && entry.message === warning.message && entry.input === warning.input,
+  );
+  if (!seen) warnings.push(warning);
 }
 
 export function pendingDegradations(): readonly Degradation[] {
@@ -31,6 +35,15 @@ export function pendingDegradations(): readonly Degradation[] {
 
 export function pendingWarnings(): readonly WarningRecord[] {
   return [...warnings];
+}
+
+/** Informational observations; never failures and never degradations. */
+export function recordNote(message: string): void {
+  if (!notes.includes(message)) notes.push(message);
+}
+
+export function pendingNotes(): readonly string[] {
+  return [...notes];
 }
 
 export function takeDegradations(): Degradation[] {
@@ -44,6 +57,7 @@ export function takeWarnings(): WarningRecord[] {
 export function resetDiagnostics(): void {
   degradations.length = 0;
   warnings.length = 0;
+  notes.length = 0;
 }
 
 export function degradationCode(message: string): string {

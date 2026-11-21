@@ -1,8 +1,18 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir, readFile, rename, rm, stat, readdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { recordDegradation } from "../errors/degradations.js";
+import { CINECODE_VERSION } from "../version.js";
+import { CACHE_FORMAT_VERSION } from "../contracts.js";
+
+/** Bumped whenever cache layout or identity hashing changes; part of every identity. */
+export const CACHE_FORMAT = CACHE_FORMAT_VERSION;
+
+export function deriveCacheKey(value: unknown): string {
+  const payload = typeof value === "string" ? value : canonicalJsonString(value);
+  return createHash("sha256").update(payload).digest("hex");
+}
 
 export interface MediaFingerprint {
   readonly src: string;
@@ -30,6 +40,7 @@ export interface FrameCacheIndexEntry {
   readonly size: number;
   readonly access: number;
   readonly chunkIndex?: number;
+  readonly offset?: number;
 }
 
 export interface FrameCacheIndex {
@@ -37,7 +48,7 @@ export interface FrameCacheIndex {
   readonly compositionId: string;
   readonly compositionHash: string;
   frames: Record<string, FrameCacheIndexEntry>;
-  chunks: Record<string, { readonly frames: readonly number[]; readonly timestamp: number }>;
+  chunks: Record<string, { readonly frames: readonly number[]; readonly timestamp: number; readonly payloadHash?: string; readonly payloadSize?: number }>;
 }
 
 export interface RenderCacheEntry {
@@ -64,6 +75,12 @@ export interface CacheGcResult {
   readonly filesDeleted: number;
 }
 
+export interface CachePluginIdentity {
+  readonly name: string;
+  readonly version: string;
+  readonly options?: unknown;
+}
+
 export interface CacheIdentityInputs {
   readonly composition: object;
   readonly seed?: number;
@@ -71,13 +88,24 @@ export interface CacheIdentityInputs {
   readonly frameWindow?: { readonly from?: number; readonly to?: number };
   readonly tempo?: unknown;
   readonly colorSpace?: string;
+  readonly colorManagement?: unknown;
   readonly pixelRatio?: number;
   readonly alpha?: boolean;
   readonly registry?: unknown;
+  readonly plugins?: readonly CachePluginIdentity[];
   readonly fonts?: unknown;
   readonly frameworkVersion?: string;
   readonly entryPath?: string;
   readonly entryContent?: string | Buffer;
+}
+
+export interface CacheIdentityResult {
+  readonly identityHash: string;
+  readonly bypassCache: boolean;
+  readonly bypassReason?: string;
+  readonly cacheFormat: number;
+  readonly frameworkVersion: string;
+  readonly identityInputs: Record<string, unknown>;
 }
 
 export function findFunctionValuedProperty(value: unknown, path: string = ""): string | null {
@@ -99,46 +127,49 @@ export function findFunctionValuedProperty(value: unknown, path: string = ""): s
   return null;
 }
 
-export function computeCanonicalCacheIdentity(inputs: CacheIdentityInputs): {
-  readonly identityHash: string;
-  readonly bypassCache: boolean;
-  readonly bypassReason?: string;
-} {
-  const funcPath = findFunctionValuedProperty(inputs.composition);
-  if (funcPath) {
-    const reason = `composition contains function-valued property at ${funcPath}`;
+export function computeCanonicalCacheIdentity(inputs: CacheIdentityInputs): CacheIdentityResult {
+  const frameworkVersion = inputs.frameworkVersion ?? CINECODE_VERSION;
+  const state: CanonicalState = { opaque: [] };
+  const composition = canonicalize(summarizeForHash(inputs.composition), "composition", state);
+
+  if (state.opaque.length > 0) {
+    const reason = `composition contains opaque function-valued property at ${state.opaque.join(", ")}`;
     recordDegradation({
       code: "CC4008",
       what: "render cache bypassed",
       reason,
-      input: funcPath,
+      input: state.opaque[0],
       instead: "frames will be rendered fresh without disk cache reuse",
     });
-    const randomHash = createHash("sha256").update(Math.random().toString()).digest("hex").slice(0, 32);
+    const randomHash = createHash("sha256").update(randomUUID()).digest("hex").slice(0, 32);
     return {
       identityHash: randomHash,
       bypassCache: true,
       bypassReason: reason,
+      cacheFormat: CACHE_FORMAT,
+      frameworkVersion,
+      identityInputs: { cacheFormat: CACHE_FORMAT, frameworkVersion, opaque: state.opaque },
     };
   }
 
-  let entryDigest = "";
-  if (inputs.entryContent !== undefined) {
-    entryDigest = createHash("sha256").update(inputs.entryContent).digest("hex");
-  }
+  const entryDigest = inputs.entryContent !== undefined
+    ? createHash("sha256").update(inputs.entryContent).digest("hex")
+    : "";
 
   const identityPayload = {
-    composition: summarizeForHash(inputs.composition),
+    cacheFormat: CACHE_FORMAT,
+    composition,
     seed: inputs.seed ?? 0,
     encoding: inputs.encoding ?? null,
     frameWindow: inputs.frameWindow ?? null,
     tempo: inputs.tempo ?? null,
     colorSpace: inputs.colorSpace ?? "srgb",
+    colorManagement: inputs.colorManagement ?? null,
     pixelRatio: inputs.pixelRatio ?? 1,
     alpha: inputs.alpha ?? false,
-    registry: inputs.registry ?? null,
+    plugins: inputs.plugins ?? inputs.registry ?? null,
     fonts: inputs.fonts ?? null,
-    frameworkVersion: inputs.frameworkVersion ?? "1.0.0",
+    frameworkVersion,
     entryDigest,
   };
 
@@ -150,14 +181,93 @@ export function computeCanonicalCacheIdentity(inputs: CacheIdentityInputs): {
   return {
     identityHash,
     bypassCache: false,
+    cacheFormat: CACHE_FORMAT,
+    frameworkVersion,
+    identityInputs: {
+      cacheFormat: CACHE_FORMAT,
+      frameworkVersion,
+      entryDigest: entryDigest === "" ? "none" : digestOf(entryDigest),
+      composition: digestOf(identityPayload.composition),
+      seed: identityPayload.seed,
+      encoding: digestOf(identityPayload.encoding),
+      frameWindow: digestOf(identityPayload.frameWindow),
+      tempo: digestOf(identityPayload.tempo),
+      colorSpace: identityPayload.colorSpace,
+      colorManagement: digestOf(identityPayload.colorManagement),
+      pixelRatio: identityPayload.pixelRatio,
+      alpha: identityPayload.alpha,
+      plugins: digestOf(identityPayload.plugins),
+      fonts: digestOf(identityPayload.fonts),
+    },
   };
 }
 
+/**
+ * Canonical form for every cache identity and composition hash: object keys are
+ * sorted by code unit, undefined keys are dropped, Map entries are sorted by
+ * key, Set entries by their canonical JSON, typed arrays reduce to a sha256
+ * digest, non-finite numbers become null, bigints become decimal strings and
+ * functions become a sha256 of their source text (or of their resolved output
+ * when the source is unavailable; otherwise the composition is non-cacheable).
+ * The result is stable across machines and object insertion orders.
+ */
 export function canonicalJsonString(value: unknown): string {
-  return JSON.stringify(canonicalize(value));
+  return JSON.stringify(canonicalize(value, "", { opaque: [] }));
 }
 
-function canonicalize(value: unknown): unknown {
+interface CanonicalState {
+  opaque: string[];
+}
+
+function hashText(text: string): string {
+  return createHash("sha256").update(text).digest("hex").slice(0, 16);
+}
+
+function digestOf(value: unknown): string {
+  return hashText(canonicalJsonString(value));
+}
+
+function compareKeys(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function functionIdentity(
+  fn: (...args: never[]) => unknown,
+  path: string,
+  state: CanonicalState,
+): unknown {
+  let source: string;
+  try {
+    source = Function.prototype.toString.call(fn).trim();
+  } catch {
+    source = "";
+    recordDegradation({
+      code: "CC7108",
+      what: "function source unavailable",
+      reason: "Function.toString failed",
+      input: path,
+      instead: "resolved function output is used when available",
+    });
+  }
+  if (source !== "" && !source.includes("[native code]")) {
+    return { $function: hashText(source) };
+  }
+  try {
+    const output = (fn as () => unknown)();
+    if (output !== undefined && typeof output !== "function") {
+      return { $function: hashText(canonicalJsonString(output)) };
+    }
+  } catch {
+    state.opaque.push(path || "anonymous");
+  }
+  if (!state.opaque.includes(path || "anonymous")) state.opaque.push(path || "anonymous");
+  return { $opaque: true };
+}
+
+function canonicalize(value: unknown, path: string, state: CanonicalState): unknown {
+  if (typeof value === "function") {
+    return functionIdentity(value as (...args: never[]) => unknown, path, state);
+  }
   if (value === null || typeof value !== "object") {
     if (typeof value === "number") return Number.isFinite(value) ? value : null;
     if (typeof value === "bigint") return value.toString();
@@ -172,25 +282,30 @@ function canonicalize(value: unknown): unknown {
   if (value instanceof Map) {
     return Object.fromEntries(
       [...value.entries()]
-        .map(([key, entry]) => [String(key), canonicalize(entry)] as const)
-        .sort((left, right) => left[0].localeCompare(right[0])),
+        .map(([key, entry]) => [String(key), canonicalize(entry, `${path}.${String(key)}`, state)] as const)
+        .sort((left, right) => compareKeys(left[0], right[0])),
     );
   }
   if (value instanceof Set) {
-    return [...value].map(canonicalize).map((entry) => canonicalJsonString(entry)).sort();
+    return [...value]
+      .map((entry, index) => canonicalize(entry, `${path}[${index}]`, state))
+      .map((entry) => canonicalJsonString(entry))
+      .sort();
   }
-  if (Array.isArray(value)) return value.map(canonicalize);
+  if (Array.isArray(value)) {
+    return value.map((entry, index) => canonicalize(entry, `${path}[${index}]`, state));
+  }
   const record = value as Record<string, unknown>;
   const sorted: Record<string, unknown> = {};
   for (const key of Object.keys(record).sort()) {
     if (record[key] === undefined) continue;
-    sorted[key] = canonicalize(record[key]);
+    sorted[key] = canonicalize(record[key], path ? `${path}.${key}` : key, state);
   }
   return sorted;
 }
 
 export function computeDescriptorHash(descriptor: FrameCacheDescriptor): string {
-  return createHash("sha256").update(canonicalJsonString(descriptor)).digest("hex");
+  return deriveCacheKey(descriptor);
 }
 
 export function createFrameCacheDescriptor(input: {
@@ -231,6 +346,39 @@ export async function fingerprintMediaFile(path: string): Promise<MediaFingerpri
     stream.on("end", () => resolve());
   });
   return { src: path, sha256: hash.digest("hex"), sizeBytes: info.size, modifiedMs: info.mtimeMs };
+}
+
+export interface FontIdentitySource {
+  readonly family: string;
+  readonly src: string;
+  readonly kind: string;
+  readonly resolvedPath?: string;
+  readonly weight?: number | string;
+  readonly style?: string;
+}
+
+/** Font identity includes the file content digest so a replaced face misses. */
+export async function fingerprintFonts(
+  fonts: readonly FontIdentitySource[],
+): Promise<readonly Record<string, unknown>[]> {
+  const sorted = [...fonts].sort(
+    (left, right) =>
+      compareKeys(left.family, right.family) ||
+      compareKeys(left.src, right.src) ||
+      compareKeys(left.kind, right.kind),
+  );
+  const entries: Record<string, unknown>[] = [];
+  for (const font of sorted) {
+    entries.push({
+      family: font.family,
+      src: font.src,
+      kind: font.kind,
+      weight: font.weight ?? null,
+      style: font.style ?? null,
+      sha256: font.resolvedPath ? (await fingerprintMediaFile(font.resolvedPath)).sha256 : null,
+    });
+  }
+  return entries;
 }
 
 export function objectPath(cacheDir: string, hash: string): string {
@@ -319,10 +467,11 @@ export class RenderCache {
     const entry = index.frames[String(frameIndex)];
     if (!entry) return null;
     try {
-      const buffer = await readFile(objectPath(this.cacheDir, entry.hash));
-      index.frames[String(frameIndex)] = { ...entry, access: Date.now() };
-      this.markDirty(compositionHash);
-      return buffer;
+      const payload = await readFile(objectPath(this.cacheDir, entry.hash));
+      if (entry.offset !== undefined) {
+        return payload.subarray(entry.offset, entry.offset + entry.size);
+      }
+      return payload;
     } catch (error) {
       delete index.frames[String(frameIndex)];
       this.markDirty(compositionHash);
@@ -364,7 +513,7 @@ export class RenderCache {
 
   frameKey(compositionHash: string, frameIndex: number, seed = 0, descriptorHash?: string): string {
     if (descriptorHash !== undefined) return descriptorHash;
-    return createHash("sha256").update(`${compositionHash}:${frameIndex}:${seed}`).digest("hex");
+    return deriveCacheKey({ compositionHash, frameIndex, seed });
   }
 
   async hasChunk(compositionHash: string, chunkIndex: number): Promise<boolean> {
@@ -379,6 +528,32 @@ export class RenderCache {
     const index = await this.loadIndex(compositionHash);
     const chunk = index.chunks[String(chunkIndex)];
     if (!chunk) return null;
+    if (chunk.payloadHash) {
+      try {
+        const payload = await readFile(objectPath(this.cacheDir, chunk.payloadHash));
+        const count = payload.readUInt32BE(0);
+        const dataStart = 4 + count * 8;
+        const frames: { index: number; buffer: Buffer }[] = [];
+        let cursor = dataStart;
+        for (let position = 0; position < count; position += 1) {
+          const tableOffset = 4 + position * 8;
+          const frameIndex = payload.readInt32BE(tableOffset);
+          const length = payload.readUInt32BE(tableOffset + 4);
+          frames.push({ index: frameIndex, buffer: payload.subarray(cursor, cursor + length) });
+          cursor += length;
+        }
+        return frames;
+      } catch (error) {
+        recordDegradation({
+          code: "CC4007",
+          what: "cached chunk discarded",
+          reason: error instanceof Error ? error.message : String(error),
+          input: objectPath(this.cacheDir, chunk.payloadHash),
+          instead: "the chunk is re-rendered",
+        });
+        return null;
+      }
+    }
     const frames: { index: number; buffer: Buffer }[] = [];
     for (const frameIndex of chunk.frames) {
       const buffer = await this.getFrame(compositionHash, frameIndex);
@@ -386,7 +561,6 @@ export class RenderCache {
       frames.push({ index: frameIndex, buffer });
     }
     if (frames.length !== chunk.frames.length) return null;
-    await this.flushIndexes();
     return frames;
   }
 
@@ -397,14 +571,52 @@ export class RenderCache {
   ): Promise<void> {
     const index = await this.loadIndex(compositionHash);
     const storedFrames: number[] = [];
+    const tableSize = 4 + frames.length * 8;
+    const payloadSize = tableSize + frames.reduce((sum, frame) => sum + frame.buffer.length, 0);
+    const payload = Buffer.alloc(payloadSize);
+    payload.writeUInt32BE(frames.length, 0);
+    let offset = tableSize;
+    let tableIndex = 4;
     for (const frame of frames) {
-      const hash = this.frameKey(compositionHash, frame.index);
-      await this.setFrame(compositionHash, frame.index, hash, frame.buffer, chunkIndex);
+      payload.writeInt32BE(frame.index, tableIndex);
+      payload.writeUInt32BE(frame.buffer.length, tableIndex + 4);
+      frame.buffer.copy(payload, offset);
+      offset += frame.buffer.length;
+      tableIndex += 8;
+    }
+    const payloadHash = deriveCacheKey(payload);
+    const target = objectPath(this.cacheDir, payloadHash);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, payload);
+    let dataOffset = tableSize;
+    for (const frame of frames) {
+      index.frames[String(frame.index)] = {
+        hash: payloadHash,
+        size: frame.buffer.length,
+        access: Date.now(),
+        chunkIndex,
+        offset: dataOffset,
+      };
+      dataOffset += frame.buffer.length;
       storedFrames.push(frame.index);
     }
-    index.chunks[String(chunkIndex)] = { frames: storedFrames, timestamp: Date.now() };
+    index.chunks[String(chunkIndex)] = {
+      frames: storedFrames,
+      timestamp: Date.now(),
+      payloadHash,
+      payloadSize: payload.length,
+    };
     this.markDirty(compositionHash);
-    await this.flushIndexes();
+  }
+
+  /** Records a chunk whose frames were already written with `setFrame`. */
+  async markChunk(compositionHash: string, chunkIndex: number, frameIndexes: readonly number[]): Promise<void> {
+    const index = await this.loadIndex(compositionHash);
+    index.chunks[String(chunkIndex)] = {
+      frames: [...frameIndexes].sort((left, right) => left - right),
+      timestamp: Date.now(),
+    };
+    this.markDirty(compositionHash);
   }
 
   indexFilePath(compositionHash: string): string {

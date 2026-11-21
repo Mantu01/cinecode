@@ -3,11 +3,12 @@ import { createError, ErrorCode } from "../errors/codes.js";
 import { runReport } from "./run-report.js";
 import { resolve } from "node:path";
 import { selectComposition } from "./composition-loader.js";
-import { resolveCacheDir, resolveOutputDir } from "./shared.js";
+
 import { createProjectResolver, reportResolution } from "./project-resolver.js";
 import { parseVariantLabel, renderMultiResolution, PREDEFINED_VARIANTS } from "../pipeline/multiResolution.js";
 import type { ResolutionVariant } from "../core/types/index.js";
 import { resolveRenderParameters, describeExplainReport } from "./precedence.js";
+import { assertRenderableFormat } from "./format-preflight.js";
 
 interface MultiResOptions {
   composition?: string;
@@ -25,7 +26,7 @@ export function createMultiResCommand(): Command {
     .description("Render one composition at multiple resolutions in a single run")
     .argument("<file>", "Composition file")
     .option("-c, --composition <name>", "Composition name")
-    .option("-v, --variants <list>", "Comma-separated variants (480p,720p,1080p,WIDTHxHEIGHT)", "480p,720p,1080p")
+    .option("--variants <list>", "Comma-separated variants (480p,720p,1080p,WIDTHxHEIGHT)", "480p,720p,1080p")
     .option("-o, --out <dir>", "Output directory")
     .option("--seed <number>", "Random seed", (value) => parseInt(value, 10))
     .option("--concurrency <number>", "Worker count")
@@ -36,7 +37,7 @@ export function createMultiResCommand(): Command {
       reportResolution(resolution, merged.dryRun === true);
       const config = resolution.config;
       const composition = selectComposition([...resolution.compositions], options.composition);
-      const { parameters, explain } = resolveRenderParameters({
+      const { parameters, explain, preset } = resolveRenderParameters({
         flags: {
           out: options.out,
           concurrency: options.concurrency ? parseInt(options.concurrency, 10) : undefined,
@@ -46,6 +47,7 @@ export function createMultiResCommand(): Command {
           width: composition.width,
           height: composition.height,
           fps: composition.fps,
+          duration: composition.duration,
         },
         project: {
           root: resolution.root,
@@ -55,8 +57,16 @@ export function createMultiResCommand(): Command {
           selection: `composition ${composition.name}`,
           config,
         },
+        explicit: resolution.context.explicit,
       });
       runReport.result({ explain: describeExplainReport(explain) });
+      assertRenderableFormat({
+        command: "render",
+        format: parameters.format.value,
+        fromFrame: parameters.frameWindow.value.from,
+        toFrame: parameters.frameWindow.value.to,
+        preset: preset?.id,
+      });
       const rawLabels = options.variants.split(",").map((label) => label.trim()).filter(Boolean);
       if (rawLabels.length === 0) {
         throw createError(ErrorCode.CC1002, {
@@ -78,14 +88,14 @@ export function createMultiResCommand(): Command {
           });
         }
       }
-      const outputDir = options.out ? resolve(options.out) : resolveOutputDir(config);
+      const outputDir = options.out ? resolve(resolution.context.root, options.out) : resolution.context.roots.output;
       const concurrency = parameters.concurrency.value === "auto" ? 4 : parameters.concurrency.value;
 
       const result = await renderMultiResolution({
         composition,
         variants,
         outputDir,
-        cacheDir: resolveCacheDir(config),
+        cacheDir: resolution.context.roots.cache,
         seed: options.seed ?? 0,
         concurrency,
         overwrite: false,

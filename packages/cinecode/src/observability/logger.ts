@@ -34,7 +34,8 @@ export class StructuredLogger {
   private traceId?: string;
 
   constructor(options: LoggerOptions = {}) {
-    this.level = options.level ?? (process.env.CINECODE_LOG_LEVEL as LogLevel) ?? "info";
+    const verbose = process.env.CINECODE_VERBOSE === "1" || process.env.CINECODE_LOG_LEVEL === "debug";
+    this.level = options.level ?? (process.env.CINECODE_LOG_LEVEL as LogLevel) ?? (verbose ? "debug" : "info");
     this.format = options.format ?? (process.env.CINECODE_LOG_FORMAT as LogFormat) ?? "text";
     this.service = options.service ?? "cinecode";
     this.traceId = options.traceId;
@@ -96,7 +97,7 @@ export class StructuredLogger {
         metaStr = " " + pc.dim(JSON.stringify(metadata));
       }
 
-      console.log(`${time} ${lvlStr} ${comp} ${message}${metaStr}`);
+      process.stderr.write(`${time} ${lvlStr} ${comp} ${message}${metaStr}\n`);
     }
   }
 }

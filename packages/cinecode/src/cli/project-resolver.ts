@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import type { CinecodeConfig, Composition } from "../core/types/index.js";
-import { getDefaultConfig, loadConfig } from "../config/schema.js";
-import { resolveProjectLocation, type ConfigSource } from "../config/project.js";
+import type { ConfigSource } from "../config/project.js";
+import { loadProjectContext, type ProjectContext } from "./project-context.js";
 import { createMediaCache } from "../media/cache.js";
 import { createMediaResolver, type MediaCatalog, type MediaIndex } from "../media/index.js";
 import { createError, ErrorCode, isCinecodeError } from "../errors/index.js";
@@ -47,6 +47,8 @@ export interface ProjectResolution {
   readonly configPath: string;
   readonly config: CinecodeConfig;
   readonly source: ConfigSource | "standalone";
+  /** Absolute roots and explicit key set shared by every command. */
+  readonly context: ProjectContext;
   readonly manifestPath: string;
   readonly manifest: ManifestProject | null;
   readonly validation?: ManifestValidationResult;
@@ -86,14 +88,14 @@ export interface ResolveProjectOptions {
 
 function invalid(reason: string, path?: string): never {
   throw createError(
-    ErrorCode.CC1012,
+    ErrorCode.CC0001,
     { reason },
     path ? { location: { file: path } } : {},
   );
 }
 
 function manifestFailure(error: unknown, path: string): never {
-  if (isCinecodeError(error) && error.code === ErrorCode.CC1010) throw error;
+  if (isCinecodeError(error)) throw error;
   recordDegradation({
     code: ErrorCode.CC1010,
     what: "project manifest could not be loaded",
@@ -110,6 +112,7 @@ function manifestFailure(error: unknown, path: string): never {
 
 function assertSelectors(options: ResolveProjectOptions): void {
   const given = [
+    options.composition !== undefined ? "--composition" : "",
     options.timeline !== undefined ? "--timeline" : "",
     options.scene !== undefined ? "--scene" : "",
     options.all === true ? "--all" : "",
@@ -160,28 +163,14 @@ function selectFromFile(
   return { kind: "composition", id: selected.name, ids: [selected.name] };
 }
 
-async function loadProjectConfig(options: ResolveProjectOptions): Promise<{
-  root: string;
-  configPath: string;
-  source: ConfigSource | "standalone";
-  config: CinecodeConfig;
-}> {
-  const explicit = options.root ?? options.config;
-  if (!explicit) {
-    return {
-      root: resolve(options.cwd ?? process.cwd()),
-      configPath: "",
-      source: "standalone",
-      config: getDefaultConfig(),
-    };
-  }
-  const location = resolveProjectLocation({
+function loadProjectConfig(options: ResolveProjectOptions, allowStandalone: boolean): Promise<ProjectContext> {
+  return loadProjectContext({
     root: options.root,
     config: options.config,
     cwd: options.cwd,
+    fresh: options.fresh,
+    allowStandalone,
   });
-  const config = await loadConfig(location.configPath, { fresh: options.fresh });
-  return { ...location, config };
 }
 
 /** One resolution per invocation; repeated reads reuse the same promises. */
@@ -229,11 +218,11 @@ export class ProjectResolver {
 
   private async buildMedia(): Promise<MediaAccess> {
     const project = await this.resolve();
-    const cache = createMediaCache(resolve(project.root, project.config.cacheDir));
+    const cache = createMediaCache(project.context.roots.cache);
     await cache.initialize();
     const catalog = createMediaResolver({
-      sourceDir: resolve(project.root, project.config.sourceDir),
-      mediaDir: resolve(project.root, project.config.mediaDir),
+      sourceDir: project.context.roots.source,
+      mediaDir: project.context.roots.media,
       projectRoot: project.root,
       allowCoLocatedMedia: project.config.allowCoLocatedMedia,
       cache,
@@ -281,8 +270,8 @@ export class ProjectResolver {
       if (options.timeline !== undefined || options.scene !== undefined || options.all) {
         invalid("--timeline, --scene and --all select from the manifest and cannot be combined with --file");
       }
-      const base = await loadProjectConfig(options);
-      const filePath = resolve(options.cwd ?? process.cwd(), options.file);
+      const base = await loadProjectConfig(options, true);
+      const filePath = isAbsolute(options.file) ? options.file : resolve(base.root, options.file);
       if (!existsSync(filePath)) {
         throw createError(ErrorCode.CC1009, { path: filePath }, { location: { file: filePath } });
       }
@@ -296,6 +285,7 @@ export class ProjectResolver {
         configPath: base.configPath,
         config: base.config,
         source: base.source,
+        context: base,
         manifestPath: filePath,
         manifest: null,
         selection: selectFromFile(compositions, options),
@@ -315,18 +305,14 @@ export class ProjectResolver {
       invalid("--composition selects a composition inside --file; it cannot be used without --file");
     }
 
-    const location = resolveProjectLocation({
-      root: options.root,
-      config: options.config,
-      cwd: options.cwd,
-    });
-    const config = await loadConfig(location.configPath, { fresh: options.fresh });
+    const context = await loadProjectConfig(options, false);
+    const { config } = context;
 
     let project: ManifestProject;
     try {
-      project = await loadManifestProject(config, location.root);
+      project = await loadManifestProject(config, context.root);
     } catch (error) {
-      manifestFailure(error, resolveEntryFile(config.project?.entry ?? "./main.ts", location.root));
+      manifestFailure(error, resolveEntryFile(config.project?.entry ?? "./main.ts", context.root));
     }
 
     if (!project.hasManifest) {
@@ -337,7 +323,7 @@ export class ProjectResolver {
     }
 
     const validation = await validateManifestDocument(project.rawManifest ?? project.manifest, {
-      rootDir: location.root,
+      rootDir: context.root,
       manifestPath: project.entryPath,
       config,
       moduleCache: this.moduleCache,
@@ -363,14 +349,15 @@ export class ProjectResolver {
 
     const pluginRegistry = new PluginRegistry();
     setPluginRegistry(pluginRegistry);
-    await loadProjectPlugins(config, pluginRegistry, location.root);
+    await loadProjectPlugins(config, pluginRegistry, context.root);
 
     const resolution: ProjectResolution = {
       mode: "project",
-      root: location.root,
-      configPath: location.configPath,
+      root: context.root,
+      configPath: context.configPath,
       config,
-      source: location.source,
+      source: context.source,
+      context,
       manifestPath: project.entryPath,
       manifest: project,
       validation,
@@ -401,6 +388,7 @@ export function describeResolution(resolution: ProjectResolution): Record<string
     config: resolution.configPath || null,
     source: resolution.source,
     manifest: resolution.manifestPath,
+    roots: resolution.context.roots,
     ...(resolution.compositionValidation
       ? {
           timelineValidation: {
@@ -427,6 +415,7 @@ export function selectionLabel(selection: ProjectSelection): string {
 
 /** Prints the resolved record and carries the same record into `--json`. */
 export function reportResolution(resolution: ProjectResolution, print = false): void {
+  runReport.setCacheDir(resolution.context.roots.cache);
   runReport.setProject({
     root: resolution.root,
     config: resolution.configPath || undefined,

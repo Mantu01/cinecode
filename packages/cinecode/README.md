@@ -4,6 +4,12 @@ Programmatic media creation for filmmakers and developers. Describe a video, ani
 
 Cinecode treats compositions as code: timelines, clips, effects, audio, and 3D scenes are typed objects you can compose, diff, test, and reuse. Plugins, resolvers, and lifecycle hooks extend every stage of the render.
 
+## Requirements
+
+Node.js `>=22.18.0`, which ships native TypeScript type stripping. An older runtime stops
+before any command runs and exits with code `78` and the `CINECODE_RUNTIME_UNSUPPORTED`
+message on standard error. Install Node.js 22.18.0 or newer, then run the command again.
+
 ## Quick start
 
 ```bash
@@ -11,7 +17,7 @@ pnpm add cinecode
 ```
 
 ```typescript
-// main.ts
+// main.ts — the one accepted entry shape
 import { defineMain } from "cinecode";
 
 export default defineMain({
@@ -57,7 +63,7 @@ export default defineScene("intro", DURATION, () => {
 ```
 
 ```bash
-npx cinecode render --all --props ./cinecode.config.ts --overwrite
+npx cinecode render --all --config ./cinecode.config.ts --overwrite
 ```
 
 See [`example/basic-api`](../../example/basic-api/) for a complete runnable project.
@@ -187,8 +193,7 @@ Open `http://localhost:3000` for the asset preview and `http://localhost:3000/in
 ## CLI
 
 Every command accepts the global options `--root <dir>`, `--config <path>`,
-`--json`, `--no-color` and `--verbose`, in any position. `--props` is a
-deprecated alias of `--config` on `render`, `preview`, `still` and `inspect`.
+`--json`, `--no-color` and `--verbose`, in any position.
 
 | Command | Purpose |
 |---------|---------|
@@ -294,6 +299,10 @@ registerMediaResolver({
 ### 3D and canvas
 
 Use `model3d`, `text3d`, skyboxes, PBR materials, shadows, and skeleton animation inside normal visual tracks. `cinecode preview` exposes a read-only WebSocket preview server with orbit, pan, and zoom camera controls.
+
+### Rendering architecture
+
+Rendering in Cinecode is entirely CPU-based via `@napi-rs/canvas` (Skia). No browser WebGPU or experimental GPU flags are required; output is 100% deterministic and pixel-identical across all supported Node.js environments.
 
 ## Editor support
 
