@@ -1,4 +1,5 @@
 import { logger } from "../observability/logger.js";
+import { createError, ErrorCode } from "../errors/index.js";
 
 export interface DrainOptions {
   drainTimeoutSeconds?: number;
@@ -35,10 +36,11 @@ export class GracefulDrainManager {
 
   async executeDrain(signal = "SIGTERM"): Promise<void> {
     this.isDraining = true;
+    let timedOut = false;
 
     const timeoutTimer = setTimeout(() => {
-      logger.error("drain", `Graceful drain timed out after ${this.timeoutMs / 1000}s, forcing exit.`);
-      process.exit(143);
+      timedOut = true;
+      logger.error("drain", `Graceful drain timed out after ${this.timeoutMs / 1000}s.`);
     }, this.timeoutMs);
 
     try {
@@ -61,12 +63,14 @@ export class GracefulDrainManager {
       }
 
       clearTimeout(timeoutTimer);
+      if (timedOut) {
+        throw createError(ErrorCode.CC4003, { details: `Graceful drain timed out after ${this.timeoutMs / 1000}s` });
+      }
       logger.info("drain", "Graceful shutdown complete.");
-      process.exit(0);
-    } catch (err: any) {
+    } catch (err: unknown) {
       clearTimeout(timeoutTimer);
-      logger.error("drain", `Error during graceful drain: ${err.message}`);
-      process.exit(1);
+      logger.error("drain", `Error during graceful drain: ${err instanceof Error ? err.message : String(err)}`);
+      throw err;
     }
   }
 }

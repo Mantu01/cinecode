@@ -1,6 +1,12 @@
 import { existsSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import type { CinecodeConfig, Composition } from "../core/types/index.js";
+import type {
+  CinecodeConfig,
+  Composition,
+  QualitySetting,
+  RenderFormat,
+  VideoCodec,
+} from "../core/types/index.js";
 import type { ConfigSource } from "../config/project.js";
 import { loadProjectContext, type ProjectContext } from "./project-context.js";
 import { createMediaCache } from "../media/cache.js";
@@ -14,12 +20,15 @@ import {
   loadManifestProject,
   resolveEntryFile,
   validateManifestDocument,
+  resolveTarget,
   type ManifestProject,
   type ManifestValidationResult,
+  type ResolvedTarget,
 } from "../manifest/index.js";
 import { mediaIgnore } from "./shared.js";
 import { loadComposition, selectComposition } from "./composition-loader.js";
 import { runReport } from "./run-report.js";
+import { getOutputPlan } from "../core/output-plan.js";
 import { validateComposition, type CompositionValidation } from "../core/validation/index.js";
 import { getPluginRegistry, setPluginRegistry, PluginRegistry } from "../plugin/registry.js";
 import { loadProjectPlugins } from "../plugin/loader.js";
@@ -65,6 +74,7 @@ export interface ProjectResolution {
   readonly validateCompositions: () => Promise<readonly CompositionValidation[]>;
   /** Populated by validateCompositions() so every command reads the same result. */
   readonly compositionValidation?: readonly CompositionValidation[];
+  readonly targets: () => Promise<readonly ResolvedTarget[]>;
   readonly plugins?: readonly RegisteredPlugin[];
   readonly pluginRegistry?: PluginRegistry;
 }
@@ -84,6 +94,13 @@ export interface ResolveProjectOptions {
   readonly requireSelection?: boolean;
   /** Only render accepts `--all`, because it writes one file per timeline. */
   readonly allowAll?: boolean;
+  readonly width?: number;
+  readonly height?: number;
+  readonly fps?: number;
+  readonly format?: RenderFormat;
+  readonly codec?: VideoCodec;
+  readonly quality?: QualitySetting;
+  readonly alpha?: boolean;
 }
 
 function invalid(reason: string, path?: string): never {
@@ -111,18 +128,32 @@ function manifestFailure(error: unknown, path: string): never {
 }
 
 function assertSelectors(options: ResolveProjectOptions): void {
-  const given = [
-    options.composition !== undefined ? "--composition" : "",
+  const manifestSelectors = [
     options.timeline !== undefined ? "--timeline" : "",
     options.scene !== undefined ? "--scene" : "",
     options.all === true ? "--all" : "",
   ].filter(Boolean);
-  if (given.length > 1) invalid(`Conflicting selectors: ${given.join(" and ")} cannot be combined`);
+
+  if (options.file) {
+    if (manifestSelectors.length > 0) {
+      invalid("--timeline, --scene and --all select from the manifest and cannot be combined with --file");
+    }
+    return;
+  }
+
+  if (options.composition !== undefined) {
+    invalid("--composition selects a composition inside --file; it cannot be used without --file");
+  }
+
+  if (manifestSelectors.length > 1) {
+    invalid(`Conflicting selectors: ${manifestSelectors.join(" and ")} cannot be combined`);
+  }
 }
 
 function selectFromProject(
   project: ManifestProject,
   options: ResolveProjectOptions,
+  configPath: string,
 ): ProjectSelection {
   const timelines = project.manifest.timelines ?? [];
   const scenes = project.manifest.scenes ?? [];
@@ -131,7 +162,10 @@ function selectFromProject(
       invalid("--all rerenders every timeline and is not valid for this command; pass one selector");
     }
     if (timelines.length === 0) {
-      invalid(`--all has nothing to render. Register a timeline in ${project.entryPath}`, project.entryPath);
+      throw createError(ErrorCode.CC1010, {
+        path: project.entryPath,
+        reason: `manifest at ${project.entryPath} (read from config at ${configPath}) has no timelines to render`,
+      }, { location: { file: project.entryPath } });
     }
     return { kind: "all", ids: timelines.map((timeline) => timeline.id) };
   }
@@ -142,6 +176,15 @@ function selectFromProject(
   if (options.scene !== undefined) {
     findEntry(scenes, options.scene, "scene");
     return { kind: "scene", id: options.scene, ids: [options.scene] };
+  }
+  if (options.allowAll && !options.requireSelection) {
+    if (timelines.length === 0) {
+      throw createError(ErrorCode.CC1010, {
+        path: project.entryPath,
+        reason: `manifest at ${project.entryPath} (read from config at ${configPath}) has no timelines to render`,
+      }, { location: { file: project.entryPath } });
+    }
+    return { kind: "all", ids: timelines.map((timeline) => timeline.id) };
   }
   if (options.requireSelection) {
     const available = [
@@ -180,6 +223,7 @@ export class ProjectResolver {
   private mediaPending: Promise<MediaAccess> | undefined;
   private selectedPending: Promise<readonly Composition[]> | undefined;
   private allPending: Promise<readonly Composition[]> | undefined;
+  private targetsPending: Promise<readonly ResolvedTarget[]> | undefined;
   private validationPending: Promise<readonly CompositionValidation[]> | undefined;
   private resolved: ProjectResolution | undefined;
 
@@ -198,6 +242,59 @@ export class ProjectResolver {
   selected(): Promise<readonly Composition[]> {
     this.selectedPending ??= this.buildSelected();
     return this.selectedPending;
+  }
+
+  targets(): Promise<readonly ResolvedTarget[]> {
+    this.targetsPending ??= this.buildTargets();
+    return this.targetsPending;
+  }
+
+  private async buildTargets(): Promise<readonly ResolvedTarget[]> {
+    const resolution = await this.resolve();
+    if (resolution.mode === "file") {
+      const selected = await this.selected();
+      return selected.map((comp) => ({
+        id: comp.name,
+        kind: "timeline" as const,
+        entry: { id: comp.name },
+        composition: comp,
+        geometry: {
+          width: comp.width,
+          height: comp.height,
+          fps: comp.fps,
+          background: typeof comp.background === "string" ? comp.background : "#000000",
+          duration: (typeof comp.duration === "number" ? comp.duration : comp.contentDuration) ?? 0,
+          contentDuration: comp.contentDuration ?? (typeof comp.duration === "number" ? comp.duration : 0),
+          truncate: false,
+          format: "mp4" as const,
+          quality: "medium" as const,
+          outputPlan: { format: "mp4" as const, plan: getOutputPlan("mp4")!, alpha: false, inputPixFmt: "rgb0" as const },
+        },
+        outputPlan: { format: "mp4" as const, plan: getOutputPlan("mp4")!, alpha: false, inputPixFmt: "rgb0" as const },
+        audioPlacement: comp.audioPlacements ?? [],
+        format: "mp4" as const,
+        codec: undefined,
+        quality: "medium" as const,
+      }));
+    }
+    const project = resolution.manifest!;
+    const selection = resolution.selection;
+    const flags = {
+      width: this.options.width,
+      height: this.options.height,
+      fps: this.options.fps,
+      format: this.options.format,
+      codec: this.options.codec,
+      quality: this.options.quality,
+      alpha: this.options.alpha,
+    };
+    if (selection.kind === "all") {
+      return Promise.all(selection.ids.map((id) => resolveTarget(project, id, { flags })));
+    }
+    if (selection.id) {
+      return [await resolveTarget(project, selection.id, { flags })];
+    }
+    return [];
   }
 
   all(): Promise<readonly Composition[]> {
@@ -293,6 +390,7 @@ export class ProjectResolver {
         media: () => this.media(),
         selected: () => this.selected(),
         all: () => this.all(),
+        targets: () => this.targets(),
         validateCompositions: () => this.validateCompositions(),
         plugins: pluginRegistry.getAll(),
         pluginRegistry,
@@ -332,7 +430,7 @@ export class ProjectResolver {
 
     if (!validation.valid && validation.errors.length > 0) {
       const first = validation.errors[0]!;
-      (first as any).issues = validation.errors;
+      Object.assign(first, { issues: validation.errors }); // Note: attach aggregate issues array to primary error
       throw first;
     }
 
@@ -343,7 +441,7 @@ export class ProjectResolver {
     if (!populated) {
       throw createError(ErrorCode.CC1010, {
         path: project.entryPath,
-        reason: "manifest registers no timelines, scenes, images or audio; export defineMain(...) or use --file",
+        reason: `manifest at ${project.entryPath} (read from config at ${context.configPath}) registers no timelines, scenes, images or audio; export defineMain(...) or use --file`,
       }, { location: { file: project.entryPath } });
     }
 
@@ -361,11 +459,12 @@ export class ProjectResolver {
       manifestPath: project.entryPath,
       manifest: project,
       validation,
-      selection: selectFromProject(project, options),
+      selection: selectFromProject(project, options, context.configPath),
       compositions: [],
       media: () => this.media(),
       selected: () => this.selected(),
       all: () => this.all(),
+      targets: () => this.targets(),
       validateCompositions: () => this.validateCompositions(),
       plugins: pluginRegistry.getAll(),
       pluginRegistry,

@@ -1,22 +1,25 @@
 import { Command, CommanderError, Option } from "commander";
+import path from "node:path";
 import { CINECODE_VERSION } from "../version.js";
-import { COMMANDS, findCommand, suggestCommand, type CommandSpec, commandNames } from "./command-registry.js";
-import { EXIT_CODES, EXIT_CODE_MEANINGS, ExitSignal, exitCodeForError } from "./exit-codes.js";
+import {
+  COMMANDS,
+  findCommand,
+  suggestCommand,
+  formatHelpText,
+  buildCommanderCommand,
+  attachCommandHelp,
+  type CommandSpec,
+  commandNames,
+} from "./command-registry.js";
+import { EXIT_CODES, EXIT_CODE_MEANINGS, ExitSignal, CancellationSignal, isCancellation, exitCodeForError } from "./exit-codes.js";
 import { UsageError } from "./usage-error.js";
 import { loadEnabledAliases, resolveAliases } from "./profiles.js";
 import { createError, ErrorCode, formatError, isCinecodeError, type CinecodeError } from "../errors/index.js";
 import { runReport, validateMachineReport, type MachineErrorRecord, type MachineReport } from "./run-report.js";
-import { StdoutCapture } from "./machine-capture.js";
+import { Reporter, serializeEnvelope } from "./reporter.js";
+import { sweepSpools } from "./spool.js";
 
-const LICENSE = `Cinecode is MIT licensed.
-
-Copyright (c) Cinecode contributors
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.`;
+import { preParseArgs } from "./option-parser.js";
 
 /** Single source for the global options every command exposes. */
 const GLOBAL_OPTIONS: ReadonlyArray<readonly [string, string]> = [
@@ -27,8 +30,7 @@ const GLOBAL_OPTIONS: ReadonlyArray<readonly [string, string]> = [
   ["--verbose", "Verbose output"],
 ];
 
-const GLOBAL_VALUE_FLAGS = new Set(["--root", "--config"]);
-const PASSTHROUGH_TOKENS = new Set(["help", "version", "license"]);
+const PASSTHROUGH_TOKENS = new Set(["help", "version", "licence", "license"]);
 
 function longFlagOf(flags: string): string {
   return flags.split(/[ ,]+/).find((part) => part.startsWith("--"))!;
@@ -45,31 +47,10 @@ export function applyGlobalOptions(command: Command): Command {
   return command;
 }
 
-function defaultLabel(option: Option): string {
-  if (option.defaultValue !== undefined) return JSON.stringify(option.defaultValue);
-  if (option.negate) return "true";
-  if (option.isBoolean()) return "false";
-  return "unset";
-}
-
-/** Example invocation and per-option default, generated from the definition. */
-function attachHelp(command: Command, example: string): void {
-  const defaults = command.options
-    .map((option) => `  ${option.flags.padEnd(42)} ${defaultLabel(option)}`)
-    .join("\n");
-  command.addHelpText("after", `\nExample:\n  ${example}\n\nDefaults ("unset" resolves from project config or the command fallback):\n${defaults}`);
-}
-
 function describeCommand(command: Command, spec: CommandSpec): Command {
   applyGlobalOptions(command);
-  attachHelp(command, spec.example);
-  attachListPresetsAlias(command, spec);
+  attachCommandHelp(command, spec);
   return command;
-}
-
-function attachListPresetsAlias(command: Command, spec: CommandSpec): void {
-  if (spec.name !== "presets") return;
-  command.option("--list-presets", "list platform deliverable presets");
 }
 
 function registerStubs(program: Command): void {
@@ -77,60 +58,13 @@ function registerStubs(program: Command): void {
   for (const spec of COMMANDS) {
     if (existing.has(spec.name)) continue;
     const command = program.command(spec.name).description(spec.summary).allowUnknownOption().allowExcessArguments();
+    if (spec.aliases) {
+      for (const alias of spec.aliases) {
+        command.alias(alias);
+      }
+    }
     describeCommand(command, spec);
   }
-}
-
-function commandIndex(args: readonly string[]): number {
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index]!;
-    if (arg === "--") return -1;
-    if (GLOBAL_VALUE_FLAGS.has(arg)) {
-      index += 1;
-      continue;
-    }
-    if (arg.startsWith("-")) continue;
-    return index;
-  }
-  return -1;
-}
-
-function takeGlobalOption(args: readonly string[], index: number): string[] | undefined {
-  const arg = args[index]!;
-  if (GLOBAL_VALUE_FLAGS.has(arg)) {
-    const value = args[index + 1];
-    return value === undefined ? [arg] : [arg, value];
-  }
-  if (arg === "--json" || arg === "--no-color" || arg === "--verbose") return [arg];
-  if (arg.startsWith("--root=") || arg.startsWith("--config=")) return [arg];
-  return undefined;
-}
-
-/** Moves global options behind the command token so the command sees them. */
-function hoistGlobalOptions(args: readonly string[], tokenIndex: number): string[] {
-  const globals: string[] = [];
-  const rest: string[] = [];
-  let insertion = 0;
-  let index = 0;
-  while (index < args.length) {
-    const arg = args[index]!;
-    if (arg === "--") {
-      rest.push(...args.slice(index));
-      break;
-    }
-    const taken = takeGlobalOption(args, index);
-    if (taken) {
-      globals.push(...taken);
-      index += taken.length;
-      continue;
-    }
-    const isToken = index === tokenIndex;
-    rest.push(arg);
-    if (isToken) insertion = arg === "help" ? rest.length - 1 : rest.length;
-    index += 1;
-  }
-  if (tokenIndex < 0) return [...rest, ...globals];
-  return [...rest.slice(0, insertion), ...globals, ...rest.slice(insertion)];
 }
 
 interface Failure {
@@ -145,8 +79,18 @@ function isModuleError(error: unknown): error is Error & { code: string; file: s
 }
 
 function describeFailure(error: unknown): Failure {
+  if (isCancellation(error)) {
+    const coded = isCinecodeError(error)
+      ? error
+      : createError(ErrorCode.CC4003, { reason: error instanceof Error ? error.message : "operation cancelled" });
+    return {
+      exitCode: EXIT_CODES.cancelled,
+      error: { code: coded.code, message: coded.message, fixHint: coded.fixHint },
+      errorObject: coded,
+    };
+  }
   if (error instanceof ExitSignal) {
-    const coded = createError(error.message === "Render cancelled" ? ErrorCode.CC4003 : ErrorCode.CC9001, { reason: error.message });
+    const coded = createError(ErrorCode.CC9001, { reason: error.message });
     return { exitCode: error.exitCode, error: { code: coded.code, message: coded.message, fixHint: coded.fixHint }, errorObject: coded };
   }
   if (error instanceof CommanderError || error instanceof UsageError) {
@@ -199,28 +143,28 @@ function describeFailure(error: unknown): Failure {
 function writeMachine(doc: MachineReport, write: (text: string) => void): void {
   const problems = validateMachineReport(doc);
   if (problems.length > 0) throw createError(ErrorCode.CC9002, { reason: problems.join("; ") });
-  write(`${JSON.stringify(doc, null, 2)}\n`);
+  write(`${serializeEnvelope(doc)}\n`);
 }
 
-function reportError(error: unknown, verbose: boolean, color: boolean, machine: boolean, write: (text: string) => void): number {
+function reportError(
+  error: unknown,
+  verbose: boolean,
+  color: boolean,
+  machine: boolean,
+  reporter: Reporter,
+): number {
   const failure = describeFailure(error);
-  if (failure.errorObject) console.error(formatError(failure.errorObject, verbose, color));
-  else if (failure.plainMessage) console.error(failure.plainMessage);
-  const degraded = runReport.degradationSummary();
-  if (degraded) console.error(degraded);
-  if (machine) writeMachine(runReport.errorReport(failure.error), write);
+  if (!machine) {
+    if (failure.errorObject) console.error(formatError(failure.errorObject, verbose, color));
+    else if (failure.plainMessage) console.error(failure.plainMessage);
+  }
+  const envelope = reporter.errorReport(failure.error, failure.exitCode);
+  reporter.writeDocument(envelope);
   return failure.exitCode;
 }
 
-/** Adds the incidental stdout to the document; the command payload always wins. */
-function withCapturedOutput(report: MachineReport, capture: StdoutCapture): MachineReport {
-  const payload = capture.drain();
-  if (Object.keys(payload).length === 0) return report;
-  return { ...report, result: { ...payload, ...report.result } };
-}
-
 /** Informational commands print text only: no envelope, no summary, no error line. */
-export const INFORMATIONAL_COMMANDS = new Set(["help", "version", "license"]);
+export const INFORMATIONAL_COMMANDS = new Set(["help", "version", "licence", "license"]);
 
 export interface RunCliOptions {
   readonly cwd?: string;
@@ -249,58 +193,69 @@ function configureRunOutput(command: Command, options: RunCliOptions): void {
 export async function runCli(argv: readonly string[] = process.argv, options: RunCliOptions = {}): Promise<number> {
   const cwd = options.cwd ?? process.cwd();
   const raw = argv.slice(2);
-  const program = createProgram();
-  const noColor = raw.includes("--no-color");
+  const stdoutWrite = options.stdout ?? (process.stdout.write.bind(process.stdout) as (text: string) => void);
+  const stderrWrite = options.stderr ?? ((text: string) => void process.stderr.write(text));
+
+  let preParsed: ReturnType<typeof preParseArgs>;
+  try {
+    preParsed = preParseArgs(raw, (name) => findCommand(name) !== undefined || PASSTHROUGH_TOKENS.has(name));
+  } catch (err) {
+    const failure = describeFailure(err);
+    if (raw.includes("--json")) {
+      const reporter = new Reporter({
+        machine: true,
+        quiet: raw.includes("--quiet") || raw.includes("-q"),
+        noColor: raw.includes("--no-color"),
+        stdoutWrite,
+        stderrWrite,
+      });
+      reporter.writeDocument(reporter.errorReport(failure.error, failure.exitCode));
+    } else {
+      if (failure.errorObject) console.error(formatError(failure.errorObject, false, !raw.includes("--no-color")));
+      else if (failure.plainMessage) console.error(failure.plainMessage);
+    }
+    return failure.exitCode;
+  }
+
+  const showAll = preParsed.globalOptions.all;
+  const program = createProgram(showAll);
+  const noColor = preParsed.globalOptions.noColor;
   const previousNoColor = process.env.NO_COLOR;
   const previousVerbose = process.env.CINECODE_VERBOSE;
-  const machine = raw.includes("--json");
-  const stdoutWrite = options.stdout ?? (process.stdout.write.bind(process.stdout) as (text: string) => void);
-  const capture = new StdoutCapture(() => runReport.cacheDir());
-  let restored = false;
-  const restoreStdout = (): void => {
-    if (restored) return;
-    restored = true;
-    process.stdout.write = originalStdoutWrite;
-  };
-  const originalStdoutWrite = process.stdout.write;
-  const interceptor = ((chunk: string | Uint8Array) => {
-    const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
-    capture.write(text);
-    return true;
-  }) as typeof process.stdout.write;
-  if (machine) process.stdout.write = interceptor;
-  let documents = 0;
-  /** Exactly one machine document per run; a second attempt is refused loudly. */
-  const documentWrite = (text: string): void => {
-    if (documents > 0) {
-      process.stderr.write("cinecode: machine mode already wrote its document; refusing a second one\n");
-      return;
-    }
-    documents += 1;
-    stdoutWrite(text);
-  };
-  runReport.reset();
-  runReport.start("cinecode", machine);
+  const machine = preParsed.globalOptions.json;
+
+  const reporter = new Reporter({
+    machine,
+    quiet: raw.includes("--quiet") || raw.includes("-q"),
+    verbose: preParsed.globalOptions.verbose,
+    noColor,
+    stdoutWrite,
+    stderrWrite,
+  });
+  runReport.setReporter(reporter);
+
+  // Sweep spools at run start per bounded cache rules
+  sweepSpools(path.join(cwd, ".cinecode", "cache"));
+
+  reporter.start("cinecode", machine);
   let jsonMode = false;
-  let args = [...raw];
   let applied: readonly string[] = [];
+  let token = preParsed.commandToken;
+  let commandArgs = [...preParsed.commandArgs];
 
   if (noColor) process.env.NO_COLOR = "1";
 
   try {
-    const entryIndex = commandIndex(raw);
-    const entryToken = entryIndex >= 0 ? raw[entryIndex] : undefined;
-    if (entryToken && !PASSTHROUGH_TOKENS.has(entryToken)) {
+    if (token && !PASSTHROUGH_TOKENS.has(token) && !findCommand(token)) {
       const resolution = resolveAliases(
-        raw,
+        [token, ...commandArgs],
         loadEnabledAliases(cwd),
         (name) => findCommand(name) !== undefined || PASSTHROUGH_TOKENS.has(name),
-        entryIndex,
+        0,
       );
-      args = resolution.args;
       applied = resolution.applied;
-      const index = commandIndex(args);
-      const token = index >= 0 ? args[index] : undefined;
+      token = resolution.args[0];
+      commandArgs = resolution.args.slice(1);
       if (applied.length > 0 && (!token || (!findCommand(token) && !PASSTHROUGH_TOKENS.has(token)))) {
         const suggestion = token ? suggestCommand(token) : undefined;
         throw new UsageError(
@@ -309,16 +264,49 @@ export async function runCli(argv: readonly string[] = process.argv, options: Ru
       }
     }
 
-    const tokenIndex = commandIndex(args);
-    const token = tokenIndex >= 0 ? args[tokenIndex] : undefined;
-    runReport.relabel(token ?? "cinecode");
+    if (token) {
+      const spec = findCommand(token);
+      if (spec) {
+        if (spec.aliasDeprecations && token in spec.aliasDeprecations) {
+          const warning = spec.aliasDeprecations[token]!;
+          if (!machine) {
+            reporter.warn("CC1014", warning);
+          }
+        }
+        if (token === "media:list") {
+          token = "media";
+          commandArgs = ["list", ...commandArgs];
+        } else if (token === "media:download") {
+          token = "media";
+          commandArgs = ["download", ...commandArgs];
+        } else if (token === "sync") {
+          token = "clean";
+          if (!commandArgs.includes("--prune")) commandArgs.push("--prune");
+        } else if (token === "render-multi") {
+          token = "render";
+        } else if (token === "health") {
+          token = "doctor";
+          if (!machine && !commandArgs.includes("--json")) {
+            commandArgs.push("--json");
+          }
+        } else if (token === "create") {
+          token = "init";
+        } else if (token === "check") {
+          token = "validate";
+        } else if (token === "license") {
+          token = "licence";
+        }
+      }
+    }
+
+    reporter.relabel(token ?? "cinecode");
     const spec = token ? findCommand(token) : undefined;
 
     if (spec) {
-      runReport.describe(spec);
+      reporter.describe(spec);
       program.addCommand(describeCommand(await spec.load(), spec));
     } else if (token === "help") {
-      const target = args[1] ? findCommand(args[1]) : undefined;
+      const target = commandArgs[0] ? findCommand(commandArgs[0]) : undefined;
       if (target) program.addCommand(describeCommand(await target.load(), target));
       else registerStubs(program);
     } else {
@@ -329,44 +317,43 @@ export async function runCli(argv: readonly string[] = process.argv, options: Ru
 
     program.hook("preAction", async (_thisCommand, actionCommand) => {
       const opts = actionCommand.opts();
-      if (opts.verbose === true) process.env.CINECODE_VERBOSE = "1";
-      if (applied.length > 0 && opts.verbose === true) console.error(`cinecode: alias ${applied.join(", ")}`);
-      if (opts.json === true) {
+      if (opts.verbose === true || preParsed.globalOptions.verbose) process.env.CINECODE_VERBOSE = "1";
+      if (applied.length > 0 && (opts.verbose === true || preParsed.globalOptions.verbose)) console.error(`cinecode: alias ${applied.join(", ")}`);
+      if (opts.json === true || preParsed.globalOptions.json) {
         const { setJsonMode } = await import("../observability/logger.js");
         setJsonMode(true);
         jsonMode = true;
       }
     });
 
-    await program.parseAsync(["node", "cinecode", ...hoistGlobalOptions(args, tokenIndex)]);
-    if (machine && process.stdout.write !== interceptor) {
-      throw createError(ErrorCode.CC9002, { reason: "machine mode stdout was replaced during the command" });
-    }
-    const report = withCapturedOutput(runReport.finish(), capture);
-    restoreStdout();
+    const executionTokens = ["node", "cinecode"];
+    if (token) executionTokens.push(token);
+    if (preParsed.globalOptions.root) executionTokens.push(`--root=${preParsed.globalOptions.root}`);
+    if (preParsed.globalOptions.config) executionTokens.push(`--config=${preParsed.globalOptions.config}`);
+    if (preParsed.globalOptions.json) executionTokens.push("--json");
+    if (preParsed.globalOptions.noColor) executionTokens.push("--no-color");
+    if (preParsed.globalOptions.verbose) executionTokens.push("--verbose");
+    if (preParsed.globalOptions.all) executionTokens.push("--all");
+    if (preParsed.globalOptions.help) executionTokens.push("--help");
+    if (preParsed.globalOptions.version) executionTokens.push("--version");
+    executionTokens.push(...commandArgs);
+
+    await program.parseAsync(executionTokens);
+
     const informational = token !== undefined && INFORMATIONAL_COMMANDS.has(token);
-    if (informational) {
-      if (capture.bytes() > 0) stdoutWrite(capture.text());
-    } else if (machine) {
-      writeMachine(report, documentWrite);
-    } else {
-      for (const warning of report.warnings) {
-        process.stderr.write(`⚠ [${warning.code}] ${warning.message}\n`);
-      }
-      stdoutWrite(`\n${runReport.summary(report)}\n`);
+    if (!informational) {
+      const report = reporter.finish(EXIT_CODES.success);
+      reporter.writeDocument(report);
     }
     return EXIT_CODES.success;
   } catch (error) {
-    const verbose = program.opts().verbose === true || args.includes("--verbose");
-    restoreStdout();
+    const verbose = program.opts().verbose === true || preParsed.globalOptions.verbose;
     /* Help and version are clean exits at the reporting boundary, not failures. */
     if (error instanceof CommanderError && error.exitCode === 0) {
-      if (capture.bytes() > 0) stdoutWrite(capture.text());
       return EXIT_CODES.success;
     }
-    return reportError(error, verbose, !noColor, machine, documentWrite);
+    return reportError(error, verbose, !noColor, machine, reporter);
   } finally {
-    restoreStdout();
     if (jsonMode) {
       const { setJsonMode } = await import("../observability/logger.js");
       setJsonMode(false);
@@ -380,7 +367,7 @@ export async function runCli(argv: readonly string[] = process.argv, options: Ru
   }
 }
 
-export function createProgram(): Command {
+export function createProgram(showAll = false): Command {
   const program = new Command()
     .name("cinecode")
     .description("Code-first 2D animation engine and video generation framework")
@@ -391,28 +378,7 @@ export function createProgram(): Command {
     .exitOverride();
 
   applyGlobalOptions(program);
-  program.addHelpText(
-    "after",
-    `\nCommands:\n${commandNames()
-      .map((name) => `  ${name.padEnd(22)}${COMMANDS.find((c) => c.name === name)?.summary ?? ""}`)
-      .join("\n")}\n\nProject discovery:\n  --root <dir> or --config <path> wins. Otherwise the nearest cinecode config is used,\n  searching upward stops at package.json or .git, and parent projects are never searched.\n\nExit codes:\n${Object.entries(EXIT_CODES)
-      .map(([name, code]) => `  ${String(code).padStart(3)}  ${EXIT_CODE_MEANINGS[name as keyof typeof EXIT_CODE_MEANINGS]}`)
-      .join("\n")}`,
-  );
-
-  const version = program
-    .command("version")
-    .description("Show the Cinecode version")
-    .action(() => console.log(CINECODE_VERSION));
-  const license = program
-    .command("license")
-    .description("Show license information")
-    .action(() => console.log(LICENSE));
-
-  for (const command of [version, license]) {
-    applyGlobalOptions(command);
-    attachHelp(command, `cinecode ${command.name()}`);
-  }
+  program.addHelpText("after", formatHelpText(showAll));
 
   return program;
 }

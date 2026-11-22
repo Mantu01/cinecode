@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { resolveBinary } from "../binary/resolver.js";
+import { DEFAULT_IMAGES } from "../config/defaults.js";
 import type { MediaCache } from "./cache.js";
 import { frameCacheKey, getDefaultFrameCache, type FrameCache } from "./frame-cache.js";
 import { createError, ErrorCode } from "../errors/codes.js";
@@ -319,12 +320,12 @@ function collectFfmpeg(args: readonly string[]): Promise<Buffer> {
     });
     child.on("close", (code) => {
       if (code !== 0) {
-        reject(new Error(`[CC2601] frame extraction failed: ${stderr.trim() || `exit code ${code}`}`));
+        reject(createError(ErrorCode.CC2601, { reason: stderr.trim() || `exit code ${code}` }));
         return;
       }
       const buffer = Buffer.concat(chunks);
       if (buffer.length === 0) {
-        reject(new Error("[CC2602] frame extraction produced no data; check the timestamp is inside the media duration"));
+        reject(createError(ErrorCode.CC2602, { time: "requested" }));
         return;
       }
       resolve(buffer);
@@ -346,7 +347,7 @@ async function extractFrameUncached(
     "-i", videoPath,
     "-frames:v", "1",
     ...scaleArgs(options),
-    ...outputFormatArgs(format, options.quality ?? 82),
+    ...outputFormatArgs(format, options.quality ?? DEFAULT_IMAGES.quality),
     "-",
   ]);
 }
@@ -437,7 +438,7 @@ export async function* extractFrameRange(
     wake();
   });
   child.on("close", (code) => {
-    if (code !== 0) failure = new Error(`[CC2601] frame range extraction failed: ${stderr.trim() || `exit code ${code}`}`);
+    if (code !== 0) failure = createError(ErrorCode.CC2601, { reason: stderr.trim() || `exit code ${code}` });
     finished = true;
     wake();
   });

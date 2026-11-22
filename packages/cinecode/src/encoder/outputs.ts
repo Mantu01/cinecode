@@ -1,10 +1,13 @@
 import { spawn } from "node:child_process";
 import { resolveBinary } from "../binary/resolver.js";
+import { recordProcessSpawn } from "../media/instrumentation.js";
+import { DEFAULT_IMAGES } from "../config/defaults.js";
 import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Canvas, loadImage } from "@napi-rs/canvas";
 import { buildHdrColorArgs, type HdrMetadata } from "./index.js";
+import { createError, ErrorCode } from "../errors/index.js";
 
 /**
  * Output-side media operations: format conversion, stitching, splitting,
@@ -31,7 +34,7 @@ async function* frameStream(source: FrameSource): AsyncGenerator<Buffer> {
 
 function pngSize(buffer: Buffer): { width: number; height: number } {
   if (buffer.length < 24 || buffer.readUInt32BE(0) !== 0x89504e47) {
-    throw new Error("[CC4002] frame sequence expects PNG frames from the renderer");
+    throw createError(ErrorCode.CC4002, { details: "frame sequence expects PNG frames from the renderer" });
   }
   return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
 }
@@ -72,6 +75,7 @@ async function writeFramesToDir(
 function runFfmpeg(args: readonly string[], stdinData?: Buffer): Promise<FfmpegResult> {
   const outputPath = args[args.length - 1] ?? "";
   return new Promise<FfmpegResult>((resolve) => {
+    recordProcessSpawn();
     const child = spawn(resolveBinary("ffmpeg").path, [...args], { windowsHide: true });
     let stderr = "";
     child.on("error", (err) => {
@@ -121,9 +125,9 @@ export async function encodeStillImage(
   if (format === "png") {
     codec.push("-c:v", "png", "-f", "image2", "-pix_fmt", alpha ? "rgba" : "rgb24");
   } else if (format === "jpg") {
-    codec.push("-c:v", "mjpeg", "-f", "image2", "-pix_fmt", "yuvj420p", "-q:v", String(Math.max(2, Math.round(31 - (options.quality ?? 90) * 0.29))));
+    codec.push("-c:v", "mjpeg", "-f", "image2", "-pix_fmt", "yuvj420p", "-q:v", String(Math.max(2, Math.round(31 - (options.quality ?? DEFAULT_IMAGES.quality) * 0.29))));
   } else {
-    codec.push("-f", "webp", "-c:v", "libwebp", "-quality", String(Math.max(0, Math.min(100, Math.round(options.quality ?? 90)))));
+    codec.push("-f", "webp", "-c:v", "libwebp", "-quality", String(Math.max(0, Math.min(100, Math.round(options.quality ?? DEFAULT_IMAGES.quality)))));
     if (options.lossless) codec.push("-lossless", "1");
     codec.push("-pix_fmt", alpha ? "yuva420p" : "yuv420p");
   }
@@ -490,7 +494,7 @@ export async function writeSpriteSheet(
       await stat(outputPngPath);
       return empty("File exists (use overwrite)");
     } catch {
-      // no existing sheet
+      // Note: no existing sheet
     }
   }
 

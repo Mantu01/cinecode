@@ -1,33 +1,16 @@
 import { Command } from "commander";
-import { devCommand } from "./dev.js";
+import { runPreviewHost, type DevCliOptions } from "./dev.js";
+import { buildCommanderCommand, findCommand } from "./command-registry.js";
 
-export interface PreviewCliOptions {
-  config?: string;
-  root?: string;
-  port?: number;
-  host?: string;
-  open?: boolean;
-  hmr?: boolean;
-}
+export type PreviewCliOptions = DevCliOptions;
 
-export async function previewCommand(options: PreviewCliOptions): Promise<void> {
-  await devCommand({
-    ...options,
-    open: options.open ?? true,
-  });
+export async function previewCommand(
+  options: PreviewCliOptions,
+  preflightCtx?: { config: import("../core/types/index.js").CinecodeConfig; root: string; configPath?: string },
+): Promise<void> {
+  await runPreviewHost(options, "preview", preflightCtx);
 }
 
 export function createPreviewCommand(): Command {
-  const cmd = new Command("preview")
-    .description("Start the read-only preview server and open viewer")
-    .option("-p, --port <number>", "Port to listen on", (v) => parseInt(v, 10))
-    .option("--host <host>", "Host to bind")
-    .option("--open", "Open the preview in the browser", true)
-    .option("--no-open", "Do not automatically open browser", false)
-    .option("--no-hmr", "Disable the HMR socket push")
-    .action(async (options: PreviewCliOptions, command: Command) => {
-      await previewCommand({ ...command.optsWithGlobals(), ...options });
-    });
-
-  return cmd;
+  return buildCommanderCommand(findCommand("preview")!);
 }

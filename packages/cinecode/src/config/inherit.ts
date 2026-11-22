@@ -1,15 +1,14 @@
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, resolve, isAbsolute } from "node:path";
+import { dirname, resolve, isAbsolute, relative, join } from "node:path";
 import type { CinecodeConfig, Composition } from "../core/types/index.js";
 import { normalizeConfig } from "./schema.js";
 import { findMissingEnvVarsWithPaths, substituteEnvVarsDeep } from "./envsubst.js";
 import { hotReloadEnabled, isUserModuleFile, loadUserModule } from "../loader/index.js";
 import { createError, ErrorCode } from "../errors/index.js";
+import { PROJECT_MARKERS } from "./project.js";
 
-const BASE_CONFIG_FILES = ["cinecode.base.json", "cinecode.base.ts", "cinecode.base.js", "cinecode.base.mjs", ".cinecode.base.json"];
-
-export interface ResolvedRawConfig {
-  readonly raw: Record<string, unknown>;
+export interface ResolvedInheritance {
+  readonly merged: Record<string, unknown>;
   readonly chain: readonly string[];
 }
 
@@ -54,30 +53,56 @@ async function readConfigDocument(configPath: string): Promise<RawRecord> {
   return substituteEnvVarsDeep(raw);
 }
 
-function findBaseConfig(startDir: string): string | null {
-  let current = startDir;
+export function findProjectBoundary(startPath: string): string {
+  let current = dirname(resolve(startPath));
   for (;;) {
-    for (const candidate of BASE_CONFIG_FILES) {
-      const full = resolve(current, candidate);
-      if (existsSync(full)) return full;
+    if (PROJECT_MARKERS.some((marker) => existsSync(join(current, marker)))) {
+      return current;
     }
     const parent = dirname(current);
-    if (parent === current) return null;
+    if (parent === current) return dirname(resolve(startPath));
     current = parent;
   }
 }
 
-async function resolveExtendsField(configPath: string, raw: RawRecord, chain: string[], visited: Set<string>): Promise<RawRecord> {
+async function resolveExtendsField(
+  configPath: string,
+  raw: RawRecord,
+  chain: string[],
+  visited: Set<string>,
+  boundaryDir?: string,
+): Promise<RawRecord> {
   const extendsPath = raw.extends;
-  if (typeof extendsPath !== "string" || extendsPath.length === 0) return raw;
-  const target = isAbsolute(extendsPath) ? extendsPath : resolve(dirname(configPath), extendsPath);
+  if (typeof extendsPath !== "string" || extendsPath.trim().length === 0) return raw;
+
+  if (isAbsolute(extendsPath)) {
+    throw createError(
+      ErrorCode.CC1005,
+      { path: extendsPath, reason: `Config extends path must be relative: "${extendsPath}"` },
+      { location: { file: configPath }, fixHint: "Specify a relative path inside the project boundary (e.g. ./base.json)." },
+    );
+  }
+
+  const target = resolve(dirname(configPath), extendsPath);
+  const boundary = boundaryDir ? resolve(boundaryDir) : findProjectBoundary(configPath);
+  const rel = relative(boundary, target);
+
+  if (rel.startsWith("..") || isAbsolute(rel)) {
+    throw createError(
+      ErrorCode.CC1005,
+      { path: target, reason: `Config extends target "${extendsPath}" resolves outside project boundary: ${target}` },
+      { location: { file: configPath }, fixHint: "Base configs must reside within the project root boundary." },
+    );
+  }
+
   if (!existsSync(target)) {
     throw createError(
       ErrorCode.CC1005,
       { path: target, reason: `Config extends target not found (${[...chain, target].join(" -> ")})` },
-      { location: { file: target } },
+      { location: { file: target }, fixHint: "Ensure the base config file exists at the specified relative path." },
     );
   }
+
   if (visited.has(target)) {
     throw createError(
       ErrorCode.CC1005,
@@ -85,52 +110,43 @@ async function resolveExtendsField(configPath: string, raw: RawRecord, chain: st
       { location: { file: target }, fixHint: "Remove the extends cycle; configs merge base then override." },
     );
   }
+
   visited.add(target);
   chain.push(target);
   const parentRaw = await readConfigDocument(target);
-  const resolvedParent = await resolveExtendsField(target, parentRaw, chain, visited);
+  const resolvedParent = await resolveExtendsField(target, parentRaw, chain, visited, boundary);
   return deepMergeConfig(resolvedParent, raw);
 }
 
-export async function resolveConfigChain(configPath: string, baseDirs: readonly string[] = []): Promise<CinecodeConfig> {
-  const raw = await readRawConfig(configPath);
-  const merged = await mergeConfigInheritance(configPath, raw, baseDirs);
-  return normalizeConfig(substituteEnvVarsDeep(merged));
+export async function resolveConfigInheritance(
+  configPath: string,
+  raw: RawRecord,
+  boundaryDir?: string,
+): Promise<ResolvedInheritance> {
+  const resolvedConfigPath = resolve(configPath);
+  const chain: string[] = [resolvedConfigPath];
+  const visited = new Set<string>([resolvedConfigPath]);
+
+  let merged = raw;
+  if (typeof raw.extends === "string" && raw.extends.trim().length > 0) {
+    merged = await resolveExtendsField(resolvedConfigPath, raw, chain, visited, boundaryDir);
+  }
+
+  return { merged, chain };
 }
 
 export async function mergeConfigInheritance(
   configPath: string,
   raw: RawRecord,
-  baseDirs: readonly string[] = [],
 ): Promise<RawRecord> {
-  const chain: string[] = [resolve(configPath)];
-  let merged = raw;
-  const visited = new Set<string>([resolve(configPath)]);
-
-  if (typeof raw.extends === "string" && raw.extends.length > 0) {
-    merged = await resolveExtendsField(resolve(configPath), raw, chain, visited);
-  } else {
-    for (const dir of baseDirs.map((entry) => resolve(entry))) {
-      const baseFile = findBaseConfig(dir);
-      if (baseFile && !visited.has(baseFile)) {
-        visited.add(baseFile);
-        chain.push(baseFile);
-        merged = deepMergeConfig(await readConfigDocument(baseFile), merged);
-      }
-    }
-    let currentDir = dirname(resolve(configPath));
-    while (currentDir !== dirname(currentDir)) {
-      currentDir = dirname(currentDir);
-      const baseFile = findBaseConfig(currentDir);
-      if (baseFile && !visited.has(baseFile)) {
-        visited.add(baseFile);
-        chain.push(baseFile);
-        merged = deepMergeConfig(await readConfigDocument(baseFile), merged);
-      }
-    }
-  }
-
+  const { merged } = await resolveConfigInheritance(configPath, raw);
   return merged;
+}
+
+export async function resolveConfigChain(configPath: string): Promise<CinecodeConfig> {
+  const raw = await readRawConfig(configPath);
+  const merged = await mergeConfigInheritance(configPath, raw);
+  return normalizeConfig(substituteEnvVarsDeep(merged));
 }
 
 function isMergeableObject(value: unknown): value is Record<string, unknown> {

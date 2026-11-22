@@ -143,12 +143,10 @@ function formatSize(bytes: number): string {
   return `${size.toFixed(1)}${units[unitIndex]}`;
 }
 
+import { findCommand, buildCommanderCommand } from "./command-registry.js";
+
 export function createMediaListCommand(): Command {
-  const cmd = new Command("media:list")
-    .description("List all media files in the project")
-    .option("-o, --out <path>", "Output file path")
-    .action(async (options: MediaListOptions, command: Command) => {
-      await mediaListCommand({ ...command.optsWithGlobals(), ...options });
-    });
-  return cmd;
+  const spec = findCommand("media:list");
+  if (!spec) throw new Error("Command 'media:list' not found in registry");
+  return buildCommanderCommand(spec);
 }

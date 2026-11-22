@@ -68,7 +68,9 @@ export async function runSecurityAudit(projectDir = process.cwd()): Promise<Audi
           try {
             const depPkg = JSON.parse(fs.readFileSync(depPkgPath, "utf8"));
             license = typeof depPkg.license === "string" ? depPkg.license : typeof depPkg.license === "object" ? depPkg.license.type : "UNKNOWN";
-          } catch {}
+          } catch {
+            // Note: ignore corrupt dependency package.json
+          }
         }
 
         const normalizedLic = license.toLowerCase().trim();
@@ -91,7 +93,9 @@ export async function runSecurityAudit(projectDir = process.cwd()): Promise<Audi
           });
         }
       }
-    } catch {}
+    } catch {
+      // Note: ignore missing project package.json
+    }
   }
 
   const mediaDir = path.join(projectDir, "assets");
@@ -112,7 +116,9 @@ export async function runSecurityAudit(projectDir = process.cwd()): Promise<Audi
           });
         }
       }
-    } catch {}
+    } catch {
+      // Note: ignore unreadable assets directory
+    }
   }
 
   const critical = issues.filter((i) => i.severity === "critical").length;

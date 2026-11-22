@@ -34,7 +34,9 @@ export class PluginHotReloader {
         }, 100);
       });
       this.watchers.set(pluginId, watcher);
-    } catch {}
+    } catch {
+      // Note: watcher setup failure should not throw
+    }
   }
 
   public unwatchPlugin(pluginId: string): void {
@@ -56,7 +58,9 @@ export class PluginHotReloader {
             options: existing.options,
             log: (msg: string) => logger.debug("plugin", `[Plugin:${pluginId}] ${msg}`),
           });
-        } catch {}
+        } catch {
+          // Note: plugin teardown error must not abort hot-reload
+        }
       }
 
       const freshPlugin = await loadPluginFromFile(filePath);

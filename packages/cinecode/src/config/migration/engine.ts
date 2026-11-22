@@ -61,7 +61,7 @@ interface Token {
     | "null"
     | "identifier"
     | "comment";
-  value: any;
+  value: unknown; // Note: arbitrary JSON AST node value
   raw: string;
   line: number;
   col: number;
@@ -243,7 +243,7 @@ function parseCodeConfigSafe(source: string, absPath: string): ConfigObject {
       if (tokens[cursor]!.type === "identifier" && tokens[cursor]!.value === "from") {
         cursor++;
         if (cursor < tokens.length && tokens[cursor]!.type === "string") {
-          specifier = tokens[cursor]!.value;
+          specifier = String(tokens[cursor]!.value);
           cursor++;
         }
         break;
@@ -270,7 +270,7 @@ function parseCodeConfigSafe(source: string, absPath: string): ConfigObject {
   }
 
   if (cursor < tokens.length && tokens[cursor]!.type === "identifier") {
-    const val = tokens[cursor]!.value;
+    const val = String(tokens[cursor]!.value);
     if (["const", "let", "var", "function", "class", "type", "interface"].includes(val)) {
       throw createError(
         ErrorCode.CC1006,
@@ -340,7 +340,7 @@ function parseCodeConfigSafe(source: string, absPath: string): ConfigObject {
     }
   }
 
-  function parseValue(): any {
+  function parseValue(): unknown { // Note: arbitrary JSON AST node value
     const tok = tokens[cursor];
     if (!tok) {
       throw createError(ErrorCode.CC1006, { path: absPath, reason: "Unexpected end of input" }, { location: { file: absPath } });
@@ -413,12 +413,12 @@ function parseCodeConfigSafe(source: string, absPath: string): ConfigObject {
     return obj;
   }
 
-  function parseArray(): any[] {
+  function parseArray(): unknown[] { // Note: arbitrary JSON AST node value
     if (tokens[cursor]?.type !== "bracketOpen") {
       throw createError(ErrorCode.CC1006, { path: absPath, reason: "Expected '['" }, { location: { file: absPath } });
     }
     cursor++;
-    const arr: any[] = [];
+    const arr: unknown[] = []; // Note: arbitrary JSON AST node value
 
     while (cursor < tokens.length && tokens[cursor]!.type !== "bracketClose") {
       if (tokens[cursor]!.type === "comma") {
@@ -474,7 +474,7 @@ function parseCodeConfigSafe(source: string, absPath: string): ConfigObject {
 
 function deleteNestedKey(obj: ConfigObject, keyPath: string): boolean {
   const parts = keyPath.split(".");
-  let cur: any = obj;
+  let cur: any = obj; // Note: arbitrary JSON AST node traversal
   for (let i = 0; i < parts.length - 1; i++) {
     if (!cur || typeof cur !== "object") return false;
     cur = cur[parts[i]!];
@@ -488,7 +488,7 @@ function deleteNestedKey(obj: ConfigObject, keyPath: string): boolean {
   return false;
 }
 
-function migrateV1ToV2Transform(config: ConfigObject): string[] {
+export function migrateV1ToV2Transform(config: ConfigObject): string[] {
   const changes: string[] = [];
 
   if (config.fps !== undefined) {

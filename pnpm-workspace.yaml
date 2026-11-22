@@ -7,5 +7,5 @@ packages:
 allowBuilds:
   canvas: true
   esbuild: false
-  midi: set this to true or false
+  midi: false # optional dynamic dependency, blocked to avoid native compilation during workspace install
   unrs-resolver: true

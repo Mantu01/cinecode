@@ -1,4 +1,5 @@
 export * from "./cache.js";
+export * from "./paths.js";
 export * from "./inspector.js";
 export {
   extractFramesInMemory,
@@ -16,6 +17,5 @@ export * from "./resolverChain.js";
 export { FileSystemMediaResolver } from "./resolvers/filesystem.js";
 export * from "./preprocess.js";
 export * from "./formats.js";
-export * from "./malware-scanner.js";
-export * from "./network-resilience.js";
 export * from "./decode-service.js";
+export * from "./instrumentation.js";

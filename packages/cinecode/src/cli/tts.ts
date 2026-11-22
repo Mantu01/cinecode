@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { getVoiceRegistry, type VoiceDescriptor } from "../tts/registry.js";
 import { runReport } from "./run-report.js";
+import { buildCommanderCommand, findCommand } from "./command-registry.js";
 
 export interface TtsCliOptions {
   listVoices?: boolean;
@@ -39,13 +40,5 @@ export async function ttsCommand(options: TtsCliOptions = {}): Promise<void> {
 }
 
 export function createTtsCommand(): Command {
-  return new Command("tts")
-    .description("Text-to-speech voice utilities")
-    .option("--list-voices", "List available voices", false)
-    .option("--language <code>", "Filter voices by language or locale")
-    .option("--search <text>", "Search voice names, locales and styles")
-    .option("--provider <name>", "Filter voices by provider")
-    .action(async (options: TtsCliOptions) => {
-      await ttsCommand(options);
-    });
+  return buildCommanderCommand(findCommand("tts")!);
 }

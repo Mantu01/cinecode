@@ -2,632 +2,825 @@
 
 <!-- Generated automatically from CLI command metadata. Do not edit manually. -->
 
-Cinecode provides 35 local CLI commands for project authoring, diagnostics, rendering, and asset generation.
+Cinecode provides 30 canonical CLI commands for project authoring, diagnostics, rendering, and asset generation.
 
-Informational commands (`help`, `version`, `license`) print text on standard output only, write nothing on standard error, exit `0` and never emit the machine envelope.
+Informational commands (`help`, `version`, `licence`) print text on standard output only, write nothing on standard error, exit `0` and never emit the machine envelope.
 
 A project entry file (`main.ts`) has exactly one accepted shape: `export default defineMain({ images, audio, scenes, timelines })`. A composition, timeline, scene, image or audio definition in `main.ts` is a contract error; definitions belong in the entry files the manifest references.
 
 ## Commands Overview
 
-| Command | Summary | Example |
-| --- | --- | --- |
-| [`cinecode still`](#still) | Render a single frame to PNG or JPEG | `cinecode still ./composition.ts --frame 0` |
-| [`cinecode render`](#render) | Render timelines or a composition to a video | `cinecode render --config ./cinecode.config.ts` |
-| [`cinecode render-multi`](#render-multi) | Render one composition at multiple resolutions | `cinecode render-multi ./composition.ts` |
-| [`cinecode preview`](#preview) | Start the read-only preview server and open viewer | `cinecode preview --config ./cinecode.config.ts` |
-| [`cinecode validate`](#validate) | Validate configuration, compositions, media and fonts | `cinecode validate --config ./cinecode.config.ts` |
-| [`cinecode check`](#check) | Validate authoring code before rendering | `cinecode check --config ./cinecode.config.ts` |
-| [`cinecode doctor`](#doctor) | Run environment and project health checks | `cinecode doctor --fix` |
-| [`cinecode health`](#health) | Report system health for CI | `cinecode health --json` |
-| [`cinecode inspect`](#inspect) | Print the resolved timeline for a composition | `cinecode inspect ./composition.ts` |
-| [`cinecode clean`](#clean) | Delete cache and output directories | `cinecode clean --cache` |
-| [`cinecode media:list`](#medialist) | List media files in the project | `cinecode media:list --config ./cinecode.config.ts` |
-| [`cinecode media:download`](#mediadownload) | Download cloud media into the source directory | `cinecode media:download --config ./cinecode.config.ts` |
-| [`cinecode create`](#create) | Scaffold a new Cinecode project | `cinecode create my-film` |
-| [`cinecode generate`](#generate) | Generate images, audio, scenes or timelines | `cinecode generate image --all` |
-| [`cinecode dev`](#dev) | Start the dev server with HMR | `cinecode dev --config ./cinecode.config.ts` |
-| [`cinecode formats`](#formats) | List input, output and planned media formats | `cinecode formats --json` |
-| [`cinecode presets`](#presets) | List platform deliverable presets | `cinecode presets --json` |
-| [`cinecode thumbnail`](#thumbnail) | Write poster images from the best frame | `cinecode thumbnail ./composition.ts` |
-| [`cinecode edit`](#edit) | Open a composition in the editor or print it | `cinecode edit ./composition.ts` |
-| [`cinecode sync`](#sync) | Verify media, prune cache, report orphans | `cinecode sync --json` |
-| [`cinecode compare`](#compare) | Pixel-diff two compositions | `cinecode compare ./a.ts ./b.ts` |
-| [`cinecode benchmark`](#benchmark) | Measure frame time, memory and worker capacity | `cinecode benchmark ./composition.ts` |
-| [`cinecode upgrade`](#upgrade) | Compare the installed version with npm | `cinecode upgrade` |
-| [`cinecode template`](#template) | List or scaffold starter compositions | `cinecode template list` |
-| [`cinecode tts`](#tts) | Text-to-speech voice utilities | `cinecode tts voices` |
-| [`cinecode plugin`](#plugin) | Manage installed plugins | `cinecode plugin list` |
-| [`cinecode diff`](#diff) | Semantic diff between compositions or revisions | `cinecode diff ./a.ts ./b.ts` |
-| [`cinecode story`](#story) | Generate a standalone web player bundle | `cinecode story ./main.ts` |
-| [`cinecode export-svg`](#export-svg) | Export frames as vector SVG graphics | `cinecode export-svg ./main.ts` |
-| [`cinecode audit`](#audit) | Scan dependencies and assets for licences | `cinecode audit --json` |
-| [`cinecode alias`](#alias) | Manage shorthand CLI command aliases | `cinecode alias list` |
-| [`cinecode init`](#init) | Scaffold a project through a questionnaire | `cinecode init my-film` |
-| [`cinecode migrate`](#migrate) | Migrate the config schema to the latest version | `cinecode migrate ./cinecode.config.ts` |
-| [`cinecode check-ignore`](#check-ignore) | Check paths against .cinecodeignore rules | `cinecode check-ignore ./output/intro.mp4` |
-| [`cinecode publish`](#publish) | Publish a rendered output to a destination | `cinecode publish ./output/videos/intro.mp4` |
+| Command | Category | Summary | Example |
+| --- | --- | --- | --- |
+| [`cinecode dev`](#dev) | `product` | Start the dev server with HMR | `cinecode dev --config ./cinecode.config.ts` |
+| [`cinecode preview`](#preview) | `product` | Start the read-only preview server and open viewer | `cinecode preview --config ./cinecode.config.ts` |
+| [`cinecode render`](#render) | `product` | Render timelines or a composition to a video | `cinecode render --config ./cinecode.config.ts` |
+| [`cinecode still`](#still) | `product` | Render a single frame to PNG or JPEG | `cinecode still ./composition.ts --frame 0` |
+| [`cinecode generate`](#generate) | `product` | Generate images, audio, scenes or timelines | `cinecode generate image --all` |
+| [`cinecode validate`](#validate) | `product` | Validate configuration, compositions, media and fonts | `cinecode validate --config ./cinecode.config.ts` |
+| [`cinecode clean`](#clean) | `product` | Delete cache and output directories | `cinecode clean --cache` |
+| [`cinecode init`](#init) | `product` | Scaffold a new Cinecode project | `cinecode init my-film` |
+| [`cinecode doctor`](#doctor) | `product` | Run environment and project health checks | `cinecode doctor --fix` |
+| [`cinecode inspect`](#inspect) | `product` | Print the resolved timeline for a composition | `cinecode inspect ./composition.ts` |
+| [`cinecode media`](#media) | `resource` | Manage project media files and cloud assets | `cinecode media list` |
+| [`cinecode plugin`](#plugin) | `resource` | Manage installed plugins | `cinecode plugin list` |
+| [`cinecode formats`](#formats) | `resource` | List input, output and planned media formats | `cinecode formats --json` |
+| [`cinecode presets`](#presets) | `resource` | List platform deliverable presets | `cinecode presets --json` |
+| [`cinecode thumbnail`](#thumbnail) | `resource` | Write poster images from the best frame | `cinecode thumbnail ./composition.ts` |
+| [`cinecode export-svg`](#export-svg) | `resource` | Export frames as vector SVG graphics | `cinecode export-svg ./main.ts` |
+| [`cinecode story`](#story) | `resource` | Generate a standalone web player bundle | `cinecode story ./main.ts` |
+| [`cinecode tts`](#tts) | `resource` | Text-to-speech voice utilities | `cinecode tts voices` |
+| [`cinecode compare`](#compare) | `resource` | Pixel-diff two compositions | `cinecode compare ./a.ts ./b.ts` |
+| [`cinecode diff`](#diff) | `resource` | Semantic diff between compositions or revisions | `cinecode diff ./a.ts ./b.ts` |
+| [`cinecode audit`](#audit) | `maintenance` | Scan dependencies and assets for licences | `cinecode audit --json` |
+| [`cinecode benchmark`](#benchmark) | `maintenance` | Measure frame time, memory and worker capacity | `cinecode benchmark ./composition.ts` |
+| [`cinecode migrate`](#migrate) | `maintenance` | Migrate the config schema to the latest version | `cinecode migrate ./cinecode.config.ts` |
+| [`cinecode check-ignore`](#check-ignore) | `maintenance` | Check paths against .cinecodeignore rules | `cinecode check-ignore ./output/intro.mp4` |
+| [`cinecode alias`](#alias) | `maintenance` | Manage shorthand CLI command aliases | `cinecode alias list` |
+| [`cinecode publish`](#publish) | `maintenance` | Publish a rendered output to a destination | `cinecode publish ./output/videos/intro.mp4` |
+| [`cinecode upgrade`](#upgrade) | `maintenance` | Compare the installed version with npm | `cinecode upgrade` |
+| [`cinecode help`](#help) | `informational` | Show help for Cinecode commands | `cinecode help` |
+| [`cinecode version`](#version) | `informational` | Show the Cinecode version | `cinecode version` |
+| [`cinecode licence`](#licence) | `informational` | Show license information | `cinecode licence` |
 
 ## Command Details
 
-### `cinecode still` {#still}
+### `cinecode dev` {#dev}
 
-Render a single frame to PNG or JPEG
+Start the dev server with HMR
 
-**Usage:** `cinecode still ./composition.ts --frame 0`
-
-#### Options
-
-| Option | Description | Default |
-| --- | --- | --- |
-| `--file <path>` | Standalone composition file (file mode) | `—` |
-| `-c, --composition <name>` | Composition name (requires --file) | `—` |
-| `-T, --timeline <id>` | Timeline id from main.ts | `—` |
-| `-s, --scene <id>` | Scene id from main.ts | `—` |
-| `-f, --frame <number>` | Frame number | `—` |
-| `--time <time>` | Time (HH:MM:SS:FF, HH:MM:SS, MM:SS, 12.5s, 250ms, 12.5 (seconds), 30f or frames(30) (frame index)) | `—` |
-| `-o, --out <path>` | Output file path | `—` |
-| `--format <format>` | Output format: png, jpg, webp | `—` |
-| `--resolution <WIDTHxHEIGHT>` | Override resolution | `—` |
-| `--seed <number>` | Random seed | `—` |
-| `--dry-run` | Print render plan without rendering | `false` |
-| `--explain` | Print resolved parameters and their origins without rendering | `false` |
-
-### `cinecode render` {#render}
-
-Render timelines (main.ts) or a standalone composition file to MP4
-
-**Usage:** `cinecode render --config ./cinecode.config.ts`
+- **Category:** `product`
+- **Kind:** `read`
+- **Surface Contract:** Reads: `[cinecode.config.ts, source timelines and assets]`, Writes: `[.cinecode/cache, .cinecode/spool]`
+- **Requires Project:** `yes` (Selector: `optional`)
 
 #### Options
 
-| Option | Description | Default |
-| --- | --- | --- |
-| `--file <path>` | Standalone composition file (file mode) | `—` |
-| `-c, --composition <name>` | Composition name (requires --file) | `—` |
-| `-T, --timeline <id>` | Render a single timeline from main.ts | `—` |
-| `-s, --scene <id>` | Render a single scene from main.ts | `—` |
-| `--all` | Render every timeline | `false` |
-| `--preview` | Render preview quality (faster) | `false` |
-| `--quality <level>` | Quality: draft \| preview \| medium \| final \| lossless \| low \| high | `—` |
-| `--codec <codec>` | Video codec: h264 \| h265 \| av1 \| prores \| vp9 \| ffv1 \| utvideo | `—` |
-| `--crf <number>` | Override CRF (0 = lossless) | `—` |
-| `--fps <number>` | Override FPS | `—` |
-| `--resolution <WIDTHxHEIGHT>` | Override resolution | `—` |
-| `-o, --out <path>` | Output file path | `—` |
-| `--from <time>` | Start time (HH:MM:SS:FF, HH:MM:SS, MM:SS, 12.5s, 250ms, 12.5 (seconds), 30f or frames(30) (frame index)) | `—` |
-| `--to <time>` | End time (HH:MM:SS:FF, HH:MM:SS, MM:SS, 12.5s, 250ms, 12.5 (seconds), 30f or frames(30) (frame index)) | `—` |
-| `--concurrency <number\|auto>` | Number of worker threads | `—` |
-| `--memory-budget <mb>` | Render memory budget in MiB (frames queued + chunks in flight) | `—` |
-| `--chunk-size <frames>` | Frames per worker chunk (overrides the heuristic) | `—` |
-| `--hardware-acceleration <mode>` | Encoder backend: auto \| nvenc \| videotoolbox \| qsv \| off | `—` |
-| `--no-cache` | Disable render cache | `—` |
-| `--fresh` | Ignore resume state, start fresh | `false` |
-| `--resume` | Resume from the last durable render checkpoint | `false` |
-| `--overwrite` | Overwrite existing output file | `false` |
-| `--allow-invalid` | Render even when timeline validation reports fatal issues (recorded as a degradation) | `false` |
-| `--strict` | Fail when text glyphs fall back to another font family | `false` |
-| `--dry-run` | Print render plan without rendering | `false` |
-| `--seed <number>` | Random seed | `—` |
-| `--format <format>` | Output format: mp4, webm, prores, mkv, avi, gif, apng, png, jpg, webp, pdf, webm-alpha, prores-alpha | `—` |
-| `--preset <name>` | Platform preset (youtube-1080p, youtube-4k, youtube-shorts, tiktok, instagram-reels, instagram-feed-square, instagram-feed-portrait, instagram-post, linkedin, twitter, vimeo-pro, broadcast-sdi, archival-master, web-gif, web-webp) | `—` |
-| `--list-presets` | List available platform presets | `false` |
-| `--gif-quality <n>` | GIF quality 1-8 (controls palette size) | `—` |
-| `--gif-dither <mode>` | GIF dithering: floyd-steinberg, sierra-2, atkinson, none | `—` |
-| `--gif-max-frames <n>` | Maximum frames in GIF output | `—` |
-| `--lut <path>` | Path to a .cube LUT file for color grading | `—` |
-| `--effects <list>` | Comma-separated list of effects to apply (blur,bloom,chromatic-aberration) | `—` |
-| `--alpha` | Render with alpha channel (transparent background) | `—` |
-| `--two-pass` | Enable two-pass video encoding | `—` |
-| `--bitrate <rate>` | Video bitrate target (e.g. 5000k) | `—` |
-| `--with-audio` | Keep an audio stream even when the mix is silent | `false` |
-| `--audio-codec <codec>` | Audio codec: aac, opus, ac3, eac3, flac, pcm_s24le | `—` |
-| `--audio-bitrate <kbps>` | Audio bitrate in kbps for lossy codecs | `—` |
-| `--color-management <space>` | Color management mode: srgb or linear | `—` |
-| `--explain` | Print resolved parameters and their origins without rendering | `false` |
-| `--no-effects` | Disable all effects (fastest render) | `—` |
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| `-p, --port <number>` | `number` | `3000` | Port to listen on | [1..65535] |
+| `--host <host>` | `string` | `"127.0.0.1"` | Host to bind | — |
+| `--open` | `boolean` | `false` | Open the preview in the browser | — |
+| `--no-hmr` | `boolean` | `false` | Disable the HMR socket push | — |
 
-### `cinecode render-multi` {#render-multi}
+#### Examples
 
-Render one composition at multiple resolutions in a single run
-
-**Usage:** `cinecode render-multi ./composition.ts`
-
-#### Options
-
-| Option | Description | Default |
-| --- | --- | --- |
-| `-c, --composition <name>` | Composition name | `—` |
-| `--variants <list>` | Comma-separated variants (480p,720p,1080p,WIDTHxHEIGHT) | `480p,720p,1080p` |
-| `-o, --out <dir>` | Output directory | `—` |
-| `--seed <number>` | Random seed | `—` |
-| `--concurrency <number>` | Worker count | `—` |
+```bash
+cinecode dev --config ./cinecode.config.ts
+```
 
 ### `cinecode preview` {#preview}
 
 Start the read-only preview server and open viewer
 
-**Usage:** `cinecode preview --config ./cinecode.config.ts`
+- **Category:** `product`
+- **Kind:** `read`
+- **Surface Contract:** Reads: `[cinecode.config.ts, source timelines and assets]`, Writes: `[.cinecode/cache]`
+- **Requires Project:** `yes` (Selector: `optional`)
 
 #### Options
 
-| Option | Description | Default |
-| --- | --- | --- |
-| `-p, --port <number>` | Port to listen on | `—` |
-| `--host <host>` | Host to bind | `—` |
-| `--open` | Open the preview in the browser | `true` |
-| `--no-open` | Do not automatically open browser | `false` |
-| `--no-hmr` | Disable the HMR socket push | `—` |
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| `-p, --port <number>` | `number` | `3000` | Port to listen on | [1..65535] |
+| `--host <host>` | `string` | `"127.0.0.1"` | Host to bind | — |
+| `--open` | `boolean` | `false` | Open the preview in the browser | — |
+| `-T, --timeline <id>` | `string` | — | Timeline id from main.ts | — |
+| `-s, --scene <id>` | `string` | — | Scene id from main.ts | — |
 
-### `cinecode validate` {#validate}
+#### Examples
 
-Validate configuration, compositions, media, and fonts
+```bash
+cinecode preview --config ./cinecode.config.ts
+```
 
-**Usage:** `cinecode validate --config ./cinecode.config.ts`
+### `cinecode render` {#render}
 
-#### Options
+Render timelines or a composition to a video
 
-| Option | Description | Default |
-| --- | --- | --- |
-| `--strict` | Treat warnings as errors | `false` |
-| `--fix` | Auto-fix issues (currently: .gitignore) | `false` |
-
-### `cinecode check` {#check}
-
-Validate authoring code before rendering (no frames, no encode) — the CI pre-render gate
-
-**Usage:** `cinecode check --config ./cinecode.config.ts`
+- **Category:** `product`
+- **Kind:** `write`
+- **Surface Contract:** Reads: `[cinecode.config.ts, source timelines and assets, .cinecode/cache]`, Writes: `[output video file, .cinecode/cache, .cinecode/spool]`
+- **Requires Project:** `yes` (Selector: `selection`)
+- **Aliases:** `render-multi`
 
 #### Options
 
-| Option | Description | Default |
-| --- | --- | --- |
-| `--strict` | Treat warnings as errors | `false` |
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| `--file <path>` | `path` | — | Standalone composition file (file mode) | — |
+| `-c, --composition <name>` | `string` | — | Composition name (requires --file) | — |
+| `-T, --timeline <id>` | `string` | — | Timeline id from main.ts | — |
+| `-s, --scene <id>` | `string` | — | Scene id from main.ts | — |
+| `--all` | `boolean` | `false` | Render every timeline (default when no selector is given) | — |
+| `--preview` | `boolean` | `false` | Render preview quality (faster, appends .preview suffix) | — |
+| `-o, --out <path>` | `path` | — | Output file path | — |
+| `--from <time>` | `string` | — | Start time | — |
+| `--to <time>` | `string` | — | End time (clamped with degradation CC4001 if exceeding duration) | — |
+| `--format <format>` | `enum` | — | Output container format: mp4, mov, webm, gif, prores, wav, mp3 | `mp4`, `mov`, `webm`, `gif`, `prores`, `wav`, `mp3` |
+| `--codec <codec>` | `enum` | — | Video codec: h264, h265, prores, vp9, av1, raw | `h264`, `h265`, `prores`, `vp9`, `av1`, `raw` |
+| `-q, --quality <level>` | `enum` | — | Output quality level | `draft`, `preview`, `medium`, `final`, `lossless`, `low`, `high` |
+| `--crf <n>` | `number` | — | Constant Rate Factor (0-51) | [0..51] |
+| `--preset <name>` | `string` | — | Platform preset (youtube-1080p, youtube-4k, youtube-shorts, tiktok, instagram-reels, instagram-feed-square, instagram-feed-portrait, instagram-post, linkedin, twitter, vimeo-pro, broadcast-sdi, archival-master, web-gif, web-webp) | — |
+| `--fps <n>` | `number` | — | Override composition framerate | [1..240] |
+| `--resolution <WIDTHxHEIGHT>` | `string` | — | Override resolution | — |
+| `--resolutions <list>` | `string` | — | Comma-separated resolutions to render | — |
+| `--variants <list>` | `string` | — | Comma-separated variants to render | — |
+| `--concurrency <n|auto>` | `string` | `"auto"` | Worker thread concurrency | — |
+| `--chunk-size <frames>` | `number` | — | Frames per worker chunk | [1..10000] |
+| `--hardware-acceleration <mode>` | `enum` | — | Encoder backend: auto, nvenc, videotoolbox, vaapi, none | `auto`, `nvenc`, `videotoolbox`, `vaapi`, `none` |
+| `-r, --range <range>` | `string` | — | Frame range to render (e.g. 0-100) | — |
+| `--dry-run` | `boolean` | `false` | Print render plan without rendering | — |
+| `--fresh` | `boolean` | `false` | Ignore caches and render every frame anew | — |
+| `--resume` | `boolean` | `false` | Resume from the last durable render checkpoint | — |
+| `--no-cache` | `boolean` | `false` | Do not read or write the frame cache | — |
+| `--overwrite` | `boolean` | `false` | Overwrite output file if it exists | — |
+| `--allow-invalid` | `boolean` | `false` | Render even when timeline validation reports fatal issues | — |
+| `--strict` | `boolean` | `false` | Fail when text glyphs fall back to another font family | — |
+| `--seed <number>` | `number` | — | Random seed | [0..+∞] |
+| `--memory-budget <bytes>` | `string` | `"1GB"` | Max memory for chunk buffers (e.g. 2GB, 512MB) | — |
+| `--no-effects` | `boolean` | `false` | Disable all effects (fastest render) | — |
+| `--effects <list>` | `string` | — | Comma-separated list of effects to apply | — |
+| `--alpha` | `boolean` | `false` | Render with alpha channel (transparent background) | — |
+| `--two-pass` | `boolean` | `false` | Enable two-pass video encoding | — |
+| `--bitrate <rate>` | `string` | — | Video bitrate target (e.g. 5000k) | — |
+| `--with-audio` | `boolean` | `false` | Keep an audio stream even when the mix is silent | — |
+| `--audio-codec <codec>` | `enum` | — | Audio codec: aac, opus, ac3, eac3, flac, pcm_s24le | `aac`, `opus`, `ac3`, `eac3`, `flac`, `pcm_s24le` |
+| `--audio-bitrate <kbps>` | `number` | — | Audio bitrate in kbps for lossy codecs | [8..1024] |
+| `--color-management <space>` | `enum` | — | Color management mode: srgb or linear | `srgb`, `linear` |
+| `--lut <path>` | `path` | — | Path to a .cube LUT file for color grading | — |
+| `--gif-quality <n>` | `number` | — | GIF quality 1-8 | [1..8] |
+| `--gif-dither <mode>` | `enum` | — | GIF dithering | `floyd-steinberg`, `sierra-2`, `atkinson`, `none` |
+| `--gif-max-frames <n>` | `number` | — | Maximum frames in GIF output | [1..+∞] |
+| `--list-presets` | `boolean` | `false` | List available platform presets | — |
+| `--explain` | `boolean` | `false` | Print resolved parameters and their origins without rendering | — |
 
-### `cinecode doctor` {#doctor}
+#### Examples
 
-Run environment and project health checks
+```bash
+cinecode render --config ./cinecode.config.ts
+cinecode render --file ./composition.ts
+```
 
-**Usage:** `cinecode doctor --fix`
+### `cinecode still` {#still}
 
-#### Options
+Render a single frame to PNG or JPEG
 
-| Option | Description | Default |
-| --- | --- | --- |
-| `--fix` | Auto-fix issues where possible | `false` |
-
-### `cinecode health` {#health}
-
-Report ffmpeg, Node, worker, disk and canvas acceleration health (offline)
-
-**Usage:** `cinecode health --json`
-
-#### Options
-
-| Option | Description | Default |
-| --- | --- | --- |
-| `--cache <dir>` | Cache directory to inspect | `—` |
-| `--strict` | Exit non-zero when any issue is detected | `—` |
-
-### `cinecode inspect` {#inspect}
-
-Print resolved timeline for a composition
-
-**Usage:** `cinecode inspect ./composition.ts`
-
-#### Options
-
-| Option | Description | Default |
-| --- | --- | --- |
-| `--file <path>` | Standalone composition file (file mode) | `—` |
-| `-c, --composition <name>` | Composition name (requires --file) | `—` |
-| `--timeline <id>` | Timeline id from main.ts | `—` |
-| `--scene <id>` | Scene id from main.ts | `—` |
-| `-f, --frame <number>` | Show clips active at frame | `—` |
-| `--time <time>` | Show clips active at time (HH:MM:SS:FF, HH:MM:SS, MM:SS, 12.5s, 250ms, 12.5 (seconds), 30f or frames(30) (frame index)) | `—` |
-| `--deep` | Generate deep dependency graph across audio, visual, and effects | `false` |
-| `--format <format>` | Graph output format: dot, mermaid, ascii | `—` |
-
-### `cinecode clean` {#clean}
-
-Delete cache and/or output directories
-
-**Usage:** `cinecode clean --cache`
-
-#### Options
-
-| Option | Description | Default |
-| --- | --- | --- |
-| `--output` | Also empty output directory | `false` |
-| `--all` | Clean both cache and output | `false` |
-| `--force` | Skip confirmation prompt | `false` |
-| `--dry-run` | Print what would be deleted without deleting | `false` |
-| `--prune-stale-days <days>` | Prune cache entries unreferenced for N days instead of deleting everything | `—` |
-
-### `cinecode media:list` {#medialist}
-
-List all media files in the project
-
-**Usage:** `cinecode media:list --config ./cinecode.config.ts`
+- **Category:** `product`
+- **Kind:** `write`
+- **Surface Contract:** Reads: `[cinecode.config.ts, source timelines and assets]`, Writes: `[output image file]`
+- **Requires Project:** `yes` (Selector: `selection`)
 
 #### Options
 
-| Option | Description | Default |
-| --- | --- | --- |
-| `-o, --out <path>` | Output file path | `—` |
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| `--file <path>` | `path` | — | Standalone composition file (file mode) | — |
+| `-c, --composition <name>` | `string` | — | Composition name (requires --file) | — |
+| `-T, --timeline <id>` | `string` | — | Timeline id from main.ts | — |
+| `-s, --scene <id>` | `string` | — | Scene id from main.ts | — |
+| `-f, --frame <number>` | `number` | — | Frame number | [0..+∞] |
+| `--time <time>` | `string` | — | Time (00:00:01.000) | — |
+| `-o, --out <path>` | `path` | — | Output file path | — |
+| `--format <format>` | `enum` | — | Output format: png, jpg, jpeg, webp | `png`, `jpg`, `jpeg`, `webp` |
+| `--resolution <WIDTHxHEIGHT>` | `string` | — | Override resolution | — |
+| `--seed <number>` | `number` | — | Random seed | [0..+∞] |
+| `--dry-run` | `boolean` | `false` | Print render plan without rendering | — |
+| `--explain` | `boolean` | `false` | Print resolved parameters and their origins without rendering | — |
 
-### `cinecode media:download` {#mediadownload}
+#### Examples
 
-Download cloud media files into media directory
-
-**Usage:** `cinecode media:download --config ./cinecode.config.ts`
-
-#### Options
-
-| Option | Description | Default |
-| --- | --- | --- |
-| `--force` | Re-download existing files | `false` |
-| `--confirm` | Explicitly allow network downloads | `—` |
-| `--only <name>` | Download only the specified entry | `—` |
-
-### `cinecode create` {#create}
-
-Create a new Cinecode project
-
-**Usage:** `cinecode create my-film`
-
-#### Options
-
-| Option | Description | Default |
-| --- | --- | --- |
-| `--ts` | Use TypeScript (default) | `false` |
-| `--js` | Use JavaScript | `false` |
-| `--fps <number>` | Frames per second | `30` |
-| `--resolution <preset\|WxH>` | Resolution preset or WxH | `1920x1080` |
-| `--no-git` | Skip git initialization | `—` |
-| `--local-link` | Link local workspace dependency | `false` |
-| `--skip-install` | Skip dependency installation | `false` |
-| `--force` | Proceed even if directory is not empty | `false` |
-| `--dry-run` | Print plan without writing files | `false` |
-| `-v, --verbose` | Verbose output | `false` |
+```bash
+cinecode still ./composition.ts --frame 0
+```
 
 ### `cinecode generate` {#generate}
 
-Generate images, audio, scenes, or timelines from main.ts
+Generate images, audio, scenes or timelines
 
-**Usage:** `cinecode generate image --all`
-
-#### Options
-
-| Option | Description | Default |
-| --- | --- | --- |
-| `--id <id...>` | Only generate the given ids | `—` |
-| `--all` | Generate everything without prompting | `false` |
-| `-y, --yes` | Skip prompts and generate everything | `false` |
-| `--out <dir>` | Output directory override | `—` |
-| `--seed <number>` | Random seed | `—` |
-| `--concurrency <number\|auto>` | Number of worker threads | `—` |
-| `--overwrite` | Overwrite existing files | `false` |
-| `--silent` | Suppress progress output | `false` |
-| `--dry-run` | Resolve targets without writing | `false` |
-
-### `cinecode dev` {#dev}
-
-Start the dev server with granular HMR for scenes, images, and audio
-
-**Usage:** `cinecode dev --config ./cinecode.config.ts`
+- **Category:** `product`
+- **Kind:** `write`
+- **Surface Contract:** Reads: `[prompt or input script, cinecode.config.ts]`, Writes: `[generated composition file]`
+- **Requires Project:** `yes` (Selector: `none`)
 
 #### Options
 
-| Option | Description | Default |
-| --- | --- | --- |
-| `-p, --port <number>` | Port to listen on | `—` |
-| `--host <host>` | Host to bind | `—` |
-| `--open` | Open the preview in the browser | `false` |
-| `--no-hmr` | Disable the HMR socket push | `—` |
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| `--id <id...>` | `string` | — | Only generate the given ids | — |
+| `--all` | `boolean` | `false` | Generate everything without prompting | — |
+| `-y, --yes` | `boolean` | `false` | Skip prompts and generate everything | — |
+| `--out <dir>` | `path` | — | Output directory override | — |
+| `--seed <number>` | `number` | — | Random seed | [0..+∞] |
+| `--concurrency <number>` | `number` | `2` | Concurrent generations | [1..64] |
+| `--dry-run` | `boolean` | `false` | Preview actions without generating | — |
+| `--format <fmt>` | `string` | — | Media format override | — |
+| `--force` | `boolean` | `false` | Regenerate even if files exist | — |
 
-### `cinecode formats` {#formats}
+#### Examples
 
-List input, output and planned media formats
+```bash
+cinecode generate image --all
+```
 
-**Usage:** `cinecode formats --json`
+### `cinecode validate` {#validate}
 
-### `cinecode presets` {#presets}
+Validate configuration, compositions, media and fonts
 
-List platform deliverable presets (YouTube, TikTok, Instagram, X)
-
-**Usage:** `cinecode presets --json`
-
-### `cinecode thumbnail` {#thumbnail}
-
-Pick the best frame of a composition and write poster images
-
-**Usage:** `cinecode thumbnail ./composition.ts`
-
-#### Options
-
-| Option | Description | Default |
-| --- | --- | --- |
-| `-c, --composition <name>` | Composition name | `—` |
-| `-o, --output-dir <dir>` | Output directory | `—` |
-| `-n, --count <number>` | Number of candidates to list | `5` |
-| `-f, --frame <number>` | Force a specific frame | `—` |
-| `--format <png\|jpg\|webp>` | Image format | `png` |
-| `--seed <number>` | Random seed | `0` |
-
-### `cinecode edit` {#edit}
-
-Open a composition in your editor, or print it as JSON
-
-**Usage:** `cinecode edit ./composition.ts`
+- **Category:** `product`
+- **Kind:** `read`
+- **Surface Contract:** Reads: `[cinecode.config.ts, source timelines and assets]`, Writes: `[none]`
+- **Requires Project:** `yes` (Selector: `none`)
+- **Aliases:** `check`
 
 #### Options
 
-| Option | Description | Default |
-| --- | --- | --- |
-| `--editor <command>` | Editor command to launch | `—` |
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| `--mode <mode>` | `enum` | `"all"` | Validation mode: all, authoring-only, media, fonts | `all`, `authoring-only`, `media`, `fonts` |
+| `--strict` | `boolean` | `false` | Treat warnings as errors | — |
+| `--fix` | `boolean` | `false` | Auto-fix issues where possible | — |
 
-### `cinecode sync` {#sync}
+#### Examples
 
-Verify referenced media exists, prune stale cache entries and report orphans
+```bash
+cinecode validate --config ./cinecode.config.ts
+```
 
-**Usage:** `cinecode sync --json`
+### `cinecode clean` {#clean}
 
-#### Options
+Delete cache and output directories
 
-| Option | Description | Default |
-| --- | --- | --- |
-| `-d, --dir <path>` | Project directory | `.` |
-| `--cache <dir>` | Media cache directory | `—` |
-| `--no-prune` | Keep stale cache entries | `—` |
-| `--no-plugins` | Skip plugin auto-discovery | `—` |
-| `--ignore <pattern>` | Additional ignore pattern | `` |
-| `--no-default-ignores` | Disable built-in ignore patterns | `—` |
-| `--dry-run` | Preview sync operations without uploading, downloading or deleting | `false` |
-| `--delete-orphans` | Delete detected orphaned assets | `false` |
-| `-y, --yes` | Confirm destructive deletion of orphaned assets | `false` |
-
-### `cinecode compare` {#compare}
-
-Render two compositions and report per-frame pixel differences
-
-**Usage:** `cinecode compare ./a.ts ./b.ts`
+- **Category:** `product`
+- **Kind:** `destructive`
+- **Surface Contract:** Reads: `[.cinecode/cache, .cinecode/spool]`, Writes: `[.cinecode/cache, .cinecode/spool]`
+- **Requires Project:** `yes` (Selector: `none`)
+- **Aliases:** `sync`
 
 #### Options
 
-| Option | Description | Default |
-| --- | --- | --- |
-| `-n, --frames <number>` | Frames to compare | `60` |
-| `--seed <number>` | Deterministic seed | `—` |
-| `--diff <path>` | Write a side-by-side diff image of the worst frame | `—` |
-| `--composition-a <name>` | Composition name in first file | `—` |
-| `--composition-b <name>` | Composition name in second file | `—` |
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| `--cache` | `boolean` | `false` | Empty cache directory | — |
+| `--output` | `boolean` | `false` | Also empty output directory | — |
+| `--all` | `boolean` | `false` | Clean both cache and output | — |
+| `-y, --yes` | `boolean` | `false` | Skip confirmation prompt | — |
+| `--force` | `boolean` | `false` | Skip confirmation prompt | — |
+| `--dry-run` | `boolean` | `false` | Print what would be deleted without deleting | — |
+| `--prune` | `boolean` | `false` | Prune stale cache entries | — |
+| `--delete-orphans` | `boolean` | `false` | Delete detected orphaned assets | — |
+| `--prune-stale-days <days>` | `number` | — | Prune cache entries unreferenced for N days instead of deleting everything | [0..+∞] |
 
-### `cinecode benchmark` {#benchmark}
+#### Examples
 
-Measure per-frame render time, peak memory and regression tracking
-
-**Usage:** `cinecode benchmark ./composition.ts`
-
-#### Options
-
-| Option | Description | Default |
-| --- | --- | --- |
-| `-c, --composition-name <name>` | Composition name | `—` |
-| `-n, --frames <number>` | Frames per run | `30` |
-| `--runs <number>` | Number of runs | `3` |
-| `--seed <number>` | Deterministic seed | `—` |
-| `--compare-baseline` | Compare results against historical baseline | `false` |
-| `--fail-on-regression` | Exit with error code 1 if performance regresses > 5% | `false` |
-| `--save-baseline` | Save this benchmark run as official baseline | `false` |
-
-### `cinecode upgrade` {#upgrade}
-
-Check npm for a newer cinecode release
-
-**Usage:** `cinecode upgrade`
-
-#### Options
-
-| Option | Description | Default |
-| --- | --- | --- |
-| `--confirm` | Explicitly allow the npm network request | `—` |
-
-### `cinecode template` {#template}
-
-List or scaffold starter compositions
-
-**Usage:** `cinecode template list`
-
-#### Options
-
-| Option | Description | Default |
-| --- | --- | --- |
-| `--open` | Open the generated file in your editor | `—` |
-
-### `cinecode tts` {#tts}
-
-Text-to-speech voice utilities
-
-**Usage:** `cinecode tts voices`
-
-#### Options
-
-| Option | Description | Default |
-| --- | --- | --- |
-| `--list-voices` | List available voices | `false` |
-| `--language <code>` | Filter voices by language or locale | `—` |
-| `--search <text>` | Search voice names, locales and styles | `—` |
-| `--provider <name>` | Filter voices by provider | `—` |
-
-### `cinecode plugin` {#plugin}
-
-Inspect and scaffold local Cinecode plugins
-
-**Usage:** `cinecode plugin list`
-
-### `cinecode diff` {#diff}
-
-Semantic comparison between two compositions or git revisions
-
-**Usage:** `cinecode diff ./a.ts ./b.ts`
-
-#### Options
-
-| Option | Description | Default |
-| --- | --- | --- |
-| `--format <format>` | Output format: text or markdown (use --json for machine output) | `text` |
-| `--side-by-side` | Display terminal diff side-by-side | `false` |
-
-### `cinecode story` {#story}
-
-Generate a standalone interactive web player bundle for team review
-
-**Usage:** `cinecode story ./main.ts`
-
-#### Options
-
-| Option | Description | Default |
-| --- | --- | --- |
-| `-o, --out <dir>` | Output directory for web bundle | `./dist/story` |
-| `--title <title>` | Story title | `Cinecode Review` |
-| `--board <path>` | Storyboard JSON path (auto-detects ./storyboard.json) | `—` |
-
-### `cinecode export-svg` {#export-svg}
-
-Export composition frames as high-precision vector SVG graphics
-
-**Usage:** `cinecode export-svg ./main.ts`
-
-#### Options
-
-| Option | Description | Default |
-| --- | --- | --- |
-| `-f, --frame <number>` | Single frame number to export | `0` |
-| `-r, --range <range>` | Frame range to export (e.g. 0-60) | `—` |
-| `-o, --out <path>` | Output directory or file path | `./dist/svg` |
-| `--viewBox-precision <digits>` | Coordinate precision digits | `3` |
-| `--optimize` | Run SVGO optimization passes | `false` |
-| `-c, --composition <name>` | Composition name | `—` |
-
-### `cinecode audit` {#audit}
-
-Scan dependencies, plugins, and media assets for licenses and security vulnerabilities
-
-**Usage:** `cinecode audit --json`
-
-#### Options
-
-| Option | Description | Default |
-| --- | --- | --- |
-| `--allow-copyleft` | Do not fail on copyleft licenses (e.g. GPL, AGPL) | `false` |
-
-### `cinecode alias` {#alias}
-
-Manage shorthand CLI command aliases
-
-**Usage:** `cinecode alias list`
+```bash
+cinecode clean --cache
+```
 
 ### `cinecode init` {#init}
 
 Scaffold a new Cinecode project
 
-**Usage:** `cinecode init my-film`
+- **Category:** `product`
+- **Kind:** `write`
+- **Surface Contract:** Reads: `[target directory]`, Writes: `[project files, cinecode.config.ts, package.json]`
+- **Requires Project:** `no`
+- **Aliases:** `create`
 
 #### Options
 
-| Option | Description | Default |
-| --- | --- | --- |
-| `--ts` | Use TypeScript (default) | `false` |
-| `--js` | Use JavaScript | `false` |
-| `--fps <number>` | Frames per second | `30` |
-| `--resolution <preset\|WxH>` | Resolution preset or WxH | `1920x1080` |
-| `--no-git` | Skip git initialization | `—` |
-| `--local-link` | Link local workspace dependency | `false` |
-| `--skip-install` | Skip dependency installation | `false` |
-| `--force` | Proceed even if directory is not empty | `false` |
-| `--dry-run` | Print plan without writing files | `false` |
-| `-v, --verbose` | Verbose output | `false` |
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| `-t, --template <name>` | `string` | — | Project template name | — |
+| `-n, --name <name>` | `string` | — | Project name | — |
+| `-y, --yes` | `boolean` | `false` | Skip interactive questionnaire and use defaults | — |
+| `--ts` | `boolean` | `true` | Use TypeScript | — |
+| `--js` | `boolean` | `false` | Use JavaScript | — |
+| `--fps <number>` | `number` | `30` | Frames per second | [1..240] |
+| `--resolution <preset|WxH>` | `string` | `"1920x1080"` | Resolution preset or WxH | — |
+| `--no-git` | `boolean` | `false` | Skip git initialization | — |
+| `--skip-install` | `boolean` | `false` | Skip dependency installation | — |
+| `--force` | `boolean` | `false` | Proceed even if directory is not empty | — |
+| `--dry-run` | `boolean` | `false` | Print plan without writing files | — |
+
+#### Examples
+
+```bash
+cinecode init my-film
+```
+
+### `cinecode doctor` {#doctor}
+
+Run environment and project health checks
+
+- **Category:** `product`
+- **Kind:** `read`
+- **Surface Contract:** Reads: `[system environment, ffmpeg binary, node binary, cinecode.config.ts]`, Writes: `[.gitignore (with --fix), .cinecode/cache (with --fix)]`
+- **Requires Project:** `no`
+- **Aliases:** `health`
+
+#### Options
+
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| `--fix` | `boolean` | `false` | Auto-fix issues where possible | — |
+| `--strict` | `boolean` | `false` | Exit non-zero when any issue is detected | — |
+| `--cache <dir>` | `path` | — | Cache directory to inspect | — |
+
+#### Examples
+
+```bash
+cinecode doctor --fix
+```
+
+### `cinecode inspect` {#inspect}
+
+Print the resolved timeline for a composition
+
+- **Category:** `product`
+- **Kind:** `read`
+- **Surface Contract:** Reads: `[cinecode.config.ts, source composition]`, Writes: `[none]`
+- **Requires Project:** `yes` (Selector: `optional`)
+
+#### Options
+
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| `--file <path>` | `path` | — | Standalone composition file (file mode) | — |
+| `-c, --composition <name>` | `string` | — | Composition name (requires --file) | — |
+| `--timeline <id>` | `string` | — | Timeline id from main.ts | — |
+| `--scene <id>` | `string` | — | Scene id from main.ts | — |
+| `-f, --frame <number>` | `number` | — | Show clips active at frame | [0..+∞] |
+| `--time <time>` | `string` | — | Show clips active at time | — |
+| `--deep` | `boolean` | `false` | Generate deep dependency graph across audio, visual, and effects | — |
+| `--format <format>` | `enum` | — | Graph output format: dot, mermaid, ascii | `dot`, `mermaid`, `ascii` |
+| `--depth <number>` | `number` | `3` | Max clip nesting depth to display | [1..100] |
+
+#### Examples
+
+```bash
+cinecode inspect ./composition.ts
+```
+
+### `cinecode media` {#media}
+
+Manage project media files and cloud assets
+
+- **Category:** `resource`
+- **Kind:** `read`
+- **Surface Contract:** Reads: `[cinecode.config.ts, media sources, network (download)]`, Writes: `[media directory, .cinecode/cache]`
+- **Requires Project:** `yes` (Selector: `none`)
+- **Aliases:** `media:list`, `media:download`
+
+#### Options
+
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| `--type <video|audio|image>` | `enum` | — | Filter by media type | `video`, `audio`, `image` |
+| `--missing` | `boolean` | `false` | Show only missing referenced media files | — |
+| `-o, --out <path>` | `path` | — | Output file path | — |
+| `--force` | `boolean` | `false` | Re-download existing files | — |
+| `--confirm` | `boolean` | `false` | Explicitly allow network downloads | — |
+| `--only <name>` | `string` | — | Download only the specified entry | — |
+
+#### Examples
+
+```bash
+cinecode media list
+cinecode media download
+```
+
+### `cinecode plugin` {#plugin}
+
+Manage installed plugins
+
+- **Category:** `resource`
+- **Kind:** `read`
+- **Surface Contract:** Reads: `[cinecode.config.ts, package.json, plugin manifests]`, Writes: `[plugin files (scaffold)]`
+- **Requires Project:** `no`
+
+#### Options
+
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| `--type <type>` | `enum` | `"effect"` | Plugin template type: effect, transition, audio-effect, clip-type | `effect`, `transition`, `audio-effect`, `clip-type` |
+| `--desc <description>` | `string` | `""` | Plugin description | — |
+| `-a, --author <author>` | `string` | `""` | Author name | — |
+
+#### Examples
+
+```bash
+cinecode plugin list
+```
+
+### `cinecode formats` {#formats}
+
+List input, output and planned media formats
+
+- **Category:** `resource`
+- **Kind:** `read`
+- **Surface Contract:** Reads: `[ffmpeg encoders, system codecs]`, Writes: `[none]`
+- **Requires Project:** `no`
+
+#### Options
+
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| — | — | — | No command-specific options | — |
+
+#### Examples
+
+```bash
+cinecode formats --json
+```
+
+### `cinecode presets` {#presets}
+
+List platform deliverable presets
+
+- **Category:** `resource`
+- **Kind:** `read`
+- **Surface Contract:** Reads: `[built-in presets, cinecode.config.ts]`, Writes: `[none]`
+- **Requires Project:** `no`
+
+#### Options
+
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| `--list-presets` | `boolean` | `false` | List available platform presets | — |
+
+#### Examples
+
+```bash
+cinecode presets --json
+```
+
+### `cinecode thumbnail` {#thumbnail}
+
+Write poster images from the best frame
+
+- **Category:** `resource`
+- **Kind:** `write`
+- **Surface Contract:** Reads: `[source composition, cinecode.config.ts]`, Writes: `[thumbnail image file]`
+- **Requires Project:** `yes` (Selector: `optional`)
+
+#### Options
+
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| `-c, --composition <name>` | `string` | — | Composition name | — |
+| `-o, --output-dir <dir>` | `path` | — | Output directory | — |
+| `-n, --count <number>` | `number` | `3` | Number of candidates to list | [1..100] |
+| `-f, --frame <number>` | `number` | — | Force a specific frame | [0..+∞] |
+| `--format <png|jpg|webp>` | `enum` | `"png"` | Image format: png, jpg, webp | `png`, `jpg`, `webp` |
+| `--seed <number>` | `number` | — | Random seed | [0..+∞] |
+
+#### Examples
+
+```bash
+cinecode thumbnail ./composition.ts
+```
+
+### `cinecode export-svg` {#export-svg}
+
+Export frames as vector SVG graphics
+
+- **Category:** `resource`
+- **Kind:** `write`
+- **Surface Contract:** Reads: `[source composition, cinecode.config.ts]`, Writes: `[output svg file]`
+- **Requires Project:** `yes` (Selector: `optional`)
+
+#### Options
+
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| `-f, --frame <number>` | `number` | `0` | Single frame number to export | [0..+∞] |
+| `-r, --range <range>` | `string` | — | Frame range to export (e.g. 0-60) | — |
+| `-o, --out <path>` | `path` | `"./dist/svg"` | Output directory or file path | — |
+| `--viewBox-precision <digits>` | `number` | `3` | Coordinate precision digits | [0..10] |
+| `--optimize` | `boolean` | `false` | Run SVGO optimization passes | — |
+| `-c, --composition <name>` | `string` | — | Composition name | — |
+
+#### Examples
+
+```bash
+cinecode export-svg ./main.ts
+```
+
+### `cinecode story` {#story}
+
+Generate a standalone web player bundle
+
+- **Category:** `resource`
+- **Kind:** `write`
+- **Surface Contract:** Reads: `[cinecode.config.ts, source composition]`, Writes: `[storyboard image files]`
+- **Requires Project:** `yes` (Selector: `optional`)
+
+#### Options
+
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| `-o, --out <dir>` | `path` | `"./dist/story"` | Output directory for web bundle | — |
+| `--title <title>` | `string` | `"Cinecode Review"` | Story title | — |
+| `--board <path>` | `path` | — | Storyboard JSON path (auto-detects ./storyboard.json) | — |
+
+#### Examples
+
+```bash
+cinecode story ./main.ts
+```
+
+### `cinecode tts` {#tts}
+
+Text-to-speech voice utilities
+
+- **Category:** `resource`
+- **Kind:** `read`
+- **Surface Contract:** Reads: `[text input, cinecode.config.ts, tts models]`, Writes: `[output audio file]`
+- **Requires Project:** `no`
+
+#### Options
+
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| `--list-voices` | `boolean` | `false` | List available voices | — |
+| `--language <code>` | `string` | — | Filter voices by language or locale | — |
+| `--search <text>` | `string` | — | Search voice names, locales and styles | — |
+| `--provider <name>` | `string` | — | Filter voices by provider | — |
+
+#### Examples
+
+```bash
+cinecode tts voices
+```
+
+### `cinecode compare` {#compare}
+
+Pixel-diff two compositions
+
+- **Category:** `resource`
+- **Kind:** `read`
+- **Surface Contract:** Reads: `[source compositions, cinecode.config.ts]`, Writes: `[diff image file (optional)]`
+- **Requires Project:** `no`
+
+#### Options
+
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| `-n, --frames <number>` | `number` | `10` | Frames to compare | [1..10000] |
+| `--seed <number>` | `number` | `42` | Deterministic seed | [0..+∞] |
+| `--diff <path>` | `path` | — | Write a side-by-side diff image of the worst frame | — |
+| `--composition-a <name>` | `string` | — | Composition name in first file | — |
+| `--composition-b <name>` | `string` | — | Composition name in second file | — |
+
+#### Examples
+
+```bash
+cinecode compare ./a.ts ./b.ts
+```
+
+### `cinecode diff` {#diff}
+
+Semantic diff between compositions or revisions
+
+- **Category:** `resource`
+- **Kind:** `read`
+- **Surface Contract:** Reads: `[source composition files, git revisions]`, Writes: `[none]`
+- **Requires Project:** `no`
+
+#### Options
+
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| `--format <format>` | `enum` | `"text"` | Output format: text or markdown | `text`, `markdown` |
+| `--side-by-side` | `boolean` | `false` | Display terminal diff side-by-side | — |
+
+#### Examples
+
+```bash
+cinecode diff ./a.ts ./b.ts
+```
+
+### `cinecode audit` {#audit}
+
+Scan dependencies and assets for licences
+
+- **Category:** `maintenance`
+- **Kind:** `read`
+- **Surface Contract:** Reads: `[rendered video file, ffmpeg binary]`, Writes: `[audit report file (optional)]`
+- **Requires Project:** `yes` (Selector: `none`)
+
+#### Options
+
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| `--allow-copyleft` | `boolean` | `false` | Do not fail on copyleft licenses (e.g. GPL, AGPL) | — |
+
+#### Examples
+
+```bash
+cinecode audit --json
+```
+
+### `cinecode benchmark` {#benchmark}
+
+Measure frame time, memory and worker capacity
+
+- **Category:** `maintenance`
+- **Kind:** `read`
+- **Surface Contract:** Reads: `[cinecode.config.ts, source composition]`, Writes: `[benchmark baseline file (optional)]`
+- **Requires Project:** `yes` (Selector: `optional`)
+
+#### Options
+
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| `-c, --composition-name <name>` | `string` | — | Composition name | — |
+| `-n, --frames <number>` | `number` | `60` | Frames per run | [1..100000] |
+| `--runs <number>` | `number` | `3` | Number of runs | [1..100] |
+| `--seed <number>` | `number` | `42` | Deterministic seed | [0..+∞] |
+| `--compare-baseline` | `boolean` | `false` | Compare results against historical baseline | — |
+| `--fail-on-regression` | `boolean` | `false` | Exit with error code 1 if performance regresses > 5% | — |
+| `--save-baseline` | `boolean` | `false` | Save this benchmark run as official baseline | — |
+
+#### Examples
+
+```bash
+cinecode benchmark ./composition.ts
+```
 
 ### `cinecode migrate` {#migrate}
 
-Automatically migrate cinecode.config schema to the latest version
+Migrate the config schema to the latest version
 
-**Usage:** `cinecode migrate ./cinecode.config.ts`
+- **Category:** `maintenance`
+- **Kind:** `destructive`
+- **Surface Contract:** Reads: `[cinecode.config.ts]`, Writes: `[migrated config file, backup file (.bak)]`
+- **Requires Project:** `yes` (Selector: `none`)
 
 #### Options
 
-| Option | Description | Default |
-| --- | --- | --- |
-| `--dry-run` | Preview the migration without writing files | `false` |
-| `--backup` | Create a backup file (.bak) before modifying | `false` |
-| `-y, --yes` | Skip interactive confirmation prompt for in-place migration | `false` |
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| `-o, --out <path>` | `path` | — | Write migrated config to a new file instead of replacing in-place | — |
+| `--backup` | `boolean` | `false` | Create a backup file (.bak) before modifying | — |
+| `-y, --yes` | `boolean` | `false` | Skip interactive confirmation prompt for in-place migration | — |
+| `--dry-run` | `boolean` | `false` | Print migrated config to stdout without modifying files | — |
+
+#### Examples
+
+```bash
+cinecode migrate ./cinecode.config.ts
+```
 
 ### `cinecode check-ignore` {#check-ignore}
 
-Check if paths match .cinecodeignore exclusion rules
+Check paths against .cinecodeignore rules
 
-**Usage:** `cinecode check-ignore ./output/intro.mp4`
+- **Category:** `maintenance`
+- **Kind:** `read`
+- **Surface Contract:** Reads: `[.cinecodeignore, target paths]`, Writes: `[none]`
+- **Requires Project:** `yes` (Selector: `none`)
 
 #### Options
 
-| Option | Description | Default |
-| --- | --- | --- |
-| `-v, --verbose` | Show detailed rule matching and line numbers | `false` |
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| — | — | — | No command-specific options | — |
+
+#### Examples
+
+```bash
+cinecode check-ignore ./output/intro.mp4
+```
+
+### `cinecode alias` {#alias}
+
+Manage shorthand CLI command aliases
+
+- **Category:** `maintenance`
+- **Kind:** `read`
+- **Surface Contract:** Reads: `[.cinecode/profiles.json, cinecode.config.ts]`, Writes: `[.cinecode/profiles.json]`
+- **Requires Project:** `no`
+
+#### Options
+
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| — | — | — | No command-specific options | — |
+
+#### Examples
+
+```bash
+cinecode alias list
+```
 
 ### `cinecode publish` {#publish}
 
-Publish a rendered output locally to a destination directory
+Publish a rendered output to a destination
 
-**Usage:** `cinecode publish ./output/videos/intro.mp4`
+- **Category:** `maintenance`
+- **Kind:** `write`
+- **Surface Contract:** Reads: `[rendered output file]`, Writes: `[destination directory]`
+- **Requires Project:** `no`
 
 #### Options
 
-| Option | Description | Default |
-| --- | --- | --- |
-| `--dest <dir>` | Local destination directory | `—` |
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| `-d, --dest <dir>` | `path` | — | Local destination directory | — |
+| `--tag <tag>` | `string` | — | Tag or release identifier | — |
 
-## Platform presets
+#### Examples
 
-Generated from the single preset table; `--preset`, `render.platformPreset` and `presets --json` use the same values.
+```bash
+cinecode publish ./output/videos/intro.mp4
+```
 
-| ID | Size | FPS | Format | Codec | CRF | Encoder preset | Audio | Max file size |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `youtube-1080p` | 1920x1080 | 30 | mp4 | h264 | 18 | fast | aac 192 kbps | none |
-| `youtube-4k` | 3840x2160 | 30 | mp4 | h265 | 15 | medium | aac 384 kbps | none |
-| `youtube-shorts` | 1080x1920 | 30 | mp4 | h264 | 20 | fast | aac 128 kbps | none |
-| `tiktok` | 1080x1920 | 30 | mp4 | h264 | 20 | veryfast | aac 128 kbps | 287 MB |
-| `instagram-reels` | 1080x1920 | 30 | mp4 | h264 | 20 | fast | aac 128 kbps | 400 MB |
-| `instagram-feed-square` | 1080x1080 | 30 | mp4 | h264 | 20 | fast | aac 128 kbps | none |
-| `instagram-feed-portrait` | 1080x1350 | 30 | mp4 | h264 | 20 | fast | aac 128 kbps | none |
-| `instagram-post` | 1080x1080 | 30 | mp4 | h264 | 20 | fast | aac 128 kbps | none |
-| `linkedin` | 1920x1080 | 30 | mp4 | h264 | 20 | fast | aac 128 kbps | none |
-| `twitter` | 1920x1080 | 30 | mp4 | h264 | 20 | superfast | aac 128 kbps | 512 MB |
-| `vimeo-pro` | 1920x1080 | 24 | mp4 | h264 | 15 | slow | aac 320 kbps | none |
-| `broadcast-sdi` | 1920x1080 | 25 | prores | prores | 0 | slow | pcm_s24le 2304 kbps | none |
-| `archival-master` | 1920x1080 | 24 | prores-alpha | prores | 0 | slow | pcm_s24le 2304 kbps | none |
-| `web-gif` | 500x500 | 15 | gif | h264 | 0 | medium | none | 5 MB |
-| `web-webp` | 1080x1080 | 30 | webp | h264 | 0 | medium | none | none |
+### `cinecode upgrade` {#upgrade}
 
-## Validation warnings
+Compare the installed version with npm
 
-`check` and `inspect` report these warnings once per command. `check --strict` turns every warning into a failure with exit code `3`.
+- **Category:** `maintenance`
+- **Kind:** `network`
+- **Surface Contract:** Reads: `[package.json, npm registry]`, Writes: `[package.json, node_modules]`
+- **Requires Project:** `no`
 
-| Code | Meaning |
-| --- | --- |
-| `CC3009` | An image, audio or scene entry is not referenced by any timeline. The entry stays valid as a direct `generate` or `render` target. |
-| `CC3010` | A timeline declares `sceneRefs` that its `file` replaces. Remove one source. |
+#### Options
 
-## Exit Codes
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| `--confirm` | `boolean` | `false` | Explicitly allow the npm network request | — |
 
-All CLI commands exit with standard codes indicating outcome:
+#### Examples
 
-| Code | Status | Meaning |
-| --- | --- | --- |
-| `0` | **success** | command completed |
-| `1` | **runtime** | render, pipeline or unexpected failure |
-| `2` | **usage** | invalid arguments, flags or command |
-| `3` | **validation** | config, media, timeline or plugin validation failure |
-| `4` | **environment** | missing binary or network failure |
-| `78` | **unsupportedRuntime** | Node.js version below the declared minimum (exit 78, no other work done) |
-| `130` | **cancelled** | cancelled by user or timeout |
+```bash
+cinecode upgrade
+```
+
+### `cinecode help` {#help}
+
+Show help for Cinecode commands
+
+- **Category:** `informational`
+- **Kind:** `read`
+- **Surface Contract:** Reads: `[command registry]`, Writes: `[stdout]`
+- **Requires Project:** `no`
+
+#### Options
+
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| `--all` | `boolean` | `false` | Show all commands including maintenance and informational | — |
+
+#### Examples
+
+```bash
+cinecode help
+cinecode help render
+cinecode help --all
+```
+
+### `cinecode version` {#version}
+
+Show the Cinecode version
+
+- **Category:** `informational`
+- **Kind:** `read`
+- **Surface Contract:** Reads: `[package.json]`, Writes: `[stdout]`
+- **Requires Project:** `no`
+
+#### Options
+
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| — | — | — | No command-specific options | — |
+
+#### Examples
+
+```bash
+cinecode version
+```
+
+### `cinecode licence` {#licence}
+
+Show license information
+
+- **Category:** `informational`
+- **Kind:** `read`
+- **Surface Contract:** Reads: `[LICENSE file]`, Writes: `[stdout]`
+- **Requires Project:** `no`
+- **Aliases:** `license`
+
+#### Options
+
+| Flag | Type | Default | Description | Bounds / Choices |
+| --- | --- | --- | --- | --- |
+| — | — | — | No command-specific options | — |
+
+#### Examples
+
+```bash
+cinecode licence
+cinecode license
+```

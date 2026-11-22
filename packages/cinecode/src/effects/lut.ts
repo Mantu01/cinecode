@@ -1,6 +1,7 @@
 import type { EffectInput, EffectProcessor } from "./engine.js";
 import { defineEffect, getData, putData } from "./engine.js";
 import { loadCubeLut, loadCubeLutSync, parseCubeLut, type CubeLut } from "./lut-cube-parser.js";
+import { createError, ErrorCode } from "../errors/index.js";
 
 export type { CubeLut } from "./lut-cube-parser.js";
 export { loadCubeLut, loadCubeLutSync, parseCubeLut } from "./lut-cube-parser.js";
@@ -56,12 +57,12 @@ export function getPreloadedLut(filePath: string): CubeLut | undefined {
 
 export async function loadLut(filePath: string): Promise<Lut3D> {
   const lut = await preloadLut(filePath);
-  if (lut.type !== "3d") throw new Error(`CC6008: ${filePath} is a 1D LUT; use applyCubeLut for 1D application`);
+  if (lut.type !== "3d") throw createError(ErrorCode.CC6008, { path: filePath });
   return { size: lut.size, data: lut.data };
 }
 
 export function cubeLutTo3D(lut: CubeLut): Lut3D {
-  if (lut.type !== "3d") throw new Error("CC6008: LUT is not three-dimensional");
+  if (lut.type !== "3d") throw createError(ErrorCode.CC6008, { path: "LUT" });
   return { size: lut.size, data: lut.data };
 }
 

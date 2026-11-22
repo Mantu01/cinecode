@@ -56,12 +56,10 @@ export class CancellationController {
     this.pressCount += 1;
     if (this.pressCount > 1 || this.completing) {
       this.options.onForceExit?.(signal);
-      if (this.options.exitProcess !== false) process.exit(this.options.forceExitCode ?? 1);
       return;
     }
     this.completing = true;
     await this.cancel(signal);
-    if (this.options.exitProcess !== false) process.exit(this.exitCodeFor(signal));
   }
 
   async cancel(signal: TerminationSignal = "SIGINT"): Promise<void> {
@@ -75,6 +73,7 @@ export class CancellationController {
     try {
       await Promise.race([Promise.resolve(this.options.onCancel(signal)), timeout]);
     } catch {
+      // Note: cancellation callback error must not interrupt shutdown
       void 0;
     } finally {
       if (timer !== undefined) clearTimeout(timer);

@@ -1,3 +1,5 @@
+import { createError, ErrorCode } from "../errors/index.js";
+
 export interface PixelBufferPoolOptions {
   readonly width: number;
   readonly height: number;
@@ -24,7 +26,7 @@ export class PixelBufferPool {
 
   constructor(options: PixelBufferPoolOptions) {
     if (options.width <= 0 || options.height <= 0) {
-      throw new RangeError(`[CC2301] Pixel buffer dimensions must be positive, got ${options.width}x${options.height}`);
+      throw createError(ErrorCode.CC2301, { dimensions: `${options.width}x${options.height}` });
     }
     this.frameWidth = options.width;
     this.frameHeight = options.height;

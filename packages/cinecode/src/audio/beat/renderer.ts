@@ -33,6 +33,7 @@ export async function renderBeatInfo(
       const decoded = await decodeAudioFile(clip.src, { cache, targetSampleRate: sampleRate, targetChannels: 1 });
       onsets.push(...detectOnsets(decoded.buffer));
     } catch {
+      // Note: skip unreadable audio clip during onset detection
       void 0;
     }
   }

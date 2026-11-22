@@ -46,6 +46,7 @@ async function loadIndexFiles(cacheDir: string): Promise<IndexFileState[]> {
       if (index.version !== 2 || typeof index.frames !== "object") continue;
       states.push({ path, hash: file.slice(0, -5), index, modified: info.mtimeMs });
     } catch {
+      // Note: skip unreadable or corrupt cache index entry
       void 0;
     }
   }

@@ -1,258 +1,145 @@
-import { createError, ErrorCode, type ErrorLocation } from "../errors/codes.js";
-import type { CommandOutcome } from "./command-registry.js";
+import { recordNote } from "../errors/degradations.js";
+import { MACHINE_SCHEMA_VERSION } from "../contracts.js";
 import {
-  pendingDegradations,
-  pendingWarnings,
-  recordWarning,
-  resetDiagnostics,
-  type Degradation,
-  type WarningRecord,
-} from "../errors/degradations.js";
+  Reporter,
+  type ArtifactRecord,
+  type CommandDescriptor,
+  type MachineEnvelope,
+  type MachineErrorRecord,
+  type ProjectRecord,
+  type ResourceUsageRecord,
+  type TargetSummary,
+} from "./reporter.js";
 
 export { MACHINE_SCHEMA_VERSION } from "../contracts.js";
-import { MACHINE_SCHEMA_VERSION } from "../contracts.js";
+export type {
+  ArtifactRecord,
+  CommandDescriptor,
+  MachineErrorRecord,
+  ProjectRecord,
+  ResourceUsageRecord,
+  TargetSummary,
+} from "./reporter.js";
 
-export interface CommandDescriptor {
-  readonly name: string;
-  readonly outcome: CommandOutcome;
-  readonly network: boolean;
-  readonly destructive: boolean;
-}
-
-export interface ProjectRecord {
-  readonly root: string;
-  readonly config?: string;
-  readonly manifest?: string;
-  readonly source?: "root-flag" | "config-flag" | "discovered" | "standalone";
-  readonly mode?: "project" | "file";
-  readonly selection?: string;
-  readonly resolution?: Record<string, unknown>;
-}
-
-export interface ArtifactRecord {
-  readonly kind: string;
-  readonly path: string;
-  readonly units?: number;
-  readonly unit?: string;
-}
-
-export interface MachineErrorRecord {
-  readonly code: string;
-  readonly message: string;
-  readonly path?: string;
-  readonly location?: ErrorLocation;
-  readonly fixHint?: string;
-  readonly cause?: string;
-  readonly issues?: readonly unknown[];
-}
-
-export interface MachineReport {
-  readonly schemaVersion: typeof MACHINE_SCHEMA_VERSION;
-  readonly command: string;
-  readonly ok: boolean;
-  readonly degraded: boolean;
-  readonly project: ProjectRecord | null;
-  readonly result: Record<string, unknown>;
-  readonly artifacts: readonly ArtifactRecord[];
-  readonly warnings: readonly WarningRecord[];
-  readonly degradations: readonly Degradation[];
-  readonly descriptor: CommandDescriptor | null;
-  readonly timing: { readonly startedAt: string; readonly durationMs: number };
-  readonly error?: MachineErrorRecord;
-}
+export type MachineReport = MachineEnvelope;
 
 export class RunReport {
-  private command = "cinecode";
-  private startedAt = new Date();
-  private projectRecord: ProjectRecord | null = null;
-  private resolutionRecord: Record<string, unknown> | undefined;
-  private resultPayload: Record<string, unknown> = {};
-  private artifacts: ArtifactRecord[] = [];
-  private expectedArtifacts = 0;
-  private expectedArtifactKinds: string[] = [];
-  private descriptorRecord: CommandDescriptor | null = null;
-  private informationalNote: string | undefined;
-  private cacheDirRecord: string | undefined;
-  private machine = false;
+  private activeReporter: Reporter | undefined = undefined;
 
-  /** Resets per-invocation diagnostics; called once, before any command work. */
+  setReporter(reporter: Reporter): void {
+    this.activeReporter = reporter;
+  }
+
+  getReporter(): Reporter {
+    if (!this.activeReporter) {
+      this.activeReporter = new Reporter();
+    }
+    return this.activeReporter;
+  }
+
   reset(): void {
-    resetDiagnostics();
+    this.getReporter().reset();
   }
 
-  /** Starts or re-labels the report without dropping collected diagnostics. */
   start(command: string, machine = false): void {
-    this.command = command;
-    this.startedAt = new Date();
-    this.projectRecord = null;
-    this.resolutionRecord = undefined;
-    this.resultPayload = {};
-    this.artifacts = [];
-    this.expectedArtifacts = 0;
-    this.expectedArtifactKinds = [];
-    this.descriptorRecord = null;
-    this.informationalNote = undefined;
-    this.cacheDirRecord = undefined;
-    this.machine = machine;
+    this.getReporter().start(command, machine);
   }
 
-  /** Alias resolution renames the run without restarting the collection. */
   relabel(command: string): void {
-    this.command = command;
+    this.getReporter().relabel(command);
   }
 
-  /** The registry declares what the command produces; the summary reads it here. */
   describe(spec: CommandDescriptor): void {
-    this.descriptorRecord = { name: spec.name, outcome: spec.outcome, network: spec.network, destructive: spec.destructive };
+    this.getReporter().describe(spec);
   }
 
   descriptor(): CommandDescriptor | null {
-    return this.descriptorRecord;
+    return this.getReporter().descriptor();
   }
 
-  /** A command that returned early because the user asked for information. */
   note(message: string): void {
-    this.informationalNote = message;
+    recordNote(message);
+    this.getReporter().note(message);
+  }
+
+  writeRawStdout(text: string): void {
+    this.getReporter().writeRawStdout(text);
   }
 
   setMachine(machine: boolean): void {
-    this.machine = machine;
+    this.getReporter().setMachine(machine);
   }
 
   isMachine(): boolean {
-    return this.machine;
+    return this.getReporter().isMachine();
   }
 
   setCacheDir(dir: string): void {
-    this.cacheDirRecord = dir;
+    this.getReporter().setCacheDir(dir);
   }
 
   cacheDir(): string | undefined {
-    return this.cacheDirRecord;
-  }
-
-  getCommand(): string {
-    return this.command;
+    return this.getReporter().cacheDir();
   }
 
   setProject(project: ProjectRecord): void {
-    this.projectRecord = project;
+    this.getReporter().setProject(project);
   }
 
   project(): ProjectRecord | null {
-    return this.projectRecord;
+    return this.getReporter().project();
   }
 
-  /** Mode, root, manifest and selection resolved once for this invocation. */
   resolution(record: Record<string, unknown> | undefined): void {
-    this.resolutionRecord = record;
+    this.getReporter().resolution(record);
   }
 
-  private projectOutput(): ProjectRecord | null {
-    if (!this.projectRecord) return null;
-    return this.resolutionRecord
-      ? { ...this.projectRecord, resolution: this.resolutionRecord }
-      : this.projectRecord;
+  explain(explainTree: unknown): void {
+    this.getReporter().setExplain(explainTree);
   }
 
   result(payload: Record<string, unknown>): void {
-    this.resultPayload = { ...this.resultPayload, ...payload };
+    this.getReporter().result(payload);
+  }
+
+  resourceUsage(usage: Partial<ResourceUsageRecord>): void {
+    this.getReporter().setResourceUsage(usage);
   }
 
   warn(code: string, message: string, input?: string): void {
-    recordWarning({ code, message, input });
+    this.getReporter().warn(code, message, input);
   }
 
   expectArtifact(kind: string): void {
-    this.expectedArtifacts += 1;
-    this.expectedArtifactKinds.push(kind);
+    this.getReporter().expectArtifact(kind);
   }
 
-  artifact(artifact: ArtifactRecord): void {
-    this.artifacts.push(artifact);
+  artifact(artifact: ArtifactRecord, options?: { readonly checksum?: boolean }): void {
+    this.getReporter().artifact(artifact, options);
   }
 
   artifactCount(): number {
-    return this.artifacts.length;
+    return this.getReporter().artifactCount();
   }
 
   artifactList(): readonly ArtifactRecord[] {
-    return this.artifacts;
+    return this.getReporter().artifactList();
   }
 
-  finish(): MachineReport {
-    if (this.expectedArtifacts > this.artifacts.length) {
-      throw createError(
-        ErrorCode.CC4004,
-        { path: this.expectedArtifactKinds.at(-1) ?? "output" },
-        { fixHint: "The command requested an artifact but produced none. Rerun with --verbose for the encoder diagnostics." },
-      );
-    }
-    const degradations = pendingDegradations();
-    const warnings = pendingWarnings();
-    return {
-      schemaVersion: MACHINE_SCHEMA_VERSION,
-      command: this.command,
-      ok: true,
-      degraded: degradations.length > 0,
-      project: this.projectOutput(),
-      result: this.resultPayload,
-      artifacts: [...this.artifacts],
-      warnings: [...warnings],
-      degradations: [...degradations],
-      descriptor: this.descriptorRecord,
-      timing: { startedAt: this.startedAt.toISOString(), durationMs: Date.now() - this.startedAt.getTime() },
-    };
+  finish(exitCode = 0): MachineReport {
+    return this.getReporter().finish(exitCode);
   }
 
-  errorReport(error: MachineErrorRecord): MachineReport {
-    const degradations = pendingDegradations();
-    const warnings = pendingWarnings();
-    return {
-      schemaVersion: MACHINE_SCHEMA_VERSION,
-      command: this.command,
-      ok: false,
-      degraded: degradations.length > 0,
-      project: this.projectOutput(),
-      result: this.resultPayload,
-      artifacts: [...this.artifacts],
-      warnings: [...warnings],
-      degradations,
-      descriptor: this.descriptorRecord,
-      timing: { startedAt: this.startedAt.toISOString(), durationMs: Date.now() - this.startedAt.getTime() },
-      error,
-    };
+  errorReport(error: MachineErrorRecord, exitCode?: number): MachineReport {
+    return this.getReporter().errorReport(error, exitCode);
   }
 
   degradationSummary(): string {
-    const degradations = pendingDegradations();
-    if (degradations.length === 0) return "";
-    return [`⚠ Run degraded: ${degradations.length} item(s)`, ...degradations.map((item) => `  [${item.code}] ${item.what}: ${item.instead}`)].join("\n");
+    return this.getReporter().degradationSummary();
   }
 
   summary(report: MachineReport): string {
-    const lines: string[] = [];
-    const outcome = report.descriptor?.outcome;
-    if (outcome === "none" || outcome === "report") {
-      lines.push(`${report.ok ? "✔" : "✗"} ${report.command}: ${outcome === "report" ? "reported" : "done"}`);
-    } else if (this.informationalNote !== undefined) {
-      lines.push(`${report.ok ? "✔" : "✗"} ${report.command}: ${this.informationalNote}`);
-    } else if (report.artifacts.length === 0) {
-      lines.push(`${report.ok ? "✔" : "✗"} ${report.command}: no artifacts produced`);
-    } else {
-      lines.push(`✔ ${report.command}: ${report.artifacts.length} artifact(s)`);
-      for (const artifact of report.artifacts) {
-        const units = artifact.units === undefined ? "" : ` (${artifact.units} ${artifact.unit ?? "unit"})`;
-        lines.push(`  ${artifact.kind}: ${artifact.path}${units}`);
-      }
-    }
-    if (report.degraded) {
-      lines.push(`⚠ Run degraded: ${report.degradations.length} item(s)`);
-      for (const degradation of report.degradations) {
-        lines.push(`  [${degradation.code}] ${degradation.what}: ${degradation.instead}`);
-      }
-    }
-    return lines.join("\n");
+    return this.getReporter().summary(report);
   }
 }
 
@@ -287,6 +174,8 @@ export function validateMachineReport(value: unknown): string[] {
   if (report.ok === false) {
     const error = report.error as Record<string, unknown> | undefined;
     if (!error || typeof error.code !== "string" || typeof error.message !== "string") problems.push("failed report must carry error.code and error.message");
+    if (report.exitCode !== undefined && typeof report.exitCode !== "number") problems.push("exitCode must be a number");
+    if (report.issues !== undefined && !Array.isArray(report.issues)) problems.push("issues must be an array");
   }
   return problems;
 }

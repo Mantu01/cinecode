@@ -20,6 +20,7 @@ import { loadPlugin } from "../plugin/loader.js";
 import { createRenderRuntime, type RenderRuntime } from "../renderer/runtime.js";
 import { frameFromPixels, frameTransfer } from "./frame-format.js";
 import { createError, ErrorCode } from "../errors/index.js";
+import { setBinaryConfig } from "../binary/resolver.js";
 
 export type FrameErrorPolicy = "placeholder" | "repeat-previous" | "abort";
 
@@ -39,6 +40,10 @@ interface WorkerStartup {
     readonly source?: string;
     readonly options?: Readonly<Record<string, unknown>>;
   }[];
+  binaries?: {
+    readonly ffmpegPath?: string;
+    readonly ffprobePath?: string;
+  };
 }
 
 interface ChunkInput {
@@ -139,7 +144,7 @@ async function fetchRemoteFrames(
     const response = responses[i];
     if (!response || !response.hit || !response.data) {
       if (response?.error) {
-        throw new Error(`[CC4001] Remote decode error: ${response.error}`);
+        throw createError(ErrorCode.CC4001, { frame: ref.sourceFrame, source: ref.src, reason: response.error });
       }
       continue;
     }
@@ -172,7 +177,9 @@ async function fetchRemoteFrames(
           },
           ref.sourceFrame,
         );
-      } catch {}
+      } catch {
+        // Note: source frame decode error handled during render stage
+      }
     }
   }
   return hits;
@@ -319,6 +326,13 @@ let workerSession: import("../renderer/engine.js").RenderSession | null = null;
 
 async function initialize(startup: WorkerStartup): Promise<void> {
   const started = Date.now();
+  if (startup.binaries) {
+    setBinaryConfig({
+      ffmpegPath: startup.binaries.ffmpegPath,
+      ffprobePath: startup.binaries.ffprobePath,
+      root: startup.projectRoot,
+    });
+  }
   if (!startup.compositionJson) {
     throw createError(ErrorCode.CC9001, { reason: "frame worker init payload has no composition" }, {
       fixHint: "Retry the render; if it persists the pipeline sent an invalid worker payload.",

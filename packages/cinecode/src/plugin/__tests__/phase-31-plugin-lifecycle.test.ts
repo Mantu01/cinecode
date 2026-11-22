@@ -4,8 +4,6 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PluginRegistry } from "../registry.js";
-import { createPluginSandbox } from "../sandbox/context.js";
-import { createCapabilityPolicy, SecurityViolationError } from "../sandbox/capabilities.js";
 import { createWorkerManager } from "../../pipeline/workers.js";
 import type { Composition } from "../../core/types/index.js";
 
@@ -87,27 +85,6 @@ describe("Phase 31: Plugin lifecycle and capabilities", () => {
       await manager.terminate();
       await rm(dir, { recursive: true, force: true });
     }
-  });
-
-  it("denied capability is reported and fails closed with CC7001", () => {
-    const sandbox = createPluginSandbox({
-      pluginId: "untrusted-plugin",
-      policy: createCapabilityPolicy([]),
-    });
-
-    assert.throws(
-      () => {
-        sandbox.runCode("cinecode.fs.readFileSync('secret.txt');");
-      },
-      (err: unknown) => {
-        assert.ok(err instanceof SecurityViolationError);
-        const secErr = err as SecurityViolationError;
-        assert.equal(secErr.code, "CC7001");
-        assert.equal(secErr.pluginId, "untrusted-plugin");
-        assert.equal(secErr.requiredCapability, "fs:read");
-        return true;
-      },
-    );
   });
 
   it("hook stage order matches documented list", async () => {

@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { get } from "node:https";
 import { createError, ErrorCode } from "../errors/index.js";
+import { buildCommanderCommand, findCommand } from "./command-registry.js";
 
 export interface UpgradeInfo {
   readonly currentVersion: string;
@@ -58,23 +59,24 @@ export async function checkForUpgrade(currentVersion = process.env.CINECODE_VERS
   };
 }
 
+export async function upgradeCommand(options: { confirm?: boolean } = {}): Promise<void> {
+  const targetUrl = "https://registry.npmjs.org/cinecode/latest";
+  console.log(`Network target: ${targetUrl}`);
+  if (!options.confirm) {
+    throw createError(ErrorCode.CC7004, { reason: `Network opt-in missing: rerun \`cinecode upgrade --confirm\`. Target: ${targetUrl}` });
+  }
+  const info = await checkForUpgrade();
+  console.log(`Current version: ${info.currentVersion}`);
+  console.log(`Latest version:  ${info.latestVersion}`);
+  if (!info.hasUpgrade) {
+    console.log("You are up to date.");
+    return;
+  }
+  console.log(`Upgrade available (v${info.latestVersion}). Run npm i -g cinecode to update.`);
+  if (info.changelogUrl) console.log(`Changelog: ${info.changelogUrl}`);
+  for (const change of info.breakingChanges ?? []) console.log(`⚠ ${change}`);
+}
+
 export function createUpgradeCommand(): Command {
-  return new Command("upgrade")
-    .description("Check npm for a newer cinecode release")
-    .option("--confirm", "Explicitly allow the npm network request")
-    .action(async (options: { confirm?: boolean }) => {
-      if (!options.confirm) {
-        throw createError(ErrorCode.CC7004, { reason: "Network opt-in missing: rerun `cinecode upgrade --confirm`." });
-      }
-      const info = await checkForUpgrade();
-      console.log(`Current version: ${info.currentVersion}`);
-      console.log(`Latest version:  ${info.latestVersion}`);
-      if (!info.hasUpgrade) {
-        console.log("You are up to date.");
-        return;
-      }
-      console.log(`Upgrade available (v${info.latestVersion}). Run npm i -g cinecode to update.`);
-      if (info.changelogUrl) console.log(`Changelog: ${info.changelogUrl}`);
-      for (const change of info.breakingChanges ?? []) console.log(`⚠ ${change}`);
-    });
+  return buildCommanderCommand(findCommand("upgrade")!);
 }

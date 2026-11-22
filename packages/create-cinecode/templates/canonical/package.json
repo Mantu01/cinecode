@@ -8,36 +8,19 @@
   },
   "scripts": {
     "dev": "cinecode dev --config ./cinecode.config.{{CONFIG_EXT}}",
+    "preview": "cinecode preview --config ./cinecode.config.{{CONFIG_EXT}}",
     "render": "cinecode render --config ./cinecode.config.{{CONFIG_EXT}}",
     "render:all": "cinecode render --all --config ./cinecode.config.{{CONFIG_EXT}}",
-    "generate": "cinecode generate --config ./cinecode.config.{{CONFIG_EXT}}",
-    "generate:image": "cinecode generate image --all --config ./cinecode.config.{{CONFIG_EXT}}",
-    "generate:audio": "cinecode generate audio --all --config ./cinecode.config.{{CONFIG_EXT}}",
-    "generate:scene": "cinecode generate scene --all --config ./cinecode.config.{{CONFIG_EXT}}",
-    "generate:timeline": "cinecode generate timeline --all --config ./cinecode.config.{{CONFIG_EXT}}",
-    "generate:all": "cinecode generate all --all --config ./cinecode.config.{{CONFIG_EXT}}",
-    "preview": "cinecode preview --config ./cinecode.config.{{CONFIG_EXT}}",
     "still": "cinecode still --config ./cinecode.config.{{CONFIG_EXT}} --timeline main --frame 0",
-    "inspect": "cinecode inspect --config ./cinecode.config.{{CONFIG_EXT}}",
     "validate": "cinecode validate --config ./cinecode.config.{{CONFIG_EXT}}",
-    "check": "cinecode check --config ./cinecode.config.{{CONFIG_EXT}}",
-    "render:dry-run": "cinecode render --dry-run --config ./cinecode.config.{{CONFIG_EXT}}",
-    "doctor": "cinecode doctor --config ./cinecode.config.{{CONFIG_EXT}}",
     "clean": "cinecode clean --config ./cinecode.config.{{CONFIG_EXT}}",
-    "media:list": "cinecode media:list --config ./cinecode.config.{{CONFIG_EXT}}",
-    "media:download": "cinecode media:download --config ./cinecode.config.{{CONFIG_EXT}}",
-    "typecheck": "{{TYPECHECK_SCRIPT}}",
-    "lint": "eslint src",
-    "format": "prettier --check ."
+    "typecheck": "{{TYPECHECK_SCRIPT}}"
   },
   "dependencies": {
     "cinecode": "{{CINECODE_DEP}}"
   },
   "devDependencies": {
     "@types/node": "^24.19.1",
-    "eslint": "^10.9.1",
-    "prettier": "3.9.9",
-    "typescript": "5.9.3",
-    "typescript-eslint": "^8.71.1"
+    "typescript": "5.9.3"
   }
 }

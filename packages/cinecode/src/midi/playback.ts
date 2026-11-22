@@ -4,6 +4,7 @@ import type { MidiMessage, MidiMessageType } from "./message.js";
 import { resolveMidiMapping, type MidiMapping } from "./map.js";
 import type { MidiDeviceManager } from "./device.js";
 import { recordDegradation } from "../errors/degradations.js";
+import { createError, ErrorCode } from "../errors/index.js";
 
 export interface ParsedMidiEvent {
   readonly tick: number;
@@ -91,7 +92,7 @@ interface TempoChange {
 export function parseMidiFile(source: Buffer | Uint8Array): ParsedMidiFile {
   const buffer = Buffer.isBuffer(source) ? source : Buffer.from(source);
   const reader = new MidiReader(buffer);
-  if (reader.readString(4) !== "MThd") throw new Error("CC5501: Not a MIDI file (missing MThd header)");
+  if (reader.readString(4) !== "MThd") throw createError(ErrorCode.CC5501, { path: "MIDI file" });
   const headerLength = reader.readUInt32();
   const headerEnd = reader.position + headerLength;
   const format = reader.readUInt16();

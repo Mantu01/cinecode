@@ -62,23 +62,6 @@ export {
 } from "./sdk.js";
 
 export {
-  PluginStateStore,
-  pluginStateStore,
-  type StoreOptions,
-  type ScopedPluginStore,
-} from "./store.js";
-
-export {
-  PluginSandbox,
-  createPluginSandbox,
-  SecurityViolationError,
-  ALL_CAPABILITIES,
-  type PluginCapability,
-  type CapabilityPolicy,
-  createCapabilityPolicy,
-} from "./sandbox/index.js";
-
-export {
   checkPluginDeprecation,
   formatDeprecationNotice,
   type DeprecationCheckResult,
@@ -95,13 +78,4 @@ export {
   type ScaffoldResult,
   type TemplateType,
 } from "./scaffold/index.js";
-
-export {
-  verifyPluginSignature,
-  signPluginPackage,
-  computePackageChecksum,
-  OFFICIAL_CINECODE_PUBLIC_KEY,
-  type PluginVerificationMode,
-  type SignatureVerificationResult,
-} from "./security/index.js";
 

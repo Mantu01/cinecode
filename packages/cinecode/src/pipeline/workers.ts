@@ -64,6 +64,7 @@ export interface WorkerManagerOptions {
   readonly mediaDir?: string;
   readonly crashOnFrame?: number;
   readonly plugins?: readonly PluginWorkerBootstrap[];
+  readonly binaries?: { readonly ffmpegPath?: string; readonly ffprobePath?: string };
 }
 
 /**
@@ -169,6 +170,7 @@ export class WorkerManager {
   private mediaDir: string;
   private crashOnFrame: number | undefined;
   private plugins: readonly PluginWorkerBootstrap[] | undefined;
+  private binaries: { readonly ffmpegPath?: string; readonly ffprobePath?: string } | undefined;
   private readonly startup: number[] = [];
   private startupMs = 0;
   private renderedFrames = 0;
@@ -209,6 +211,7 @@ export class WorkerManager {
     this.mediaDir = options.mediaDir ?? "media";
     this.crashOnFrame = options.crashOnFrame;
     this.plugins = options.plugins;
+    this.binaries = options.binaries;
   }
 
   isTerminated(): boolean {
@@ -419,7 +422,7 @@ export class WorkerManager {
         if (message.type !== "ready" && message.type !== "init-error") return;
         cleanup();
         if (message.type === "init-error") {
-          reject(new Error(`[CC4008] worker bootstrap failed: ${message.error ?? "unknown"}`));
+          reject(createError(ErrorCode.CC4008, { path: "worker", reason: message.error ?? "unknown" }));
           return;
         }
         if (message.startupMs !== undefined) this.startup.push(message.startupMs);
@@ -454,6 +457,7 @@ export class WorkerManager {
           mediaDir: this.mediaDir,
           crashOnFrame: this.crashOnFrame,
           plugins: this.plugins,
+          binaries: this.binaries,
         },
       });
     }).catch((error) => {
@@ -635,7 +639,9 @@ export class WorkerManager {
         }
         try {
           completed.onChunk?.(winner.value);
-        } catch {}
+        } catch {
+          // Note: chunk callback error must not abort queue processing
+        }
         completed.resolve(winner.value);
       }
 
@@ -654,7 +660,9 @@ export class WorkerManager {
     for (const detach of this.cacheChannelCleanups) {
       try {
         detach();
-      } catch {}
+      } catch {
+        // Note: ignore errors during channel detachment
+      }
     }
     this.cacheChannelCleanups.length = 0;
     const active = [...this.activeWorkers];
@@ -682,7 +690,9 @@ export class WorkerManager {
     for (const w of workersToTerminate) {
       try {
         w.postMessage({ type: "shutdown" });
-      } catch {}
+      } catch {
+        // Note: worker might already be dead
+      }
     }
     await Promise.all(workersToTerminate.map((w) => w.terminate()));
   }

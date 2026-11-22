@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { CinecodeConfig, MainManifest, ManifestEntryBase } from "../core/types/index.js";
-import { createError, ErrorCode, type CinecodeError } from "../errors/index.js";
+import { createError, ErrorCode, isCinecodeError, type CinecodeError } from "../errors/index.js";
 import { validateManifestShape } from "../config/zod-schema.js";
 import { loadModuleFile } from "./loader.js";
 import { hotReloadEnabled } from "../loader/index.js";
@@ -9,6 +9,8 @@ import { parseDurationInput } from "../core/time-input.js";
 import { validateSerializableProps } from "../core/define/props.js";
 import { checkEntryExport } from "./brands.js";
 import { idRule } from "./ids.js";
+import { assertDeterministicAuthoredModules } from "./determinism.js";
+import { resolveMediaFilePath } from "../media/paths.js";
 
 /** Manifest keys that were accepted before and had no consumer. */
 const REMOVED_MANIFEST_KEYS: Readonly<Record<string, string>> = {
@@ -73,44 +75,40 @@ export async function validateManifestDocument(
       const parts = issue.path.split(".");
       const colName = parts[0] ?? "";
       const idx = parseInt(parts[1] || "0", 10);
-      const entryId = ((manifest as any)[colName]?.[idx] as ManifestEntryBase | undefined)?.id ?? colName;
+      const entryId = ((manifest as Record<string, unknown>)[colName] as ManifestEntryBase[] | undefined)?.[idx]?.id ?? colName;
       errors.push(createError(
         ErrorCode.CC3002,
         { clip: entryId, duration: String(issue.received ?? "") },
         { location: { file: manifestPath, clip: entryId }, fixHint: `Duration must be positive` },
       ));
     } else {
+      const isCustomReason = issue.message.includes("duplicate id") || issue.message.includes("reserved");
       errors.push(createError(
         ErrorCode.CC1010,
-        { path: manifestPath, reason: `${issue.path || "manifest"}: ${issue.message}` },
-        { location: { file: manifestPath }, cause: issue },
+        { path: manifestPath, reason: isCustomReason ? issue.message : `${issue.path || "manifest"}: ${issue.message}` },
+        {
+          location: { file: manifestPath },
+          cause: issue,
+          fixHint: issue.message.includes("reserved")
+            ? 'Remove "characters" or "motions" from main.ts'
+            : issue.message.includes("duplicate id")
+              ? "Change identifier so each entry has a unique id, including case-only differences"
+              : undefined,
+        },
       ));
     }
   }
 
-  // 2. Reject reserved-but-unused collections explicitly
-  if (Array.isArray(manifest.characters) && manifest.characters.length > 0) {
-    errors.push(createError(
-      ErrorCode.CC1010,
-      { path: manifestPath, reason: 'collection "characters" is reserved and not supported in this release; remove "characters" from the manifest' },
-      { location: { file: manifestPath }, fixHint: 'Remove "characters" from main.ts' },
-    ));
-  }
-  if (Array.isArray(manifest.motions) && manifest.motions.length > 0) {
-    errors.push(createError(
-      ErrorCode.CC1010,
-      { path: manifestPath, reason: 'collection "motions" is reserved and not supported in this release; remove "motions" from the manifest' },
-      { location: { file: manifestPath }, fixHint: 'Remove "motions" from main.ts' },
-    ));
-  }
-
-  // 3. Entry props must survive serialisation: the render pipeline reads them from a worker.
-  for (const col of [
+  // 2. Collections used for serializable props & entries check
+  const collections = [
     { kind: "image", entries: manifest.images ?? [] },
     { kind: "audio", entries: manifest.audio ?? [] },
     { kind: "scene", entries: manifest.scenes ?? [] },
     { kind: "timeline", entries: manifest.timelines ?? [] },
-  ] as const) {
+  ] as const;
+
+  // 3. Entry props must survive serialisation: the render pipeline reads them from a worker.
+  for (const col of collections) {
     for (let i = 0; i < col.entries.length; i++) {
       const entry = col.entries[i] as unknown as Record<string, unknown>;
       if (!entry) continue;
@@ -124,52 +122,16 @@ export async function validateManifestDocument(
     }
   }
 
-  // 4. Validate identity: unique ids across all referenceable collections
-  const collections = [
-    { kind: "image", entries: manifest.images ?? [] },
-    { kind: "audio", entries: manifest.audio ?? [] },
-    { kind: "scene", entries: manifest.scenes ?? [] },
-    { kind: "timeline", entries: manifest.timelines ?? [] },
-  ] as const;
-
-  const seenIds = new Map<string, { kind: string; index: number; id: string }>();
-
-  for (const col of collections) {
-    for (let i = 0; i < col.entries.length; i++) {
-      const entry = col.entries[i] as ManifestEntryBase;
-      if (!entry || typeof entry.id !== "string" || !entry.id) continue;
-      const key = entry.id.toLowerCase();
-      if (seenIds.has(key)) {
-        const prev = seenIds.get(key)!;
-        const prevLoc = `${prev.kind}s[${prev.index}]`;
-        const currLoc = `${col.kind}s[${i}]`;
-        errors.push(createError(
-          ErrorCode.CC1010,
-          {
-            path: manifestPath,
-            reason: `duplicate id "${entry.id}" declared in ${prevLoc} and ${currLoc} (ids are compared case-insensitively)`,
-          },
-          {
-            location: { file: manifestPath },
-            fixHint: `Change identifier "${entry.id}" so each entry has a unique id, including case-only differences`,
-          },
-        ));
-      } else {
-        seenIds.set(key, { kind: col.kind, index: i, id: entry.id });
-      }
-    }
-  }
-
-  // 5. Validate references: sceneRefs, audioRef
-  const sceneIds = new Set((manifest.scenes ?? []).map((s) => s.id));
-  const audioIds = new Set((manifest.audio ?? []).map((a) => a.id));
-  const availableScenes = Array.from(sceneIds).join(", ") || "none";
-  const availableAudio = Array.from(audioIds).join(", ") || "none";
+  // 4. Validate references: sceneRefs, audioRef (case-insensitive)
+  const sceneIds = new Map((manifest.scenes ?? []).map((s) => [s.id.toLowerCase(), s.id]));
+  const audioIds = new Map((manifest.audio ?? []).map((a) => [a.id.toLowerCase(), a.id]));
+  const availableScenes = Array.from(sceneIds.values()).join(", ") || "none";
+  const availableAudio = Array.from(audioIds.values()).join(", ") || "none";
 
   for (const timeline of manifest.timelines ?? []) {
     if (Array.isArray(timeline.sceneRefs)) {
       for (const ref of timeline.sceneRefs) {
-        if (!sceneIds.has(ref)) {
+        if (!sceneIds.has(ref.toLowerCase())) {
           errors.push(createError(
             ErrorCode.CC3007,
             {
@@ -187,7 +149,7 @@ export async function validateManifestDocument(
     }
     if (Array.isArray(timeline.audioRef)) {
       for (const ref of timeline.audioRef) {
-        if (!audioIds.has(ref)) {
+        if (!audioIds.has(ref.toLowerCase())) {
           errors.push(createError(
             ErrorCode.CC3007,
             {
@@ -208,7 +170,7 @@ export async function validateManifestDocument(
   // 6, 7 & 8: Files, exported kinds, value ranges, media references
   for (const col of collections) {
     for (let i = 0; i < col.entries.length; i++) {
-      const entry = col.entries[i] as any;
+      const entry = col.entries[i] as ManifestEntryBase & Record<string, unknown>;
       if (!entry) continue;
 
       // Value ranges: duration validation
@@ -231,42 +193,67 @@ export async function validateManifestDocument(
         }
       }
 
-      // Media references
-      if (col.kind === "audio" && entry.src) {
-        const mediaDir = resolve(root, options.config.mediaDir ?? "media");
-        const sourceDir = resolve(root, options.config.sourceDir ?? "src");
-        const allowCoLocated = options.config.allowCoLocatedMedia === true;
-        const inMedia = resolve(mediaDir, entry.src);
-        const inSource = resolve(sourceDir, entry.src);
-        const relMedia = relative(root, inMedia);
-        if (relMedia.startsWith("..") || isAbsolute(relMedia)) {
-          errors.push(createError(
-            ErrorCode.CC1003,
-            {
-              key: `audio[${i}].src`,
-              path: entry.src,
-              reason: `audio entry "${entry.id}" declared source "${entry.src}" resolves outside project root "${root}"`,
-            },
-            { location: { file: manifestPath } },
-          ));
-        } else {
-          const found = existsSync(inMedia) ? inMedia : (allowCoLocated && existsSync(inSource) ? inSource : null);
-          if (!found) {
-            const searched = [inMedia];
-            if (allowCoLocated) searched.push(inSource);
-            else searched.push(`${inSource} (co-located search disabled; enable allowCoLocatedMedia in config)`);
+      if (col.kind === "audio") {
+        if (entry.gain !== undefined) {
+          if (typeof entry.gain !== "number" || !Number.isFinite(entry.gain) || entry.gain < 0 || entry.gain > 4) {
             errors.push(createError(
-              ErrorCode.CC2001,
-              { path: `${entry.src} (entry "${entry.id}"). Searched locations:\n  - ${searched.join("\n  - ")}` },
-              { location: { file: manifestPath, clip: entry.id }, fixHint: `Verify audio source exists in media root at ${inMedia}` },
+              ErrorCode.CC1012,
+              { reason: `Audio entry "${entry.id}" gain must be a number between 0 and 4, got ${entry.gain}` },
+              { location: { file: manifestPath, clip: entry.id }, fixHint: "Set gain between 0 (silent) and 4 (+12 dB)" },
             ));
+          }
+        }
+        if (entry.sampleRate !== undefined) {
+          const validRates = [22050, 44100, 48000, 96000];
+          if (typeof entry.sampleRate !== "number" || !validRates.includes(entry.sampleRate)) {
+            errors.push(createError(
+              ErrorCode.CC1012,
+              { reason: `Audio entry "${entry.id}" sampleRate must be one of ${validRates.join(", ")}, got ${entry.sampleRate}` },
+              { location: { file: manifestPath, clip: entry.id }, fixHint: `Use one of: ${validRates.join(", ")}` },
+            ));
+          }
+        }
+        if (entry.channels !== undefined) {
+          if (entry.channels !== 1 && entry.channels !== 2) {
+            errors.push(createError(
+              ErrorCode.CC1012,
+              { reason: `Audio entry "${entry.id}" channels must be 1 (mono) or 2 (stereo), got ${entry.channels}` },
+              { location: { file: manifestPath, clip: entry.id }, fixHint: "Set channels to 1 or 2" },
+            ));
+          }
+        }
+      }
+
+      // Media references
+      if (entry.src) {
+        try {
+          resolveMediaFilePath(entry.src, root, options.config, { reportNote: false });
+        } catch (error) {
+          if (isCinecodeError(error)) {
+            errors.push(error);
+          } else {
+            errors.push(createError(ErrorCode.CC2001, { path: entry.src }, { cause: error }));
           }
         }
       }
 
       // Entry file validation
       if (entry.file) {
-        const resolvedFile = resolve(root, entry.file);
+        if (isAbsolute(entry.file)) {
+          errors.push(createError(
+            ErrorCode.CC1003,
+            {
+              key: `${col.kind}s[${i}].file`,
+              path: entry.file,
+              reason: `entry "${entry.id}" declared path "${entry.file}" must be relative to the manifest`,
+            },
+            { location: { file: manifestPath, clip: entry.id } },
+          ));
+          continue;
+        }
+
+        const manifestDir = resolve(manifestPath, "..");
+        const resolvedFile = resolve(manifestDir, entry.file);
         const relFile = relative(root, resolvedFile);
         if (relFile.startsWith("..") || isAbsolute(relFile)) {
           errors.push(createError(
@@ -276,7 +263,7 @@ export async function validateManifestDocument(
               path: entry.file,
               reason: `entry "${entry.id}" declared path "${entry.file}" resolves outside project root "${root}" (resolved: "${resolvedFile}")`,
             },
-            { location: { file: manifestPath } },
+            { location: { file: manifestPath, clip: entry.id } },
           ));
           continue;
         }
@@ -286,7 +273,7 @@ export async function validateManifestDocument(
             ErrorCode.CC1009,
             { path: `${resolvedFile} (entry "${entry.id}", declared: "${entry.file}")` },
             {
-              location: { file: resolvedFile },
+              location: { file: resolvedFile, clip: entry.id },
               fixHint: `Create file "${resolvedFile}" for entry "${entry.id}" or update declared path "${entry.file}" in ${manifestPath}`,
             },
           ));
@@ -307,7 +294,7 @@ export async function validateManifestDocument(
           errors.push(createError(
             ErrorCode.CC1010,
             { path: entry.file, reason: `failed to load module for entry "${entry.id}": ${error instanceof Error ? error.message : String(error)}` },
-            { location: { file: resolvedFile }, cause: error },
+            { location: { file: resolvedFile, clip: entry.id }, cause: error },
           ));
           continue;
         }
@@ -325,6 +312,20 @@ export async function validateManifestDocument(
               fixHint: `Export ${exported.expected} from "${entry.file}" for entry "${entry.id}"`,
             },
           ));
+        }
+      }
+    }
+  }
+
+  try {
+    assertDeterministicAuthoredModules(manifest, manifestPath, root);
+  } catch (error) {
+    if (isCinecodeError(error)) {
+      errors.push(error);
+      const issues = (error as unknown as { issues?: unknown[] }).issues;
+      if (Array.isArray(issues)) {
+        for (const issue of issues) {
+          if (issue !== error && isCinecodeError(issue)) errors.push(issue);
         }
       }
     }

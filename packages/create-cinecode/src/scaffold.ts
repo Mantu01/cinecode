@@ -15,6 +15,8 @@ import type { PackageManager } from "./detect-pm.js";
 import { selectLanguage } from "./prompt.js";
 import type { Language } from "./prompt.js";
 
+export const FRAMEWORK_RANGE = "^1.0.0";
+
 export const CREATE_CINECODE_VERSION = JSON.parse(
   readFileSync(resolve(__dirname, "../../package.json"), "utf8"),
 ).version;
@@ -74,11 +76,11 @@ function listTemplateFiles(language: Language): string[] {
   return files;
 }
 
-function resolveCinecodeDep(localLink?: boolean): string {
+export function resolveCinecodeDep(localLink?: boolean): string {
   if (localLink) {
     return "workspace:*";
   }
-  return `^${CREATE_CINECODE_VERSION}`;
+  return FRAMEWORK_RANGE;
 }
 
 function generateScaffoldPlan(options: ScaffoldOptions): ScaffoldPlan {
@@ -107,6 +109,10 @@ function generateScaffoldPlan(options: ScaffoldOptions): ScaffoldPlan {
     files.push({ path: resolve(targetDir, relPath), content: rendered });
   }
 
+  if (!files.some((f) => f.path === resolve(targetDir, "output/.gitkeep"))) {
+    files.push({ path: resolve(targetDir, "output/.gitkeep"), content: "" });
+  }
+
   const folders: string[] = [];
 
   const gitignoreEntries = ["output", ".cinecode/cache"];
@@ -116,28 +122,61 @@ function generateScaffoldPlan(options: ScaffoldOptions): ScaffoldPlan {
   return { files, folders, gitignoreEntries, gitInit };
 }
 
-async function checkTargetDir(targetDir: string, force: boolean): Promise<string[]> {
-  const blocking: string[] = [];
+const CONFIG_NAMES = [
+  "cinecode.config.ts",
+  "cinecode.config.js",
+  "cinecode.config.mjs",
+  "cinecode.config.cjs",
+  "cinecode.json",
+];
 
+export function findAncestorConfig(startDir: string): string | null {
+  let current = resolve(startDir);
+  while (true) {
+    for (const name of CONFIG_NAMES) {
+      const candidate = resolve(current, name);
+      if (existsSync(candidate)) {
+        return candidate;
+      }
+    }
+    const parent = dirname(current);
+    if (parent === current) {
+      break;
+    }
+    current = parent;
+  }
+  return null;
+}
+
+export function getBlockingFiles(targetDir: string): string[] {
+  const blocking: string[] = [];
   if (!existsSync(targetDir)) {
     return blocking;
   }
-
   try {
     const entries = readdirSync(targetDir, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.name === ".git") continue;
-      if (entry.name === "node_modules") continue;
-      if (entry.name === ".cinecode") continue;
       blocking.push(entry.name);
     }
   } catch {
     void 0;
   }
+  return blocking;
+}
 
+async function checkTargetDir(targetDir: string, force: boolean): Promise<string[]> {
+  const ancestorConfig = findAncestorConfig(targetDir);
+  if (ancestorConfig) {
+    throw new Error(
+      `[CC1003] Cannot scaffold inside an existing Cinecode project: found config at ${ancestorConfig}. Scaffold in an isolated directory.`,
+    );
+  }
+
+  const blocking = getBlockingFiles(targetDir);
   if (blocking.length > 0 && !force) {
     throw new Error(
-      `Target directory is not empty. Blocking files: ${blocking.join(", ")}. Use --force to proceed.`,
+      `[CC1003] Target directory is not empty. Blocking files: ${blocking.join(", ")}. Use --force to proceed.`,
     );
   }
 
@@ -203,14 +242,22 @@ async function installDependencies(
   if (verbose) console.log(`run ${installCmd.join(" ")}`);
   const { spawnSync } = await import("node:child_process");
   const cmd = installCmd[0] ?? "npm";
+  const binary = process.platform === "win32" && !cmd.endsWith(".cmd") && !cmd.endsWith(".exe") ? `${cmd}.cmd` : cmd;
   const args = installCmd.slice(1);
-  const result = spawnSync(cmd, args, {
+  const result = spawnSync(binary, args, {
     cwd: targetDir,
     stdio: verbose ? "inherit" : "pipe",
-    shell: true,
+    encoding: "utf8",
   });
   if (result.status !== 0) {
-    throw new Error(`Dependency installation failed with code ${result.status}`);
+    const fullCmd = `${cmd} ${args.join(" ")}`;
+    if (result.stderr) {
+      console.error(result.stderr);
+    }
+    if (result.stdout && !verbose) {
+      console.log(result.stdout);
+    }
+    throw new Error(`Dependency installation failed running '${fullCmd}' with exit code ${result.status ?? "unknown"}`);
   }
 }
 
@@ -223,7 +270,6 @@ function printNextSteps(targetDir: string, pm: PackageManager): void {
   const cdCmd = `cd ${dirName}`;
   const devCmd = getRunCommand(pm, "dev");
   const renderCmd = getRunCommand(pm, "render");
-  const generateCmd = getRunCommand(pm, "generate:all");
 
   console.log("");
   console.log("Project created successfully!");
@@ -231,8 +277,7 @@ function printNextSteps(targetDir: string, pm: PackageManager): void {
   console.log("Next steps:");
   console.log(`  ${cdCmd}`);
   console.log(`  ${devCmd}          Start the dev server`);
-  console.log(`  ${renderCmd}       Render every timeline`);
-  console.log(`  ${generateCmd}     Generate images, audio and scenes`);
+  console.log(`  ${renderCmd}       Render the default timeline`);
   console.log("");
 }
 
@@ -264,7 +309,7 @@ async function verifyScaffold(targetDir: string, language: Language, verbose: bo
     throw new Error(`Scaffold verification failed: package.json does not declare cinecode dependency`);
   }
   const scripts = pkg.scripts as Record<string, string> | undefined;
-  for (const script of ["dev", "render", "generate", "validate", "doctor", "still", "inspect"]) {
+  for (const script of ["dev", "preview", "render", "render:all", "still", "validate", "clean", "typecheck"]) {
     if (!scripts?.[script]) {
       throw new Error(`Scaffold verification failed: package.json missing required script "${script}"`);
     }
@@ -283,9 +328,9 @@ async function verifyScaffold(targetDir: string, language: Language, verbose: bo
 
   const expectedSourceFiles = [
     `src/scenes/intro.${ext}`,
-    `src/images/thumbnail.${ext}`,
-    `src/audio/ambient.${ext}`,
     "media/README.md",
+    "output/.gitkeep",
+    ".gitignore",
   ];
   for (const rel of expectedSourceFiles) {
     const full = resolve(targetDir, rel);

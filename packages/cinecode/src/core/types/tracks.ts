@@ -7,7 +7,8 @@ export interface TrackProps {
   readonly name?: string;
   readonly muted?: boolean;
   readonly opacity?: number;
-  readonly blend?: string;
+  readonly blend?: BlendMode;
+  readonly volume?: number;
 }
 
 export interface VisualTrack extends TrackProps {

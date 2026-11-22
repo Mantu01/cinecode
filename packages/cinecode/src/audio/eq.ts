@@ -1,4 +1,5 @@
 import type { AudioBuffer } from "./types.js";
+import { createError, ErrorCode } from "../errors/index.js";
 
 export type EqFilterType = "low-cut" | "low-shelf" | "peaking" | "notch" | "high-shelf" | "high-cut";
 
@@ -127,7 +128,7 @@ export class ParametricEq {
   private readonly states: EqState[];
 
   constructor(bands: readonly EqBand[], sampleRate: number) {
-    if (bands.length > MAX_EQ_BANDS) throw new Error(`CC5301: EQ supports at most ${MAX_EQ_BANDS} bands`);
+    if (bands.length > MAX_EQ_BANDS) throw createError(ErrorCode.CC5301, { count: bands.length, max: MAX_EQ_BANDS });
     this.bands = [...bands];
     this.sampleRate = sampleRate;
     this.states = this.bands.map(() => ({ s1: 0, s2: 0 }));
@@ -143,7 +144,7 @@ export class ParametricEq {
   }
 
   setBands(bands: readonly EqBand[]): void {
-    if (bands.length > MAX_EQ_BANDS) throw new Error(`CC5301: EQ supports at most ${MAX_EQ_BANDS} bands`);
+    if (bands.length > MAX_EQ_BANDS) throw createError(ErrorCode.CC5301, { count: bands.length, max: MAX_EQ_BANDS });
     this.bands = [...bands];
     while (this.states.length < this.bands.length) this.states.push({ s1: 0, s2: 0 });
   }

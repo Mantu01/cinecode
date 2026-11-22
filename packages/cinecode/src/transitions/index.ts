@@ -11,3 +11,20 @@ export {
   diagonalWipe, curveWipe, diagonalWipeTransition, curveWipeTransition,
   type DiagonalDirection,
 } from "./wipe-variants.js";
+
+export const BUILTIN_TRANSITION_NAMES: readonly string[] = Object.freeze([
+  "crossfade",
+  "curveWipe",
+  "diagonalWipe",
+  "dissolve",
+  "fade",
+  "fadeToWhite",
+  "iris",
+  "irisClose",
+  "irisOpen",
+  "push",
+  "slide",
+  "spin",
+  "wipe",
+  "zoom",
+]);

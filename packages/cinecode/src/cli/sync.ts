@@ -8,6 +8,7 @@ import { createMediaCache } from "../media/cache.js";
 import { loadCinecodeIgnore, type CinecodeIgnore } from "../config/ignore.js";
 import { loadComposition } from "./composition-loader.js";
 import { createProjectResolver, reportResolution } from "./project-resolver.js";
+import { buildCommanderCommand, findCommand } from "./command-registry.js";
 
 export interface SyncReport {
   readonly totalCompositions: number;
@@ -167,7 +168,7 @@ export async function buildSyncReport(options: SyncOptions = {}): Promise<SyncRe
         await unlink(resolve(root, orphan));
         deletedFiles.push(orphan);
       } catch {
-        // Ignore unlink error
+        // Note: Ignore unlink error
       }
     }
   }
@@ -193,66 +194,57 @@ export async function buildSyncReport(options: SyncOptions = {}): Promise<SyncRe
   };
 }
 
+export async function syncCommand(options: { dir?: string; cache?: string; prune?: boolean; plugins?: boolean; ignore?: string[]; defaultIgnores?: boolean; json?: boolean; dryRun?: boolean; deleteOrphans?: boolean; yes?: boolean; config?: string; root?: string; verbose?: boolean } = {}): Promise<void> {
+  const resolver = createProjectResolver({
+    root: options.root ?? (options.dir === "." ? undefined : options.dir),
+    config: options.config,
+  });
+  const resolution = await resolver.resolve();
+  reportResolution(resolution, options.dryRun === true || options.verbose === true);
+  const report = await buildSyncReport({
+    dir: resolution.root,
+    cacheDir: options.cache ? resolve(resolution.root, options.cache) : resolution.context.roots.cache,
+    pruneCache: options.prune,
+    discoverPlugins: options.plugins,
+    ignorePatterns: options.ignore,
+    useDefaultIgnores: options.defaultIgnores,
+    dryRun: options.dryRun,
+    deleteOrphans: options.deleteOrphans,
+    confirmed: options.yes === true,
+  });
+  runReport.result({ ...report });
+  for (const file of report.missingFiles) runReport.warn(ErrorCode.CC2001, `Media file not found: ${file}`, file);
+  for (const warning of report.pluginWarnings) runReport.warn(ErrorCode.CC8002, warning);
+  if (options.json) {
+    if (report.missingFiles.length > 0 && !options.dryRun) {
+      throw createError(ErrorCode.CC1013, { count: report.missingFiles.length });
+    }
+  } else {
+    if (options.dryRun) {
+      console.log("[DRY-RUN] Previewing sync operations (no changes will be applied):\n");
+      if (report.actions) {
+        console.log(`  Actions to upload:   ${report.actions.upload.length} files`);
+        console.log(`  Actions to download: ${report.actions.download.length} files`);
+        console.log(`  Actions to delete:   ${report.actions.delete.length} files`);
+        console.log(`  Estimated transfer:  ${(report.actions.estimatedBytes / (1024 * 1024)).toFixed(2)} MB\n`);
+      }
+    }
+    console.log(`Compositions:  ${report.totalCompositions}`);
+    console.log(`Media files:   ${report.totalMediaFiles}`);
+    console.log(`Missing:       ${report.missingFiles.length}`);
+    for (const file of report.missingFiles) console.log(`  ✗ ${file}`);
+    console.log(`Orphaned:      ${report.orphanedFiles.length}`);
+    for (const file of report.orphanedFiles.slice(0, 20)) console.log(`  · ${file}`);
+    console.log(`Cache pruned:  ${report.cleanCacheEntriesRemoved}`);
+    console.log(`Plugins:       ${report.pluginsDiscovered.length}`);
+    for (const plugin of report.pluginsDiscovered) console.log(`  + ${plugin}`);
+    for (const warning of report.pluginWarnings) console.log(`  ⚠ ${warning}`);
+  }
+  if (report.missingFiles.length > 0 && !options.dryRun) {
+    throw createError(ErrorCode.CC1013, { count: report.missingFiles.length });
+  }
+}
+
 export function createSyncCommand(): Command {
-  return new Command("sync")
-    .description("Verify referenced media exists, prune stale cache entries and report orphans")
-    .option("-d, --dir <path>", "Project directory", ".")
-    .option("--cache <dir>", "Media cache directory")
-    .option("--no-prune", "Keep stale cache entries")
-    .option("--no-plugins", "Skip plugin auto-discovery")
-    .option("--ignore <pattern>", "Additional ignore pattern", (value: string, previous: string[]) => [...previous, value], [])
-    .option("--no-default-ignores", "Disable built-in ignore patterns")
-    .option("--dry-run", "Preview sync operations without uploading, downloading or deleting", false)
-    .option("--delete-orphans", "Delete detected orphaned assets", false)
-    .option("-y, --yes", "Confirm destructive deletion of orphaned assets", false)
-    .action(async (options: { dir: string; cache?: string; prune: boolean; plugins: boolean; ignore: string[]; defaultIgnores: boolean; json?: boolean; dryRun?: boolean; deleteOrphans?: boolean; yes?: boolean; config?: string; root?: string; verbose?: boolean }) => {
-      const resolver = createProjectResolver({
-        root: options.root ?? (options.dir === "." ? undefined : options.dir),
-        config: options.config,
-      });
-      const resolution = await resolver.resolve();
-      reportResolution(resolution, options.dryRun === true || options.verbose === true);
-      const report = await buildSyncReport({
-        dir: resolution.root,
-        cacheDir: options.cache ? resolve(resolution.root, options.cache) : resolution.context.roots.cache,
-        pruneCache: options.prune,
-        discoverPlugins: options.plugins,
-        ignorePatterns: options.ignore,
-        useDefaultIgnores: options.defaultIgnores,
-        dryRun: options.dryRun,
-        deleteOrphans: options.deleteOrphans,
-        confirmed: options.yes === true,
-      });
-      runReport.result({ ...report });
-      for (const file of report.missingFiles) runReport.warn(ErrorCode.CC2001, `Media file not found: ${file}`, file);
-      for (const warning of report.pluginWarnings) runReport.warn(ErrorCode.CC8002, warning);
-      if (options.json) {
-        if (report.missingFiles.length > 0 && !options.dryRun) {
-          throw createError(ErrorCode.CC1013, { count: report.missingFiles.length });
-        }
-      } else {
-        if (options.dryRun) {
-          console.log("[DRY-RUN] Previewing sync operations (no changes will be applied):\n");
-          if (report.actions) {
-            console.log(`  Actions to upload:   ${report.actions.upload.length} files`);
-            console.log(`  Actions to download: ${report.actions.download.length} files`);
-            console.log(`  Actions to delete:   ${report.actions.delete.length} files`);
-            console.log(`  Estimated transfer:  ${(report.actions.estimatedBytes / (1024 * 1024)).toFixed(2)} MB\n`);
-          }
-        }
-        console.log(`Compositions:  ${report.totalCompositions}`);
-        console.log(`Media files:   ${report.totalMediaFiles}`);
-        console.log(`Missing:       ${report.missingFiles.length}`);
-        for (const file of report.missingFiles) console.log(`  ✗ ${file}`);
-        console.log(`Orphaned:      ${report.orphanedFiles.length}`);
-        for (const file of report.orphanedFiles.slice(0, 20)) console.log(`  · ${file}`);
-        console.log(`Cache pruned:  ${report.cleanCacheEntriesRemoved}`);
-        console.log(`Plugins:       ${report.pluginsDiscovered.length}`);
-        for (const plugin of report.pluginsDiscovered) console.log(`  + ${plugin}`);
-        for (const warning of report.pluginWarnings) console.log(`  ⚠ ${warning}`);
-      }
-      if (report.missingFiles.length > 0 && !options.dryRun) {
-        throw createError(ErrorCode.CC1013, { count: report.missingFiles.length });
-      }
-    });
+  return buildCommanderCommand(findCommand("sync")!);
 }

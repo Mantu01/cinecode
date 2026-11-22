@@ -5,9 +5,8 @@ import type { Clip } from "../types/clips.js";
 import type { MainManifest } from "../types/manifest.js";
 import type { AudioBuffer } from "../../audio/types.js";
 import type { InferredCinecodeConfig } from "../../config/zod-schema.js";
-import { validateAuthoringConfig } from "../../config/validator.js";
-import { markConfigValidated } from "../../config/validated.js";
-import { markMainDefinition, validateMainDefinition } from "../../manifest/contract.js";
+import { validateAuthoringConfig, assertNotCompositionExport } from "../../config/validator.js";
+import { markMainDefinition, validateMainDefinition, deepFreezeManifest } from "../../manifest/contract.js";
 import { brandDefinition } from "../../manifest/brands.js";
 
 export interface TimelineFactory<P> {
@@ -88,14 +87,20 @@ export function defineComponent<P>(name: string, build: (props: P) => Timeline):
 export interface SoundDef<P> {
   readonly kind: "sound";
   readonly name: string;
+  readonly duration?: number;
   readonly generate: (context: SoundContext, params: P) => void;
 }
 
 export interface SoundContext {
   readonly sampleRate: number;
+  readonly channels: 1 | 2;
+  readonly duration: number;
+  readonly gain: number;
+  readonly seed: number;
+  readonly id: string;
   readonly startSample: number;
   readonly lengthSamples: number;
-  readonly write: (sampleIndex: number, left: number, right: number) => void;
+  readonly write: (sampleIndex: number, left: number, right?: number) => void;
 }
 
 /**
@@ -103,29 +108,24 @@ export interface SoundContext {
  *
  * @param name - Sound identifier
  * @param generate - Function to generate audio samples
+ * @param options - Optional sound definition options
  * @returns A SoundDef for use in audio tracks
  */
-export function defineSound<P>(
+export function defineSound<P = Record<string, unknown>>(
   name: string,
   generate: (context: SoundContext, params: P) => void,
+  options?: { duration?: number },
 ): SoundDef<P> {
-  return { kind: "sound", name, generate };
+  return { kind: "sound", name, duration: options?.duration, generate };
 }
 
-// Allow defineConfig to accept either a CinecodeConfig or a Composition object.
-// When a composition is passed (has rootTimeline), it's returned as-is for
-// backward-compat with existing projects that export a raw composition.
-export function defineConfig(config: InferredCinecodeConfig): InferredCinecodeConfig;
-export function defineConfig(config: {
-  readonly rootTimeline?: unknown;
-  readonly [key: string]: unknown;
-}): { readonly rootTimeline?: unknown; readonly [key: string]: unknown };
-export function defineConfig(config: unknown): unknown {
-  if (typeof config === "object" && config !== null && !("rootTimeline" in config)) {
-    const { errors } = validateAuthoringConfig(config);
-    if (errors.length > 0) throw errors[0];
-    markConfigValidated(config);
-  }
+/**
+ * Type-safe helper for cinecode.config.ts. Validates authoring options at definition time.
+ */
+export function defineConfig(config: InferredCinecodeConfig): InferredCinecodeConfig {
+  assertNotCompositionExport(config);
+  const { errors } = validateAuthoringConfig(config);
+  if (errors.length > 0) throw errors[0];
   return config;
 }
 
@@ -209,11 +209,6 @@ export function defineMain(manifest: MainManifest): MainDef {
     scenes: manifest.scenes ?? [],
     timelines: manifest.timelines ?? [],
   };
-  if (manifest.characters !== undefined) {
-    (def as any).characters = manifest.characters;
-  }
-  if (manifest.motions !== undefined) {
-    (def as any).motions = manifest.motions;
-  }
+  deepFreezeManifest(def);
   return markMainDefinition(def);
 }

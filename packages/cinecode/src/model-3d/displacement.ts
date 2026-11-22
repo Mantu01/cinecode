@@ -373,5 +373,5 @@ export function displaceCanvas(
     }
   }
 
-  targetCtx.putImageData(dstImg as any, 0, 0);
+  targetCtx.putImageData(dstImg as any, 0, 0); // Note: Canvas ImageData type boundary
 }

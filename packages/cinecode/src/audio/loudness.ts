@@ -1,4 +1,5 @@
 import type { AudioBuffer } from "./types.js";
+import { createError, ErrorCode } from "../errors/index.js";
 
 export interface KWeightingBiquad {
   readonly b0: number;
@@ -20,7 +21,7 @@ const HIGH_PASS_FREQUENCY = 38.13547087602444;
 const HIGH_PASS_Q = 0.5003270373238773;
 
 export function kWeightingCoefficients(sampleRate: number): KWeightingCoefficients {
-  if (!(sampleRate > 0)) throw new Error("CC5101: Sample rate must be positive for K-weighting");
+  if (!(sampleRate > 0)) throw createError(ErrorCode.CC5101, { sampleRate });
 
   const shelfK = Math.tan((Math.PI * SHELF_FREQUENCY) / sampleRate);
   const shelfVh = 10 ** (SHELF_GAIN_DB / 20);

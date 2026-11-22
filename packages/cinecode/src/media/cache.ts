@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile, rm, stat, readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { canonicalPathIdentity } from "./paths.js";
 
 export interface MediaMetadata {
   readonly duration: number;
@@ -12,6 +13,7 @@ export interface MediaMetadata {
   readonly channels?: number;
   readonly videoCodec?: string;
   readonly audioCodec?: string;
+  readonly pixelFormat?: string;
 }
 
 export interface CacheEntry<T> {
@@ -86,8 +88,9 @@ export class MediaCache {
   }
 
   private getCacheKey(filePath: string, extra: string = ""): string {
+    const identity = canonicalPathIdentity(filePath);
     const hash = createHash("sha256");
-    hash.update(filePath);
+    hash.update(identity);
     hash.update(extra);
     return hash.digest("hex");
   }

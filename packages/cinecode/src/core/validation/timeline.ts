@@ -14,25 +14,214 @@ export interface ClipSpan {
   readonly declared: boolean;
 }
 
-const DETERMINISM_BLOCKLIST: readonly (readonly [api: string, pattern: RegExp])[] = [
-  ["Date.now", /\bDate\.now\s*\(/],
-  ["Math.random", /\bMath\.random\s*\(/],
-  ["performance.now", /\bperformance\.now\s*\(/],
+export function normalizeSource(source: string): string {
+  let result = "";
+  let i = 0;
+  const len = source.length;
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let inBacktick = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+  const templateBraces: number[] = [];
+
+  while (i < len) {
+    const char = source[i]!;
+    const next = i + 1 < len ? source[i + 1]! : "";
+
+    if (inLineComment) {
+      if (char === "\n") {
+        inLineComment = false;
+        result += "\n";
+      } else if (char === "\r") {
+        result += "\r";
+      } else {
+        result += " ";
+      }
+      i++;
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (char === "*" && next === "/") {
+        inBlockComment = false;
+        result += "  ";
+        i += 2;
+      } else if (char === "\n") {
+        result += "\n";
+        i++;
+      } else if (char === "\r") {
+        result += "\r";
+        i++;
+      } else {
+        result += " ";
+        i++;
+      }
+      continue;
+    }
+
+    if (inSingleQuote) {
+      if (char === "\\" && next) {
+        result += "  ";
+        i += 2;
+      } else if (char === "'") {
+        inSingleQuote = false;
+        result += " ";
+        i++;
+      } else if (char === "\n") {
+        result += "\n";
+        i++;
+      } else if (char === "\r") {
+        result += "\r";
+        i++;
+      } else {
+        result += " ";
+        i++;
+      }
+      continue;
+    }
+
+    if (inDoubleQuote) {
+      if (char === "\\" && next) {
+        result += "  ";
+        i += 2;
+      } else if (char === '"') {
+        inDoubleQuote = false;
+        result += " ";
+        i++;
+      } else if (char === "\n") {
+        result += "\n";
+        i++;
+      } else if (char === "\r") {
+        result += "\r";
+        i++;
+      } else {
+        result += " ";
+        i++;
+      }
+      continue;
+    }
+
+    if (inBacktick) {
+      if (char === "\\" && next) {
+        result += "  ";
+        i += 2;
+      } else if (char === "`") {
+        inBacktick = false;
+        result += " ";
+        i++;
+      } else if (char === "$" && next === "{") {
+        templateBraces.push(1);
+        inBacktick = false;
+        result += "${";
+        i += 2;
+      } else if (char === "\n") {
+        result += "\n";
+        i++;
+      } else if (char === "\r") {
+        result += "\r";
+        i++;
+      } else {
+        result += " ";
+        i++;
+      }
+      continue;
+    }
+
+    if (templateBraces.length > 0) {
+      const lastIdx = templateBraces.length - 1;
+      const current = templateBraces[lastIdx] ?? 0;
+      if (char === "{") {
+        templateBraces[lastIdx] = current + 1;
+      } else if (char === "}") {
+        const nextVal = current - 1;
+        templateBraces[lastIdx] = nextVal;
+        if (nextVal <= 0) {
+          templateBraces.pop();
+          inBacktick = true;
+          result += "}";
+          i++;
+          continue;
+        }
+      }
+    }
+
+    if (char === "/" && next === "/") {
+      inLineComment = true;
+      result += "  ";
+      i += 2;
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      inBlockComment = true;
+      result += "  ";
+      i += 2;
+      continue;
+    }
+
+    if (char === "'") {
+      inSingleQuote = true;
+      result += " ";
+      i++;
+      continue;
+    }
+    if (char === '"') {
+      inDoubleQuote = true;
+      result += " ";
+      i++;
+      continue;
+    }
+    if (char === "`") {
+      inBacktick = true;
+      result += " ";
+      i++;
+      continue;
+    }
+
+    result += char;
+    i++;
+  }
+
+  return result;
+}
+
+const DETERMINISM_BLOCKLIST: readonly (readonly [api: string, pattern: RegExp, hint: string])[] = [
+  ["Date.now", /\bDate\.now\s*\(/, "Pass time or frame explicitly instead of using Date.now()."],
+  ["new Date", /\bnew\s+Date\s*\(\s*\)/, "Pass explicit timestamp or frame instead of new Date()."],
+  ["Math.random", /\bMath\.random\s*\(/, "Use random(seed), noise1d(seed, t) or noise2d(seed, x, y) from cinecode instead of Math.random()."],
+  ["performance.now", /\bperformance\.now\s*\(/, "Use frame numbers or composition duration instead of performance.now()."],
+  ["crypto.randomUUID", /\bcrypto\.randomUUID\s*\(/, "Generate deterministic IDs or use seeded randomness instead of crypto.randomUUID()."],
+  ["crypto.getRandomValues", /\bcrypto\.getRandomValues\s*\(/, "Use seeded PRNG instead of crypto.getRandomValues()."],
+  ["toLocaleString", /\.toLocaleString\s*\(/, "Specify explicit locale and options or use deterministic formatting instead of toLocaleString()."],
+  ["toLocaleDateString", /\.toLocaleDateString\s*\(/, "Specify explicit locale and options or use deterministic formatting instead of toLocaleDateString()."],
+  ["toLocaleTimeString", /\.toLocaleTimeString\s*\(/, "Specify explicit locale and options or use deterministic formatting instead of toLocaleTimeString()."],
+  ["Intl.DateTimeFormat", /\bIntl\.DateTimeFormat\b/, "Ensure explicit locale and timezone are specified for Intl.DateTimeFormat."],
+  ["Intl.NumberFormat", /\bIntl\.NumberFormat\b/, "Ensure explicit locale is specified for Intl.NumberFormat."],
+  ["readdirSync", /\b(?:fs\.)?readdirSync\s*\(/, "Filesystem readdirSync returns arbitrary order; sort entries explicitly or use media catalog."],
+  ["readdir", /\b(?:fs\.)?readdir\s*\(/, "Filesystem readdir returns arbitrary order; sort entries explicitly or use media catalog."],
+  ["readFileSync", /\b(?:fs\.)?readFileSync\s*\(/, "Use project media catalog instead of direct readFileSync."],
+  ["readFile", /\b(?:fs\.)?readFile\s*\(/, "Use project media catalog instead of direct readFile."],
+  ["openSync", /\b(?:fs\.)?openSync\s*\(/, "Use project media catalog instead of direct openSync."],
+  ["render", /\brender\s*\(/, "Render must not be invoked inside composition source."],
+  ["renderStill", /\brenderStill\s*\(/, "Render must not be invoked inside composition source."],
+  ["renderVideo", /\brenderVideo\s*\(/, "Render must not be invoked inside composition source."],
 ];
 
 export function scanSourceForNonDeterminism(source: string, file: string): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
-  const lines = source.split(/\r?\n/);
+  const normalized = normalizeSource(source);
+  const lines = normalized.split(/\r?\n/);
   lines.forEach((line, i) => {
-    for (const [api, pattern] of DETERMINISM_BLOCKLIST) {
-      if (pattern.test(line)) {
+    for (const [api, pattern, hint] of DETERMINISM_BLOCKLIST) {
+      const match = pattern.exec(line);
+      if (match) {
         issues.push(
           authoringIssue(
             AUTHORING_CODES.nonDeterministicApi,
             `Non-deterministic API "${api}" used in ${file}`,
             {
-              hint: `Use random(seed), noise1d(seed, t) or noise2d(seed, x, y) from cinecode instead of ${api}.`,
-              position: { file, line: i + 1, column: line.indexOf(api) + 1 },
+              hint,
+              position: { file, line: i + 1, column: match.index + 1 },
             },
           ),
         );
@@ -43,12 +232,13 @@ export function scanSourceForNonDeterminism(source: string, file: string): Valid
 }
 
 export function computeClipSpan(clip: Clip, conversion: FrameConversion): ClipSpan {
-  const startFrames = clip.start === undefined ? 0 : timeInputToFrames(clip.start, conversion);
+  const rawStart = clip.start === undefined ? 0 : timeInputToFrames(clip.start, conversion);
+  const startFrames = Math.max(0, rawStart);
   let endFrames: number;
-  if (clip.end !== undefined) {
-    endFrames = timeInputToFrames(clip.end, conversion);
-  } else if (clip.duration !== undefined) {
+  if (clip.duration !== undefined) {
     endFrames = startFrames + timeInputToFrames(clip.duration, conversion);
+  } else if (clip.end !== undefined) {
+    endFrames = timeInputToFrames(clip.end, conversion);
   } else {
     endFrames = startFrames + 1;
   }
@@ -92,8 +282,10 @@ export function validateTimeline(
         }
       }
     }
-    const spans = track.clips.map((clip) => computeClipSpan(clip as Clip, context.conversion));
-    spans.sort((a, b) => a.startFrames - b.startFrames);
+    const spans = track.clips
+      .map((clip, index) => ({ span: computeClipSpan(clip as Clip, context.conversion), index }))
+      .sort((a, b) => a.span.startFrames - b.span.startFrames || a.index - b.index)
+      .map((item) => item.span);
 
     for (const span of spans) {
       if (span.declared) {

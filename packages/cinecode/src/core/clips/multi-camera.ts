@@ -2,6 +2,7 @@ import { mat4, vec3 } from "../../renderer/camera/math.js";
 import type { Camera, CameraPose, Quat, Vec3 } from "../../renderer/camera/rig.js";
 import { slerpQuaternion } from "../../renderer/camera/rig.js";
 import type { CameraSwitchEvent, CameraTransitionType, MultiCameraClip } from "../types/clips.js";
+import { createError, ErrorCode } from "../../errors/index.js";
 
 export const DEFAULT_CAMERA_TRANSITION_SECONDS = 0.5;
 
@@ -123,7 +124,7 @@ export function evaluateMultiCamera(
   const fallbackId = defaultCameraIdFor(clip);
   const fallbackCamera = resolveCamera(clip, fallbackId);
   if (!fallbackCamera) {
-    throw new Error(`CC2101: Multi-camera clip has no resolvable camera: ${fallbackId}`);
+    throw createError(ErrorCode.CC2101, { camera: fallbackId });
   }
 
   const events = normalizeCameraSwitches(clip.switches ?? []);

@@ -18,30 +18,131 @@ export const REMOVED_CONFIG_KEYS: Readonly<Record<string, string>> = {
   name: "Removed; project identity is not configurable.",
   "project.name": "Removed; project identity is not configurable.",
   "video.title": "Removed; composition names come from timeline and scene entries.",
-  "video.description": "Removed; output metadata is not configurable in this release.",
-  "video.author": "Removed; output metadata is not configurable in this release.",
-  "video.version": "Removed; output metadata is not configurable in this release.",
-  "video.tags": "Removed; output metadata is not configurable in this release.",
-  "video.license": "Removed; output metadata is not configurable in this release.",
+  "video.description": "Removed; output metadata is not configurable.",
+  "video.author": "Removed; output metadata is not configurable.",
+  "video.version": "Removed; output metadata is not configurable.",
+  "video.tags": "Removed; output metadata is not configurable.",
+  "video.license": "Removed; output metadata is not configurable.",
   "video.aspectRatio": "Removed; aspect comes from video.width/video.height or render.platformPreset.",
   "video.pixelAspectRatio": "Removed; pixel aspect is always 1.",
   "video.colorSpace": "Removed; use render.colorManagement.",
   "render.background": "Removed; use video.background.",
   "render.enforceAspectRatio": "Removed; use render.platformPreset or explicit video.width/video.height.",
-  "render.variants": "Removed; run `cinecode multi-res` for per-variant renders.",
-  "dev.historyDepth": "Removed; the canvas editor owns its history depth.",
-  "dev.metricsPort": "Removed; Prometheus metrics are served on the dev port at /metrics.",
+  "render.variants": "Removed; use `cinecode render --variants` instead.",
+  "dev.historyDepth": "Removed; editor state is not configurable.",
+  "dev.metricsPort": "Removed; metrics are served on the dev port at /metrics.",
   logLevel: "Removed; use the CLI --verbose flag.",
   "audio.normalize": "Removed; apply audio processing in the timeline mixer.",
   "audio.limiter": "Removed; apply audio processing in the timeline mixer.",
   "audio.sidechains": "Removed; apply audio processing in the timeline mixer.",
   security: "Removed; plugin verification is controlled by local capabilities.",
   composition: "Removed; select a composition with --composition or render the file directly.",
-  telemetry: "Removed in Phase 32; telemetry has been removed.",
+  telemetry: "Removed; telemetry is not supported.",
   pluginPermissions: "Removed; sandbox permissions are configured per plugin.",
 };
 
 const SUPPORTED_KEYS_HINT = "Supported keys are listed in docs/config-reference.md.";
+
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const prev: number[] = [];
+  for (let i = 0; i <= b.length; i++) prev[i] = i;
+  for (let i = 0; i < a.length; i++) {
+    const current = [i + 1];
+    for (let j = 0; j < b.length; j++) {
+      const cost = a[i] === b[j] ? 0 : 1;
+      current[j + 1] = Math.min(current[j]! + 1, prev[j + 1]! + 1, prev[j]! + cost);
+    }
+    prev.splice(0, prev.length, ...current);
+  }
+  return prev[b.length]!;
+}
+
+const KNOWN_CONFIG_KEYS: readonly string[] = [
+  "$schema", "extends", "schemaVersion",
+  "project", "project.entry", "project.sourceDir", "project.mediaDir", "project.outputDir", "project.cacheDir",
+  "video", "video.width", "video.height", "video.fps", "video.defaultDuration", "video.background",
+  "images", "images.defaultFormat", "images.quality", "images.scaleFactor",
+  "dev", "dev.port", "dev.host", "dev.open", "dev.hmr",
+  "render", "render.fps", "render.resolution", "render.format", "render.quality", "render.codec", "render.crf",
+  "render.preset", "render.hardwareAcceleration", "render.concurrency", "render.chunkSize", "render.memoryBudgetMb",
+  "render.alpha", "render.twoPass", "render.platformPreset", "render.bitrate", "render.colorManagement",
+  "audio", "audio.sampleRate", "audio.channels", "audio.masterVolume",
+  "binaries", "binaries.ffmpegPath", "binaries.ffprobePath",
+  "allowCoLocatedMedia", "cloudMedia", "fonts", "concurrency", "overwrite", "gitignore",
+  "plugins", "pluginPrecedence", "autoDiscoverPlugins", "ignorePatterns",
+  "entry", "sourceDir", "mediaDir", "outputDir", "cacheDir", "width", "height", "fps", "background", "duration", "defaultDuration",
+];
+
+function suggestNearestKey(key: string): string | undefined {
+  let best: string | undefined;
+  let bestDist = 4;
+  for (const candidate of KNOWN_CONFIG_KEYS) {
+    const dist = levenshtein(key.toLowerCase(), candidate.toLowerCase());
+    if (dist < bestDist) {
+      best = candidate;
+      bestDist = dist;
+    }
+  }
+  return best;
+}
+
+export function assertNotCompositionExport(value: unknown, locationFile?: string): void {
+  if (value !== null && typeof value === "object" && "rootTimeline" in value) {
+    throw createError(
+      ErrorCode.CC1002,
+      {
+        key: "rootTimeline",
+        suggestion: "Exported object appears to be a composition with rootTimeline, not a Cinecode config. Move your composition into an entry file (e.g. main.ts) and export a valid Cinecode configuration from cinecode.config.ts.",
+      },
+      {
+        location: locationFile ? { file: locationFile } : undefined,
+        fixHint: "Define compositions in entry files (e.g. main.ts) with defineScene or defineTimeline, and use defineConfig in cinecode.config.ts.",
+      },
+    );
+  }
+}
+
+export function assertNoConflictingAliases(raw: Record<string, unknown>, configPath?: string): void {
+  const project = (raw.project as Record<string, unknown> | undefined) ?? {};
+  const video = (raw.video as Record<string, unknown> | undefined) ?? {};
+  const render = (raw.render as Record<string, unknown> | undefined) ?? {};
+
+  const pairs: [string, unknown, string, unknown, () => void][] = [
+    ["entry", raw.entry, "project.entry", project.entry, () => { delete raw.entry; }],
+    ["sourceDir", raw.sourceDir, "project.sourceDir", project.sourceDir, () => { delete raw.sourceDir; }],
+    ["mediaDir", raw.mediaDir, "project.mediaDir", project.mediaDir, () => { delete raw.mediaDir; }],
+    ["outputDir", raw.outputDir, "project.outputDir", project.outputDir, () => { delete raw.outputDir; }],
+    ["cacheDir", raw.cacheDir, "project.cacheDir", project.cacheDir, () => { delete raw.cacheDir; }],
+    ["width", raw.width, "video.width", video.width, () => { delete raw.width; }],
+    ["height", raw.height, "video.height", video.height, () => { delete raw.height; }],
+    ["fps", raw.fps, "video.fps", video.fps, () => { delete raw.fps; }],
+    ["fps", raw.fps, "render.fps", render.fps, () => { delete raw.fps; }],
+    ["video.fps", video.fps, "render.fps", render.fps, () => { delete render.fps; }],
+    ["background", raw.background, "video.background", video.background, () => { delete raw.background; }],
+    ["render.background", render.background, "video.background", video.background, () => { delete render.background; }],
+    ["duration", raw.duration, "video.defaultDuration", video.defaultDuration, () => { delete raw.duration; }],
+    ["defaultDuration", raw.defaultDuration, "video.defaultDuration", video.defaultDuration, () => { delete raw.defaultDuration; }],
+  ];
+
+  for (const [legacyKey, legacyVal, canonicalKey, canonicalVal, normalize] of pairs) {
+    if (legacyVal !== undefined && canonicalVal !== undefined) {
+      if (legacyVal !== canonicalVal) {
+        throw createError(
+          ErrorCode.CC1002,
+          {
+            key: legacyKey,
+            suggestion: `Conflicting configuration keys: '${legacyKey}' (${JSON.stringify(legacyVal)}) and '${canonicalKey}' (${JSON.stringify(canonicalVal)}) disagree. Use canonical '${canonicalKey}'.`,
+          },
+          { location: { file: configPath } },
+        );
+      }
+      normalize();
+    }
+  }
+}
 
 export interface ValidationResult {
   readonly errors: CinecodeError[];
@@ -51,9 +152,17 @@ export interface ValidationResult {
 function schemaError(issue: ZodValidationIssue, configPath: string | undefined): CinecodeError {
   if (issue.code === "unrecognized_keys") {
     const key = issue.path ? `${issue.path}.${issue.keys?.[0]}` : issue.keys?.[0];
+    const removedHint = REMOVED_CONFIG_KEYS[key ?? ""];
+    let suggestion: string;
+    if (removedHint) {
+      suggestion = removedHint;
+    } else {
+      const nearest = key ? suggestNearestKey(key) : undefined;
+      suggestion = nearest ? `Did you mean '${nearest}'? ${SUPPORTED_KEYS_HINT}` : SUPPORTED_KEYS_HINT;
+    }
     return createError(
       ErrorCode.CC1002,
-      { key: key ?? "config", suggestion: REMOVED_CONFIG_KEYS[key ?? ""] ?? SUPPORTED_KEYS_HINT },
+      { key: key ?? "config", suggestion },
       { location: { file: configPath }, cause: issue },
     );
   }

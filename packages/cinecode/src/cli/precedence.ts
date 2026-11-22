@@ -11,9 +11,13 @@ import { getPreset, listPresetIds, validatePreset, type FullPlatformPreset } fro
 import { validateCodecContainer } from "../encoder/index.js";
 import { ALPHA_FORMATS, STILL_FORMATS, outputPlanFor } from "../core/output-plan.js";
 import { createError, ErrorCode } from "../errors/index.js";
+import { recordDegradation } from "../errors/degradations.js";
 import { parseTimeArgument, OUTPUT_SUBDIRS } from "./shared.js";
 import { durationToFrames, createConversion } from "../core/time/index.js";
 import { runReport } from "./run-report.js";
+import { parseMemoryBudgetMb } from "./option-parser.js";
+import { getInstrumentationCounters, type InstrumentationCounters } from "../media/instrumentation.js";
+import { createResourcePlan, type ResourcePlan } from "../pipeline/resource-planner.js";
 
 export type ColorManagementInput =
   | "srgb"
@@ -80,6 +84,8 @@ export interface ExplainReport {
   readonly selection: string;
   readonly frameWindow: ResolvedFrameWindow;
   readonly parameters: ResolvedRenderParameters;
+  readonly instrumentation?: InstrumentationCounters;
+  readonly resourcePlan?: ResourcePlan;
 }
 
 export interface PrecedenceFlags {
@@ -95,7 +101,7 @@ export interface PrecedenceFlags {
   readonly concurrency?: number | "auto";
   readonly chunkSize?: number;
   readonly hardwareAcceleration?: HardwareAcceleration;
-  readonly memoryBudgetMb?: number;
+  readonly memoryBudget?: string | number;
   readonly alpha?: boolean;
   readonly colorManagement?: ColorManagementInput;
   readonly twoPass?: boolean;
@@ -144,11 +150,35 @@ function parseResolutionPair(input: string): { width: number; height: number } {
 function field<T>(
   flagVal: { value: T; source: string } | undefined,
   selVal: { value: T; source: string } | undefined,
+  presetVal: { value: T; source: string } | undefined,
   cfgVal: { value: T; key: string } | undefined,
   defVal: T,
+): ResolvedField<T>;
+function field<T>(
+  flagVal: { value: T; source: string } | undefined,
+  selVal: { value: T; source: string } | undefined,
+  cfgVal: { value: T; key: string } | undefined,
+  defVal: T,
+): ResolvedField<T>;
+function field<T>(
+  flagVal: { value: T; source: string } | undefined,
+  selVal: { value: T; source: string } | undefined,
+  arg3: unknown,
+  arg4?: unknown,
+  arg5?: unknown,
 ): ResolvedField<T> {
   if (flagVal !== undefined) return { value: flagVal.value, origin: "flag", source: flagVal.source, originLabel: "flag" };
   if (selVal !== undefined) return { value: selVal.value, origin: "selection", source: selVal.source, originLabel: "selection" };
+  if (arguments.length === 5) {
+    const presetVal = arg3 as { value: T; source: string } | undefined;
+    const cfgVal = arg4 as { value: T; key: string } | undefined;
+    const defVal = arg5 as T;
+    if (presetVal !== undefined) return { value: presetVal.value, origin: "selection", source: presetVal.source, originLabel: presetVal.source };
+    if (cfgVal !== undefined) return { value: cfgVal.value, origin: "config", source: cfgVal.key, originLabel: cfgVal.key };
+    return { value: defVal, origin: "default", source: "default", originLabel: "default" };
+  }
+  const cfgVal = arg3 as { value: T; key: string } | undefined;
+  const defVal = arg4 as T;
   if (cfgVal !== undefined) return { value: cfgVal.value, origin: "config", source: cfgVal.key, originLabel: cfgVal.key };
   return { value: defVal, origin: "default", source: "default", originLabel: "default" };
 }
@@ -188,8 +218,6 @@ export function resolveRenderParameters(options: PrecedenceOptions): {
     flagRes = { value: parseResolutionPair(flags.resolution), source: "--resolution" };
   } else if (flags.width !== undefined && flags.height !== undefined) {
     flagRes = { value: { width: flags.width, height: flags.height }, source: "--width/--height" };
-  } else if (preset) {
-    flagRes = { value: { width: preset.width, height: preset.height }, source: presetSource };
   }
 
   let selRes: { value: { width: number; height: number }; source: string } | undefined;
@@ -197,71 +225,69 @@ export function resolveRenderParameters(options: PrecedenceOptions): {
     selRes = { value: { width: sel.width, height: sel.height }, source: "selection" };
   }
 
+  let presetRes: { value: { width: number; height: number }; source: string } | undefined;
+  if (preset) {
+    presetRes = { value: { width: preset.width, height: preset.height }, source: presetSource };
+  }
+
   let cfgRes: { value: { width: number; height: number }; key: string } | undefined;
   if (explicit.has("render.resolution") && config?.render?.resolution) {
     cfgRes = { value: parseResolutionPair(config.render.resolution), key: "render.resolution" };
   } else if ((explicit.has("video.width") || explicit.has("video.height")) && config?.video?.width && config?.video?.height) {
     cfgRes = { value: { width: config.video.width, height: config.video.height }, key: "video.width" };
-  } else if ((explicit.has("width") || explicit.has("height")) && (config as any)?.width && (config as any)?.height) {
-    cfgRes = { value: { width: (config as any).width, height: (config as any).height }, key: "width" };
+  } else if ((explicit.has("width") || explicit.has("height")) && (config as Record<string, unknown>)?.width && (config as Record<string, unknown>)?.height) {
+    cfgRes = { value: { width: Number((config as Record<string, unknown>).width), height: Number((config as Record<string, unknown>).height) }, key: "width" };
   }
 
   const width = field(
     flagRes ? { value: flagRes.value.width, source: flagRes.source } : undefined,
     selRes ? { value: selRes.value.width, source: selRes.source } : undefined,
+    presetRes ? { value: presetRes.value.width, source: presetRes.source } : undefined,
     cfgRes ? { value: cfgRes.value.width, key: cfgRes.key } : undefined,
     1920,
   );
   const height = field(
     flagRes ? { value: flagRes.value.height, source: flagRes.source } : undefined,
     selRes ? { value: selRes.value.height, source: selRes.source } : undefined,
+    presetRes ? { value: presetRes.value.height, source: presetRes.source } : undefined,
     cfgRes ? { value: cfgRes.value.height, key: cfgRes.key } : undefined,
     1080,
   );
 
   // 3. FPS
-  const flagFps = flags.fps !== undefined
-    ? { value: flags.fps, source: "--fps" }
-    : preset
-      ? { value: preset.fps, source: presetSource }
-      : undefined;
+  const flagFps = flags.fps !== undefined ? { value: flags.fps, source: "--fps" } : undefined;
   const selFps = sel?.fps !== undefined ? { value: sel.fps, source: "selection" } : undefined;
+  const presetFps = preset ? { value: preset.fps, source: presetSource } : undefined;
   let cfgFps: { value: number; key: string } | undefined;
   if (explicit.has("render.fps") && config?.render?.fps !== undefined) {
     cfgFps = { value: config.render.fps, key: "render.fps" };
   } else if (explicit.has("video.fps") && config?.video?.fps !== undefined) {
     cfgFps = { value: config.video.fps, key: "video.fps" };
-  } else if (explicit.has("fps") && (config as any)?.fps !== undefined) {
-    cfgFps = { value: (config as any).fps, key: "fps" };
+  } else if (explicit.has("fps") && (config as Record<string, unknown>)?.fps !== undefined) {
+    cfgFps = { value: Number((config as Record<string, unknown>).fps), key: "fps" };
   }
-  const fps = field(flagFps, selFps, cfgFps, 30);
+  const fps = field(flagFps, selFps, presetFps, cfgFps, 30);
 
   // 4. Format
-  const flagFmt = flags.format !== undefined
-    ? { value: flags.format, source: "--format" }
-    : preset
-      ? { value: preset.format, source: presetSource }
-      : undefined;
+  const flagFmt = flags.format !== undefined ? { value: flags.format, source: "--format" } : undefined;
   const selFmt = sel?.format !== undefined ? { value: sel.format, source: "selection" } : undefined;
+  const presetFmt = preset ? { value: preset.format, source: presetSource } : undefined;
   const cfgFmt = explicit.has("render.format") && config?.render?.format !== undefined
     ? { value: config.render.format, key: "render.format" }
     : undefined;
-  const format = field(flagFmt, selFmt, cfgFmt, (isStill ? STILL_FORMATS[0]! : "mp4") as RenderFormat);
+  const format = field(flagFmt, selFmt, presetFmt, cfgFmt, (isStill ? STILL_FORMATS[0]! : "mp4") as RenderFormat);
 
   // 5. Codec
   const formatPlan = outputPlanFor(format.value);
   const defaultCodec: VideoCodec = formatPlan.defaultCodec ?? "h264";
 
-  const flagCodec = flags.codec !== undefined
-    ? { value: flags.codec, source: "--codec" }
-    : preset && formatPlan.codecs.length > 0
-      ? { value: preset.video.codec, source: presetSource }
-      : undefined;
+  const flagCodec = flags.codec !== undefined ? { value: flags.codec, source: "--codec" } : undefined;
   const selCodec = sel?.codec !== undefined ? { value: sel.codec, source: "selection" } : undefined;
+  const presetCodec = preset && formatPlan.codecs.length > 0 ? { value: preset.video.codec, source: presetSource } : undefined;
   const cfgCodec = explicit.has("render.codec") && config?.render?.codec !== undefined
     ? { value: config.render.codec, key: "render.codec" }
     : undefined;
-  const codec = field(flagCodec, selCodec, cfgCodec, defaultCodec);
+  const codec = field(flagCodec, selCodec, presetCodec, cfgCodec, defaultCodec);
 
   // 6. Quality & CRF
   const flagQuality = flags.quality !== undefined
@@ -270,10 +296,11 @@ export function resolveRenderParameters(options: PrecedenceOptions): {
       ? { value: "preview" as QualitySetting, source: "--preview" }
       : undefined;
   const selQuality = sel?.quality !== undefined ? { value: sel.quality, source: "selection" } : undefined;
+  const presetQuality = preset ? { value: "final" as QualitySetting, source: presetSource } : undefined;
   const cfgQuality = explicit.has("render.quality") && config?.render?.quality !== undefined
     ? { value: config.render.quality, key: "render.quality" }
     : undefined;
-  const quality = field(flagQuality, selQuality, cfgQuality, "final" as QualitySetting);
+  const quality = field(flagQuality, selQuality, presetQuality, cfgQuality, "final" as QualitySetting);
   if (quality.value === "low" || quality.value === "high") {
     runReport.warn(
       ErrorCode.CC1012,
@@ -329,8 +356,9 @@ export function resolveRenderParameters(options: PrecedenceOptions): {
   const hardwareAcceleration = field(flagAccel, undefined, cfgAccel, "off" as HardwareAcceleration);
 
   // 8d. Render memory budget
-  const flagMemory = flags.memoryBudgetMb !== undefined
-    ? { value: flags.memoryBudgetMb, source: "--memory-budget" }
+  const rawMemory = flags.memoryBudget;
+  const flagMemory = rawMemory !== undefined
+    ? { value: typeof rawMemory === "number" ? rawMemory : parseMemoryBudgetMb(rawMemory), source: "--memory-budget" }
     : undefined;
   const cfgMemory = explicit.has("render.memoryBudgetMb") && config?.render?.memoryBudgetMb !== undefined
     ? { value: config.render.memoryBudgetMb, key: "render.memoryBudgetMb" }
@@ -374,11 +402,25 @@ export function resolveRenderParameters(options: PrecedenceOptions): {
   const startFrame = flags.from !== undefined
     ? typeof flags.from === "number" ? flags.from : parseTimeArgument(String(flags.from), parsedFps)
     : 0;
-  const endFrame = isStill
+  if (startFrame < 0) {
+    throw createError(ErrorCode.CC0001, { reason: `Frame window start frame must be non-negative, got ${startFrame}` });
+  }
+
+  let endFrame = isStill
     ? startFrame + 1
     : flags.to !== undefined
       ? typeof flags.to === "number" ? flags.to : parseTimeArgument(String(flags.to), parsedFps)
       : computedDurationFrames;
+
+  if (!isStill && flags.to !== undefined && computedDurationFrames > 0 && endFrame > computedDurationFrames) {
+    recordDegradation({
+      code: ErrorCode.CC4001,
+      what: "frame window extends beyond composition duration",
+      reason: `requested to=${endFrame} exceeds composition duration of ${computedDurationFrames} frames`,
+      instead: `clamped to=${computedDurationFrames}`,
+    });
+    endFrame = computedDurationFrames;
+  }
 
   const resolvedWindow: ResolvedFrameWindow = {
     from: startFrame,
@@ -398,13 +440,15 @@ export function resolveRenderParameters(options: PrecedenceOptions): {
   // 13. Output Path
   const targetExt = isStill ? formatPlan.extension || `.${format.value}` : formatPlan.extension;
   const outName = sel?.id ?? sel?.name ?? "output";
-  const previewSuffix = flags.preview ? ".preview" : "";
+  const previewSuffix = flags.preview || quality.value === "preview" ? ".preview" : "";
   const subFolder = isStill ? OUTPUT_SUBDIRS.images : OUTPUT_SUBDIRS.videos;
   const defaultDir = project?.roots?.output
     ?? (project?.root ? resolve(project.root, config?.outputDir ?? "output") : resolve("output"));
   const fallbackPath = resolve(defaultDir, subFolder, `${outName}${previewSuffix}${targetExt}`);
 
-  const flagOut = flags.out !== undefined ? { value: resolve(flags.out), source: "--out" } : undefined;
+  const flagOut = flags.out !== undefined
+    ? { value: resolve(project?.root ?? ".", flags.out), source: "--out" }
+    : undefined;
   let cfgOut: { value: string; key: string } | undefined;
   if (explicit.has("project.outputDir") && config?.project?.outputDir) {
     cfgOut = { value: resolve(project!.root, config.project.outputDir, subFolder, `${outName}${previewSuffix}${targetExt}`), key: "project.outputDir" };
@@ -436,6 +480,14 @@ export function resolveRenderParameters(options: PrecedenceOptions): {
 
   validatePrecedenceConflicts(parameters, preset);
 
+  const resourcePlan = createResourcePlan({
+    width: parameters.width.value,
+    height: parameters.height.value,
+    concurrency: parameters.concurrency.value,
+    chunkSize: parameters.chunkSize.value,
+    memoryBudgetMb: parameters.memoryBudgetMb.value,
+  });
+
   const explain: ExplainReport = {
     root: project?.root ?? "",
     configPath: project?.configPath ?? "",
@@ -444,6 +496,7 @@ export function resolveRenderParameters(options: PrecedenceOptions): {
     selection: project?.selection ?? (sel?.id ? `timeline ${sel.id}` : sel?.name ? `composition ${sel.name}` : "none"),
     frameWindow: resolvedWindow,
     parameters,
+    resourcePlan,
   };
 
   return { parameters, explain, preset };
@@ -527,6 +580,28 @@ export function formatExplainReport(explain: ExplainReport): string {
     `  outputPath:       ${p.outputPath.value} (origin: ${p.outputPath.originLabel})`,
     `  frameWindow:      ${p.frameWindow.value.from}..${p.frameWindow.value.to} (origin: ${p.frameWindow.originLabel})`,
   ];
+  const inst = explain.instrumentation ?? getInstrumentationCounters();
+  lines.push(
+    ``,
+    `Instrumentation:`,
+    `  processSpawns:    ${inst.processSpawns}`,
+    `  framesDecoded:    ${inst.framesDecoded}`,
+    `  framesFromCache:  ${inst.framesFromCache}`,
+    `  bytesTransferred: ${inst.bytesTransferred}`,
+  );
+  if (explain.resourcePlan) {
+    const rp = explain.resourcePlan;
+    lines.push(
+      ``,
+      `Resource Plan:`,
+      `  totalBudget:      ${rp.summary}`,
+      `  workerCount:      ${rp.workerCount}`,
+      `  chunkSize:        ${rp.chunkSize}`,
+      `  queueDepth:       ${rp.queueDepth}`,
+      `  previewShare:     ${rp.previewShare} bytes`,
+      `  partitions:       frames=${rp.partitions.frames}, images=${rp.partitions.images}, text=${rp.partitions.text}, media=${rp.partitions.media}`,
+    );
+  }
   return lines.join("\n");
 }
 
@@ -539,6 +614,8 @@ export function describeExplainReport(explain: ExplainReport): Record<string, un
     mode: explain.mode,
     selection: explain.selection,
     frameWindow: explain.frameWindow,
+    instrumentation: explain.instrumentation ?? getInstrumentationCounters(),
+    resourcePlan: explain.resourcePlan ?? null,
     parameters: {
       width: { value: p.width.value, origin: p.width.origin, source: p.width.source, originLabel: p.width.originLabel },
       height: { value: p.height.value, origin: p.height.origin, source: p.height.source, originLabel: p.height.originLabel },

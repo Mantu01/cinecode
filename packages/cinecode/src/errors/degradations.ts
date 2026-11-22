@@ -3,6 +3,9 @@ import type { ErrorCode } from "./codes.js";
 export interface Degradation {
   readonly code: string;
   readonly what: string;
+  readonly field?: string;
+  readonly requested?: unknown;
+  readonly actual?: unknown;
   readonly reason: string;
   readonly input?: string;
   readonly instead: string;

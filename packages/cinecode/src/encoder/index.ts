@@ -324,7 +324,7 @@ export class VideoEncoder {
       try {
         this.process.kill();
       } catch {
-        // already gone
+        // Note: already gone
       }
       await new Promise<void>((resolve) => {
         if (!this.process || this.process.killed) return resolve();
@@ -332,7 +332,7 @@ export class VideoEncoder {
           try {
             this.process?.kill("SIGKILL");
           } catch {
-            // ignore
+            // Note: process might already be terminated
           }
           resolve();
         }, 500);

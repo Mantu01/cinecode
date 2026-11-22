@@ -419,6 +419,21 @@ export const ManifestSchema = z
   })
   .strict()
   .superRefine((manifest, ctx) => {
+    if (Array.isArray(manifest.characters) && manifest.characters.length > 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["characters"],
+        message: 'collection "characters" is reserved and not supported in this release; remove "characters" from the manifest',
+      });
+    }
+    if (Array.isArray(manifest.motions) && manifest.motions.length > 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["motions"],
+        message: 'collection "motions" is reserved and not supported in this release; remove "motions" from the manifest',
+      });
+    }
+    const seen = new Map<string, { collection: string; index: number; id: string }>();
     for (const collection of ["images", "audio", "scenes", "timelines"] as const) {
       (manifest[collection] ?? []).forEach((entry, index) => {
         const rule = idRule(entry.id);
@@ -428,6 +443,17 @@ export const ManifestSchema = z
             path: [collection, index, "id"],
             message: `${collection} "${entry.id}" is not a filesystem-safe id: ${rule}`,
           });
+        }
+        const key = entry.id.toLowerCase();
+        if (seen.has(key)) {
+          const prev = seen.get(key)!;
+          ctx.addIssue({
+            code: "custom",
+            path: [collection, index, "id"],
+            message: `duplicate id "${entry.id}" declared in ${prev.collection}[${prev.index}] and ${collection}[${index}] (ids are compared case-insensitively)`,
+          });
+        } else {
+          seen.set(key, { collection, index, id: entry.id });
         }
       });
     }

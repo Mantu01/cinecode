@@ -31,7 +31,7 @@ interface InspectOptions {
   format?: "dot" | "mermaid" | "ascii";
 }
 
-function generateDeepGraph(composition: any, format: "dot" | "mermaid" | "ascii" = "ascii"): string {
+function generateDeepGraph(composition: Composition, format: "dot" | "mermaid" | "ascii" = "ascii"): string {
   const clips = allClips(composition.rootTimeline);
   const nodes: { id: string; label: string; type: "media" | "transform" | "audio" | "shader" | "output" }[] = [];
   const edges: { from: string; to: string; label: string }[] = [];
@@ -40,24 +40,24 @@ function generateDeepGraph(composition: any, format: "dot" | "mermaid" | "ascii"
 
   clips.forEach((c, idx) => {
     const cId = `clip_${idx}`;
-    const cAny = c as any;
-    const isAudio = cAny.type === "audio" || cAny.type === "sound";
-    const clipLabel = cAny.id || cAny.name || cAny.track || idx;
+    const cClip = c as Clip & { id?: string; name?: string; track?: string; start?: number; duration?: number; effects?: Array<{ type?: string; name?: string }> };
+    const isAudio = cClip.type === "audio" || cClip.type === "sound";
+    const clipLabel = cClip.id || cClip.name || cClip.track || idx;
     nodes.push({
       id: cId,
-      label: `${(cAny.type || "clip").toUpperCase()}: ${clipLabel}`,
+      label: `${(cClip.type || "clip").toUpperCase()}: ${clipLabel}`,
       type: isAudio ? "audio" : "media",
     });
 
-    const start = Number(cAny.start ?? 0);
-    const dur = Number(cAny.duration ?? 5);
+    const start = Number(cClip.start ?? 0);
+    const dur = Number(cClip.duration ?? 5);
     const timeLabel = `[${start}s - ${start + dur}s]`;
 
-    if ((c as any).effects && (c as any).effects.length > 0) {
+    if (cClip.effects && cClip.effects.length > 0) {
       let prevId = cId;
-      (c as any).effects.forEach((eff: any, eIdx: number) => {
+      cClip.effects.forEach((eff, eIdx: number) => {
         const effId = `${cId}_fx_${eIdx}`;
-        nodes.push({ id: effId, label: `FX: ${eff.type}`, type: "shader" });
+        nodes.push({ id: effId, label: `FX: ${eff.type ?? eff.name ?? "effect"}`, type: "shader" });
         edges.push({ from: prevId, to: effId, label: "RGBA" });
         prevId = effId;
       });
@@ -131,10 +131,10 @@ function getClipEndFrame(clip: Clip, fps: number, compositionDuration?: number |
   return getClipStartFrame(clip, fps) + 1;
 }
 
-function describeVisualClip(clip: VisualClip, fps: number): string[] {
+function describeVisualClip(clip: VisualClip, fps: number, compositionDuration?: number | string): string[] {
   const lines: string[] = [];
   const startFrame = getClipStartFrame(clip, fps);
-  const endFrame = getClipEndFrame(clip, fps, clip.duration as number | string);
+  const endFrame = getClipEndFrame(clip, fps, compositionDuration);
   const duration = endFrame - startFrame;
 
   const timeRange = `[${formatTimecode(startFrame, fps)} \u2013 ${formatTimecode(endFrame, fps)}]`;
@@ -192,10 +192,10 @@ function describeVisualClip(clip: VisualClip, fps: number): string[] {
   return lines;
 }
 
-function describeAudioClip(clip: AudioClip | SoundClip, fps: number): string[] {
+function describeAudioClip(clip: AudioClip | SoundClip, fps: number, compositionDuration?: number | string): string[] {
   const lines: string[] = [];
   const startFrame = getClipStartFrame(clip, fps);
-  const endFrame = getClipEndFrame(clip, fps);
+  const endFrame = getClipEndFrame(clip, fps, compositionDuration);
   const duration = endFrame - startFrame;
   const sampleRate = 48000;
   const samples = Math.round(duration / fps * sampleRate);
@@ -257,7 +257,9 @@ export async function inspectCommand(options: InspectOptions): Promise<void> {
     },
     explicit: resolution.context.explicit,
   });
-  runReport.result({ explain: describeExplainReport(explain) });
+  const explained = describeExplainReport(explain);
+  runReport.result({ explain: explained });
+  runReport.explain(explained);
   const fps = parameters.fps.value;
   const width = parameters.width.value;
   const height = parameters.height.value;
@@ -272,6 +274,15 @@ export async function inspectCommand(options: InspectOptions): Promise<void> {
 
   if (options.deep) {
     const graphStr = generateDeepGraph(composition, options.format || "ascii");
+    if (options.json || runReport.isMachine()) {
+      runReport.result({
+        composition: composition.name,
+        deep: true,
+        format: options.format || "ascii",
+        graph: graphStr,
+      });
+      return;
+    }
     console.log(graphStr);
     return;
   }
@@ -340,28 +351,19 @@ export async function inspectCommand(options: InspectOptions): Promise<void> {
     if (!isActive) continue;
 
     if (clip.type === "audio" || clip.type === "sound") {
-      const lines = describeAudioClip(clip, fps);
+      const lines = describeAudioClip(clip, fps, composition.duration);
       for (const line of lines) console.log(line);
     } else {
-      const lines = describeVisualClip(clip as VisualClip, fps);
+      const lines = describeVisualClip(clip as VisualClip, fps, composition.duration);
       for (const line of lines) console.log(line);
     }
   }
 }
 
+import { findCommand, buildCommanderCommand } from "./command-registry.js";
+
 export function createInspectCommand(): Command {
-  const cmd = new Command("inspect")
-    .description("Print resolved timeline for a composition")
-    .option("--file <path>", "Standalone composition file (file mode)")
-    .option("-c, --composition <name>", "Composition name (requires --file)")
-    .option("--timeline <id>", "Timeline id from main.ts")
-    .option("--scene <id>", "Scene id from main.ts")
-    .option("-f, --frame <number>", "Show clips active at frame", (v) => parseInt(v, 10))
-    .option("--time <time>", `Show clips active at time (${TIME_GRAMMAR})`)
-    .option("--deep", "Generate deep dependency graph across audio, visual, and effects", false)
-    .option("--format <format>", "Graph output format: dot, mermaid, ascii")
-    .action(async (options: InspectOptions) => {
-      await inspectCommand(options);
-    });
-  return cmd;
+  const spec = findCommand("inspect");
+  if (!spec) throw new Error("Command 'inspect' not found in registry");
+  return buildCommanderCommand(spec);
 }

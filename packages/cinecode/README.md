@@ -66,8 +66,6 @@ export default defineScene("intro", DURATION, () => {
 npx cinecode render --all --config ./cinecode.config.ts --overwrite
 ```
 
-See [`example/basic-api`](../../example/basic-api/) for a complete runnable project.
-
 ## Transition semantics
 
 A transition blends a clip with the state on its own track. Timing is measured
@@ -199,16 +197,14 @@ Every command accepts the global options `--root <dir>`, `--config <path>`,
 |---------|---------|
 | `cinecode render --config <file>` | Render a composition to a file |
 | `cinecode still <file>` | Render a single frame |
-| `cinecode preview <file>` | Stream a preview |
+| `cinecode preview <file>` | Stream a read-only preview |
 | `cinecode dev` | Dev server with HMR and inspector |
-| `cinecode edit <file>` | Open a composition in `$EDITOR` or print JSON with `--json` |
-| `cinecode sync` | Verify media references, prune stale cache, report orphans and plugins |
+| `cinecode clean [--cache]` | Delete intermediate chunks and render cache |
 | `cinecode compare <a> <b>` | Pixel-diff two compositions over a deterministic frame range |
 | `cinecode benchmark <file>` | Measure frame time, p95, memory, and worker capacity |
-| `cinecode upgrade` | Compare the installed version with npm, optionally self-update |
-| `cinecode template [name]` | List or scaffold starter compositions |
+| `cinecode upgrade` | Compare the installed version with npm |
+| `cinecode validate` | Validate compositions, references, and fonts |
 | `cinecode doctor [--fix]` | Environment and project diagnostics with auto-repair |
-| `cinecode health [--json]` | Compact CI-friendly system health report |
 
 Exit codes: `0` success, `1` runtime failure, `2` usage error, `3` validation
 failure, `4` environment failure, `130` cancelled.
@@ -217,10 +213,7 @@ Command aliases are opt-in: set `CINECODE_ALIASES=1` to expand them from
 `cinecode.json`, `package.json#cinecode.aliases` and `~/.cinecode/config.json`
 (project tables win over the global table). An alias never rewrites a known
 command, expansion is bounded and cycle-safe, and an alias that resolves to no
-command fails with a suggestion.
-| `cinecode check` | Validate compositions and references |
-| `cinecode preview` | Start read-only preview server and open viewer |
-| `cinecode render-multi <file>` | Render a resolution bundle in one command |
+command fails with a suggestion. Canonical aliases: `render-multi` -> `render`, `check` -> `validate`, `sync` -> `clean`, `health` -> `doctor`, `create` -> `init`.
 
 ## Advanced usage
 
@@ -322,10 +315,12 @@ pnpm --filter cinecode generate:schema
 
 ## Documentation
 
-- [API reference](../../docs/api-reference.md)
-- [Examples gallery](../../docs/examples)
+- [CLI command reference](../../docs/command-reference.md)
+- [Configuration reference](../../docs/config-reference.md)
+- [Support matrix](../../docs/support-matrix.md)
+- [Output formats](../../docs/output-formats.md)
+- [Architecture & Invariants](../../docs/architecture.md)
 - [Migration guide](../../docs/migration.md)
-- [Contributing](../../CONTRIBUTING.md)
 
 ## License
 

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import type { CinecodeConfig } from "../core/types/index.js";
-import { getDefaultConfig, loadConfigDocument } from "../config/schema.js";
+import { getDefaultConfig, loadConfigDocument, type ConfigFieldTrace } from "../config/schema.js";
 import { resolveProjectLocation, type ConfigSource } from "../config/project.js";
 import { resolveProjectRoots, type ProjectRoots } from "../config/roots.js";
 
@@ -14,6 +14,7 @@ export interface ProjectContext {
   readonly source: ConfigSource | "standalone";
   readonly config: CinecodeConfig;
   readonly explicit: ReadonlySet<string>;
+  readonly trace?: ReadonlyMap<string, ConfigFieldTrace>;
   readonly roots: ProjectRoots;
 }
 
@@ -30,6 +31,7 @@ export function createProjectContext(
   location: { readonly root: string; readonly configPath: string; readonly source: ConfigSource | "standalone" },
   config: CinecodeConfig,
   explicit: ReadonlySet<string> = new Set(),
+  trace?: ReadonlyMap<string, ConfigFieldTrace>,
 ): ProjectContext {
   return {
     root: location.root,
@@ -37,6 +39,7 @@ export function createProjectContext(
     source: location.source,
     config,
     explicit,
+    trace,
     roots: resolveProjectRoots(location.root, config),
   };
 }
@@ -59,5 +62,5 @@ export async function loadProjectContext(options: ProjectContextOptions = {}): P
     return createProjectContext(location, getDefaultConfig());
   }
   const loaded = await loadConfigDocument(location.configPath, { fresh: options.fresh, root: location.root });
-  return createProjectContext(location, loaded.config, loaded.explicit);
+  return createProjectContext(location, loaded.config, loaded.explicit, loaded.trace);
 }

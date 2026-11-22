@@ -6,6 +6,7 @@ import { loadCinecodeIgnore } from "../config/ignore.js";
 import { createError, ErrorCode } from "../errors/index.js";
 import { runReport } from "./run-report.js";
 import { loadProjectContext } from "./project-context.js";
+import { buildCommanderCommand, findCommand } from "./command-registry.js";
 
 export interface PublishOptions {
   dest?: string;
@@ -60,7 +61,7 @@ export async function publishOutput(outputPath: string, options: PublishOptions 
       const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as { destination?: string };
       destination = config.destination;
     } catch {
-      // ignore
+      // Note: ignore missing .cinecode-publish.json
     }
   }
   if (!destination) {
@@ -83,34 +84,31 @@ export async function publishOutput(outputPath: string, options: PublishOptions 
     fs.copyFileSync(resolvedOutput, tempPath);
     fs.renameSync(tempPath, target);
   } catch (err) {
-    try { fs.unlinkSync(tempPath); } catch { /* ignore */ }
+    try { fs.unlinkSync(tempPath); } catch { /* Note: ignore temp file unlink error on failure */ }
     return { success: false, target, message: `Failed atomic write: ${String(err)}` };
   }
 
   return { success: true, target, contentType, message: `Published output to ${target} (${contentType})` };
 }
 
+export async function publishCommand(outputPath: string, options: PublishOptions = {}): Promise<void> {
+  console.log(`Publishing '${outputPath}' locally...`);
+  const context = await loadProjectContext({ root: options.root, config: options.config, allowStandalone: true });
+  const result = await publishOutput(outputPath, options, context.root);
+  runReport.result({ success: result.success, target: result.target, message: result.message });
+  if (result.success) {
+    runReport.artifact({ kind: "published", path: result.target, units: 1, unit: "file" });
+    console.log(pc.green(`✔ ${result.message}`));
+    console.log(pc.cyan(result.target));
+  } else {
+    const resolved = path.resolve(context.root, outputPath);
+    if (!fs.existsSync(resolved)) {
+      throw createError(ErrorCode.CC2001, { path: resolved }, { location: { file: resolved } });
+    }
+    throw createError(ErrorCode.CC6002, { url: result.target, reason: result.message });
+  }
+}
+
 export function createPublishCommand(): Command {
-  return new Command("publish")
-    .description("Publish a rendered output locally to a destination directory")
-    .argument("<outputPath>", "Rendered output file to publish")
-    .option("--dest <dir>", "Local destination directory")
-    .action(async (outputPath: string, options: PublishOptions, command: Command) => {
-      console.log(`Publishing '${outputPath}' locally...`);
-      const merged = { ...command.optsWithGlobals(), ...options } as PublishOptions;
-      const context = await loadProjectContext({ root: merged.root, config: merged.config, allowStandalone: true });
-      const result = await publishOutput(outputPath, merged, context.root);
-      runReport.result({ success: result.success, target: result.target, message: result.message });
-      if (result.success) {
-        runReport.artifact({ kind: "published", path: result.target, units: 1, unit: "file" });
-        console.log(pc.green(`✔ ${result.message}`));
-        console.log(pc.cyan(result.target));
-      } else {
-        const resolved = path.resolve(context.root, outputPath);
-        if (!fs.existsSync(resolved)) {
-          throw createError(ErrorCode.CC2001, { path: resolved }, { location: { file: resolved } });
-        }
-        throw createError(ErrorCode.CC6002, { url: result.target, reason: result.message });
-      }
-    });
+  return buildCommanderCommand(findCommand("publish")!);
 }

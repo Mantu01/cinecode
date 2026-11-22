@@ -1,5 +1,6 @@
 import { inflateSync } from "node:zlib";
 import { readFileSync } from "node:fs";
+import { createError, ErrorCode } from "../../errors/index.js";
 
 export type ColorSpace = "srgb" | "rec709" | "display-p3" | "rec2020" | "acescg";
 
@@ -130,7 +131,7 @@ function invertMatrix(matrix: Matrix3): Matrix3 {
   const [[a, b, c], [d, e, f], [g, h, i]] = matrix;
   const determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
   if (Math.abs(determinant) < 1e-12) {
-    throw new Error("[CC2501] Singular color transform matrix");
+    throw createError(ErrorCode.CC2501);
   }
   const inverse = 1 / determinant;
   return [
@@ -224,7 +225,7 @@ export function createColorTransform(from: ColorSpace, to: ColorSpace): ColorTra
   const source = COLOR_SPACES[from];
   const target = COLOR_SPACES[to];
   if (!source || !target) {
-    throw new Error(`[CC2502] Unsupported color transform ${from} -> ${to}`);
+    throw createError(ErrorCode.CC2502, { from, to });
   }
   const needsMatrix = from !== to && absDiff(source, target);
   const matrix: Matrix3 = needsMatrix

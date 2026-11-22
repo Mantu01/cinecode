@@ -402,7 +402,7 @@ export async function primeVideoFramesForRange(
           rememberVideoFrame(src, first + i, extracted[i]!, s);
         }
       } catch {
-        // Priming is an optimization — per-frame extraction still works.
+        // Note: Priming is an optimization — per-frame extraction still works.
       }
     }
   }
@@ -554,6 +554,7 @@ function buildCompositionIndex(composition: Composition): CompositionIndex {
   for (let trackIndex = 0; trackIndex < tracks.length; trackIndex++) {
     const track = tracks[trackIndex]!;
     if (track.kind === "audio" || track.kind === "subtitle") continue;
+    if (track.muted === true) continue;
     const ordered = track.clips
       .map((clip, order) => ({ clip, order, span: computeClipSpan(clip as never, conversion) }))
       .sort((a, b) => a.span.startFrames - b.span.startFrames || a.order - b.order);
@@ -1522,7 +1523,7 @@ async function extractVideoFrameCanvas(
   let extractedFrame = recallVideoFrame(src, sourceFrame, context.session);
   if (!extractedFrame) {
     if (context.session.disableLocalVideoDecode) {
-      throw new Error(`[CC4001] Missing video frame ${sourceFrame} of "${src}" in worker cache; shared decode service must provide all required frames.`);
+      throw createError(ErrorCode.CC4001, { frame: sourceFrame, source: src, reason: "Missing video frame in worker cache; shared decode service must provide all required frames" });
     }
     let decoded: ExtractedFrame[] | null;
     try {
@@ -1709,11 +1710,18 @@ async function drawSceneClip(
   const width = Math.max(1, Math.round(clip.width ?? bounds.width));
   const height = Math.max(1, Math.round(clip.height ?? bounds.height));
   const span = computeClipSpan(clip, context.conversion);
-  const nestedFrame = Math.max(0, context.frame - span.startFrames);
+  const speed = nestedTimeline.speed ?? 1;
+  const offsetSeconds = typeof nestedTimeline.offset === "number"
+    ? nestedTimeline.offset
+    : typeof nestedTimeline.offset === "string"
+      ? parseFloat(nestedTimeline.offset) || 0
+      : 0;
+  const offsetFrames = Math.round(offsetSeconds * context.conversion.fpsFloat);
+  const nestedFrame = Math.max(0, Math.floor((context.frame - span.startFrames) * speed) + offsetFrames);
   const nestedContext: RenderContext = {
     ...context,
     frame: nestedFrame,
-    time: nestedFrame / context.conversion.fpsFloat,
+    time: (nestedFrame / context.conversion.fpsFloat) * speed + offsetSeconds,
     width,
     height,
   };
@@ -1725,6 +1733,7 @@ async function drawSceneClip(
 
   for (const track of nestedTimeline.tracks) {
     if (track.kind === "audio" || track.kind === "subtitle") continue;
+    if (track.muted === true) continue;
     const ordered = track.clips
       .map((c, order) => ({ clip: c, order, span: computeClipSpan(c as Clip, context.conversion) }))
       .filter((e) => e.span.startFrames <= nestedFrame && nestedFrame < e.span.endFrames)
@@ -1740,12 +1749,13 @@ async function drawSceneClip(
       const finalCanvas = evaluateClipVisual({ clipCanvas: withEffects, clip: activeClip, context: nestedContext, underlying: null });
       const mask = getMask(activeClip, width, height);
       const matte = getMatte(activeClip, width, height);
+      const trackOpacity = typeof track.opacity === "number" ? track.opacity : 1;
       compositeLayers(
         sceneCtx,
         [{
           canvas: finalCanvas,
-          opacity: activeClip.opacity ?? 1,
-          blendMode: resolveBlendMode(activeClip.blend),
+          opacity: (activeClip.opacity ?? 1) * trackOpacity,
+          blendMode: resolveBlendMode(activeClip.blend ?? track.blend),
           transform: createDefaultTransform(),
           mask,
           matte,
@@ -2338,7 +2348,13 @@ async function renderCompositionFrame(
   const s = session ?? getFallbackSession();
   s.clearTempCanvases();
   const conversion = compositionConversion(composition);
-  const time = frameToSeconds(frame, conversion);
+  const rootSpeed = composition.rootTimeline?.speed ?? 1;
+  const rootOffset = typeof composition.rootTimeline?.offset === "number"
+    ? composition.rootTimeline.offset
+    : typeof composition.rootTimeline?.offset === "string"
+      ? parseFloat(composition.rootTimeline.offset) || 0
+      : 0;
+  const time = frameToSeconds(frame, conversion) * rootSpeed + rootOffset;
   const backgroundPaint = corePaintToRenderer(composition.background);
   let backgroundForContext: string | Rgba | Gradient = "#000000";
   if (typeof backgroundPaint === "string") {
@@ -2549,8 +2565,10 @@ async function renderStandardFrame(
     const activeClip = resolveClipKeyframes(clip, frame, composition.fps);
     await drawClip(clipCtx, activeClip, context, seed);
     const withEffects = applyEffects(clipCanvas, activeClip, context);
-    const opacity = activeClip.opacity ?? 1;
-    const blendMode = resolveBlendMode(activeClip.blend);
+    const parentTrack = composition.rootTimeline.tracks[trackIndex];
+    const trackOpacity = typeof parentTrack?.opacity === "number" ? parentTrack.opacity : 1;
+    const opacity = (activeClip.opacity ?? 1) * trackOpacity;
+    const blendMode = resolveBlendMode(activeClip.blend ?? parentTrack?.blend);
     const finalCanvas = evaluateClipVisual({ clipCanvas: withEffects, clip: activeClip, context, underlying });
 
     const mask = getMask(activeClip, composition.width, composition.height);
@@ -2653,6 +2671,7 @@ async function renderSubtitleTracks(
   if (composition.burnSubtitles === false) return;
   for (const track of composition.rootTimeline.tracks) {
     if (track.kind !== "subtitle") continue;
+    if (track.muted === true) continue;
     await renderSubtitles(
       ctx,
       track.clips as readonly SubtitleClip[],

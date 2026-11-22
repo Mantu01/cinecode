@@ -42,18 +42,18 @@ export class OutputFormatter {
 
   public emitProgress(data: ProgressEventPayload): void {
     if (this.mode === "ndjson") {
-      process.stdout.write(`${JSON.stringify({ type: "progress", ...data })}\n`);
+      process.stderr.write(`${JSON.stringify({ type: "progress", ...data })}\n`);
     } else if (this.mode === "text") {
       const pct = data.percent !== undefined ? data.percent : Math.round((data.frame / (data.total || 1)) * 100);
       const fpsStr = data.fps !== undefined ? ` | ${data.fps.toFixed(1)} fps` : "";
       const etaStr = data.etaSeconds !== undefined ? ` | ETA: ${data.etaSeconds.toFixed(1)}s` : "";
-      process.stdout.write(`\rRender: ${data.frame}/${data.total} (${pct}%)${fpsStr}${etaStr}`);
+      process.stderr.write(`\rRender: ${data.frame}/${data.total} (${pct}%)${fpsStr}${etaStr}`);
     }
   }
 
   public emitWarning(data: WarningEventPayload): void {
     if (this.mode === "ndjson") {
-      process.stdout.write(`${JSON.stringify({ type: "warning", ...data })}\n`);
+      process.stderr.write(`${JSON.stringify({ type: "warning", ...data })}\n`);
     } else if (this.mode === "text") {
       console.warn(`[WARN ${data.code}] ${data.message}${data.frame !== undefined ? ` (frame ${data.frame})` : ""}`);
     }

@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
+import { extname } from "node:path";
 import { resolveBinary } from "../binary/resolver.js";
+import { recordProcessSpawn } from "./instrumentation.js";
 import type { MediaMetadata, MediaCache } from "./cache.js";
 
 export interface InspectorOptions {
@@ -16,6 +18,7 @@ export interface ProbeResult {
   readonly sampleRate?: number;
   readonly videoCodec?: string;
   readonly audioCodec?: string;
+  readonly pixelFormat?: string;
   readonly streamCount: number;
   readonly videoDuration?: number;
   readonly audioDuration?: number;
@@ -80,6 +83,7 @@ export async function inspectMedia(
     sampleRate: result.sampleRate,
     videoCodec: result.videoCodec,
     audioCodec: result.audioCodec,
+    pixelFormat: result.pixelFormat,
   };
 
   await options.cache.setMetadata(filePath, metadata);
@@ -96,6 +100,7 @@ export function probeMediaFile(filePath: string): Promise<ProbeResult> {
       filePath,
     ];
 
+    recordProcessSpawn();
     const child = spawn(resolveBinary("ffprobe").path, args, { windowsHide: true });
     let stdout = "";
     let stderr = "";
@@ -137,6 +142,7 @@ function parseProbeData(data: Record<string, unknown>): ProbeResult {
   let fps = 30;
   let videoCodec: string | undefined;
   let videoDuration: number | undefined;
+  let pixelFormat: string | undefined;
   let hasAudio = false;
   let sampleRate: number | undefined;
   let audioCodec: string | undefined;
@@ -151,6 +157,7 @@ function parseProbeData(data: Record<string, unknown>): ProbeResult {
     fps = parseFps(String(videoStream.r_frame_rate ?? videoStream.avg_frame_rate ?? "30/1"));
     videoCodec = String(videoStream.codec_name ?? "");
     videoDuration = Number(videoStream.duration ?? "") || undefined;
+    pixelFormat = videoStream.pix_fmt ? String(videoStream.pix_fmt) : undefined;
   }
 
   if (audioStream) {
@@ -172,6 +179,7 @@ function parseProbeData(data: Record<string, unknown>): ProbeResult {
     sampleRate,
     videoCodec,
     audioCodec,
+    pixelFormat,
     streamCount: streams.length,
     videoDuration,
     audioDuration,
@@ -203,8 +211,13 @@ export function isSupportedLutExtension(ext: string): boolean {
 
 export type MediaFileType = "video" | "image" | "audio" | "font" | "lut" | "unknown";
 
+function extractNormalizedExtension(filePath: string): string {
+  const ext = extname(filePath);
+  return ext ? ext.slice(1).toLowerCase() : "";
+}
+
 export function getMediaType(filePath: string): "video" | "image" | "audio" | "unknown" {
-  const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
+  const ext = extractNormalizedExtension(filePath);
   if (isSupportedVideoExtension(ext)) return "video";
   if (isSupportedImageExtension(ext)) return "image";
   if (isSupportedAudioExtension(ext)) return "audio";
@@ -212,7 +225,7 @@ export function getMediaType(filePath: string): "video" | "image" | "audio" | "u
 }
 
 export function getExtendedMediaType(filePath: string): MediaFileType {
-  const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
+  const ext = extractNormalizedExtension(filePath);
   if (isSupportedVideoExtension(ext)) return "video";
   if (isSupportedImageExtension(ext)) return "image";
   if (isSupportedAudioExtension(ext)) return "audio";

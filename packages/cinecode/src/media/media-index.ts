@@ -3,7 +3,8 @@ import { join, resolve, relative, basename } from "node:path";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import type { MediaMetadata, MediaCache } from "./cache.js";
-import { inspectMedia, getExtendedMediaType, type MediaFileType } from "./inspector.js";
+import { inspectMedia, getMediaType, getExtendedMediaType, type MediaFileType } from "./inspector.js";
+import { resolveMediaFilePath } from "./paths.js";
 import { createError, ErrorCode } from "../errors/index.js";
 import { recordDegradation } from "../errors/degradations.js";
 import type { MainManifest, Composition } from "../core/types/index.js";
@@ -103,6 +104,7 @@ export class MediaIndex {
             const st = await stat(fullPath);
             size = st.size;
           } catch {
+            // Note: stat failed, use size 0
             void 0;
           }
 
@@ -161,11 +163,13 @@ export class MediaIndex {
 
     if (this.compositions) {
       for (const comp of this.compositions) {
-        const tracks = (comp as any).rootTimeline?.tracks ?? (comp as any).tracks ?? [];
+        const rawComp = comp as Composition & { tracks?: Array<{ clips?: Array<{ src?: string }> }> };
+        const tracks = rawComp.rootTimeline?.tracks ?? rawComp.tracks ?? [];
         for (const track of tracks) {
           for (const clip of track.clips ?? []) {
-            if ((clip as any).src) {
-              addRef((clip as any).src, `comp:${comp.name}`);
+            const src = (clip as { src?: string }).src;
+            if (src) {
+              addRef(src, `comp:${comp.name}`);
             }
           }
         }
@@ -237,37 +241,24 @@ export class MediaIndex {
   async resolveMedia(ref: string): Promise<ResolvedMedia> {
     if (!this.initialized) await this.initialize();
 
-    const mediaTarget = resolve(this.mediaDir, ref);
-    const direct = this.entriesByPath.get(mediaTarget);
-    if (direct && direct.exists) {
+    const resolved = resolveMediaFilePath(ref, this.projectRoot, {
+      mediaDir: this.mediaDir,
+      sourceDir: this.sourceDir,
+      allowCoLocatedMedia: this.allowCoLocatedMedia,
+    });
+
+    const direct = this.entriesByPath.get(resolved);
+    if (direct) {
       return this.toResolvedMedia(direct);
     }
 
-    if (this.allowCoLocatedMedia) {
-      const sourceTarget = resolve(this.sourceDir, ref);
-      const coLocated = this.entriesByPath.get(sourceTarget);
-      if (coLocated && coLocated.exists) {
-        return this.toResolvedMedia(coLocated);
-      }
-    }
-
-    const match = this.findMatchingEntry(ref);
-    if (match && match.exists) {
-      return this.toResolvedMedia(match);
-    }
-
-    const searchedLocations = [resolve(this.mediaDir, ref)];
-    if (this.allowCoLocatedMedia) {
-      searchedLocations.push(resolve(this.sourceDir, ref));
-    } else {
-      searchedLocations.push(`${resolve(this.sourceDir, ref)} (co-located search disabled; enable allowCoLocatedMedia in config)`);
-    }
-
-    const detail = `"${ref}". Searched locations:\n  - ${searchedLocations.join("\n  - ")}`;
-    throw createError(ErrorCode.CC2001, { path: detail }, {
-      location: { file: resolve(this.mediaDir, ref) },
-      fixHint: `Ensure "${ref}" exists under media/ or enable allowCoLocatedMedia in config`,
-    });
+    const metadata = await inspectMedia(resolved, { cache: this.cache, sourceDir: this.sourceDir });
+    return {
+      path: resolved,
+      name: basename(resolved),
+      type: getMediaType(resolved) as "video" | "image" | "audio",
+      metadata,
+    };
   }
 
   private async toResolvedMedia(entry: MediaIndexEntry): Promise<ResolvedMedia> {

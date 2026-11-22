@@ -1,12 +1,6 @@
 import { assertSupportedRuntime, runtimeVersion } from "../loader/runtime.js";
-import { RUNTIME_EXIT_CODE } from "./exit-codes.js";
 
-try {
+export function guardRuntime(): void {
   assertSupportedRuntime(runtimeVersion());
-} catch (error) {
-  if (error && error instanceof Error && error.name === "UnsupportedRuntimeError") {
-    process.stderr.write(`${error.message}\n`);
-    process.exit(RUNTIME_EXIT_CODE);
-  }
-  throw error;
 }
+

@@ -71,6 +71,30 @@ overlap into the next scene. Build a cross-scene transition inside one scene fil
 
 Every registered audio asset referenced by `audioRef` is a bed: it starts at `0` and spans
 the whole timeline duration. The manifest has no per-entry offset. `gain` is linear (`0`
-silent, `1` unity, up to `4` / +12 dB) and is applied as the placement volume. Generated
-audio is always written as WAV; `audio[].format` does not exist. A missing audio `src` is a
-validation error that names the entry and the searched path before any decode starts.
+silent, `1` unity, up to `4` / +12 dB) and is applied as the placement volume. Supported
+sample rates are 22050, 44100, 48000, 96000 Hz; channel count is 1 (mono) or 2 (stereo).
+Longer audio sources are trimmed to the bed duration; shorter sources are padded with silence
+(no time stretching). Generated audio is always written as WAV; `audio[].format` does not exist.
+A missing audio `src` is a validation error that names the entry and the searched path before any
+decode starts.
+
+## Sequence and track builders
+
+Sequences start at `start` seconds (defaults to 0). The first clip's `transitionIn` overlaps the
+sequence head without producing a negative start time. Subsequent clips chain from the previous
+clip end minus the incoming transition overlap. Tracks support `name`, `muted`, `opacity` (0–1),
+and `blend`. Unsupported builder options fail at construction with `CC1014`.
+
+## Timing and keyframe rules
+
+`start` is composition time in seconds. When both `duration` and `end` are present on a clip,
+`duration` wins. Negative time values are rejected at validation. Keyframe times are
+clip-relative seconds, clamped to non-negative times. Transitions are validated against the
+builtin transition registry at construction.
+
+## Output naming and preview quality
+
+Output filenames derive from the target identifier and container extension defined in the
+output plan. When rendering with `--preview` or `--quality preview`, a `.preview` suffix is
+appended before the container extension (e.g. `main.preview.mp4`). Output paths are deterministic:
+the same project, selection, and render options produce identical filenames with no timestamps.

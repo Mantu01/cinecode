@@ -2,6 +2,19 @@ import { isAbsolute, relative, resolve } from "node:path";
 import { RESERVED_NAMES } from "../config/roots.js";
 import { createError, ErrorCode, type CinecodeError } from "../errors/index.js";
 
+declare const __brand: unique symbol;
+export type ManifestId = string & { readonly [__brand]: "ManifestId" };
+
+export function normalizeId(id: string): string {
+  return id.toLowerCase();
+}
+
+export function asManifestId(id: string, kind = "entry"): ManifestId {
+  const rule = idRule(id);
+  if (rule) throw idError(kind, id, rule);
+  return id as ManifestId;
+}
+
 const ILLEGAL = /[<>:"|?*]/;
 const CONTROL = /[\u0000-\u001f\u007f]/;
 const DRIVE = /^[A-Za-z]:/;

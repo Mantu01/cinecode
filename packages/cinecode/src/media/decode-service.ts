@@ -1,10 +1,11 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, rmSync, existsSync, writeFileSync, unlinkSync } from "node:fs";
+import { mkdirSync, rmSync, existsSync, writeFileSync, unlinkSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { resolveBinary } from "../binary/resolver.js";
+import { recordProcessSpawn, recordFramesDecoded, recordFramesFromCache } from "./instrumentation.js";
 import type { MediaCache, MediaMetadata } from "./cache.js";
 import { inspectMedia } from "./inspector.js";
 import type { Composition } from "../core/types/index.js";
@@ -43,15 +44,13 @@ export interface SharedDecodeService {
   requestFrame(src: string, frameIndex: number): Promise<DecodedFrame>;
   requestFrames(src: string, frameIndices: readonly number[]): Promise<Map<number, DecodedFrame>>;
   requestRange(src: string, startFrame: number, count: number): Promise<DecodedFrame[]>;
+  getKeyframeIndex?(src: string): Promise<readonly number[]>;
+  setKeyframeIndex?(src: string, keyframes: readonly number[]): void;
+  getOpenPipeCount?(): number;
+  getMetadata?(src: string): Promise<MediaMetadata>;
   getStats(): DecodeServiceStats;
   cancel(): Promise<void>;
   dispose(): Promise<void>;
-}
-
-interface InFlightRange {
-  readonly startFrame: number;
-  readonly count: number;
-  readonly promise: Promise<void>;
 }
 
 interface MemoryEntry {
@@ -65,6 +64,18 @@ interface DiskEntry {
   readonly height: number;
   readonly format: "rgba";
   readonly bytes: number;
+}
+
+interface ActiveDecoderPipe {
+  readonly process: ChildProcess;
+  currentFrame: number;
+  readonly metadata: MediaMetadata;
+  readonly frameBytes: number;
+  chunks: Buffer[];
+  totalBytes: number;
+  ended: boolean;
+  error: Error | null;
+  waiting: ((err?: Error) => void) | null;
 }
 
 const SCALE_FILTER = "scale=w=iw:h=ih:flags=lanczos";
@@ -83,8 +94,9 @@ export class DefaultSharedDecodeService implements SharedDecodeService {
 
   private readonly memoryLru = new Map<string, MemoryEntry>();
   private readonly diskLru = new Map<string, DiskEntry>();
-  private readonly inFlightRanges = new Map<string, InFlightRange[]>();
   private readonly metadataCache = new Map<string, MediaMetadata>();
+  private readonly keyframeCache = new Map<string, number[]>();
+  private readonly activePipes = new Map<string, ActiveDecoderPipe>();
   private readonly activeProcesses = new Set<ChildProcess>();
   private readonly sourceLocks = new Map<string, Promise<void>>();
 
@@ -108,6 +120,26 @@ export class DefaultSharedDecodeService implements SharedDecodeService {
 
     this.tempDir = options.tempDir ?? join(tmpdir(), `cinecode-decode-${randomUUID().slice(0, 8)}`);
     mkdirSync(this.tempDir, { recursive: true });
+  }
+
+  getOpenPipeCount(): number {
+    return this.activePipes.size;
+  }
+
+  async getKeyframeIndex(src: string): Promise<readonly number[]> {
+    const cached = this.keyframeCache.get(src);
+    if (cached) return cached;
+    const metadata = await this.getMetadata(src);
+    const gop = Math.max(1, Math.round(metadata.fps));
+    const totalFrames = Math.max(1, Math.round(metadata.duration * metadata.fps));
+    const list: number[] = [];
+    for (let f = 0; f < totalFrames; f += gop) list.push(f);
+    this.keyframeCache.set(src, list);
+    return list;
+  }
+
+  setKeyframeIndex(src: string, keyframes: readonly number[]): void {
+    this.keyframeCache.set(src, [...keyframes]);
   }
 
   getStats(): DecodeServiceStats {
@@ -164,6 +196,7 @@ export class DefaultSharedDecodeService implements SharedDecodeService {
       const mem = this.memoryLru.get(key);
       if (mem) {
         this.memoryHits++;
+        recordFramesFromCache(1, mem.bytes);
         this.memoryLru.delete(key);
         this.memoryLru.set(key, mem);
         results.set(frameIdx, mem.frame);
@@ -175,6 +208,7 @@ export class DefaultSharedDecodeService implements SharedDecodeService {
         this.diskLru.delete(key);
         this.diskLru.set(key, disk);
         const buffer = await readFile(disk.filePath);
+        recordFramesFromCache(1, disk.bytes);
         results.set(frameIdx, {
           width: disk.width,
           height: disk.height,
@@ -188,201 +222,190 @@ export class DefaultSharedDecodeService implements SharedDecodeService {
 
     if (missing.length === 0) return results;
 
-    const pendingPromises: Promise<void>[] = [];
-    let totalFrames = 0;
-
     await this.runWithSourceLock(src, async () => {
-      const stillMissing: number[] = [];
-      for (const frameIdx of missing) {
-        const key = `${src}@${frameIdx}`;
-        if (!this.memoryLru.has(key) && !this.diskLru.has(key)) {
-          stillMissing.push(frameIdx);
-        }
-      }
-      if (stillMissing.length === 0) return;
-
       const metadata = await this.getMetadata(src);
-      totalFrames = Math.max(1, Math.round(metadata.duration * metadata.fps));
 
-      const neededToDecode: number[] = [];
-      const activeRanges = this.inFlightRanges.get(src) ?? [];
-      for (const frameIdx of stillMissing) {
-        const inFlight = activeRanges.find((r) => r.startFrame <= frameIdx && frameIdx < r.startFrame + r.count);
-        if (inFlight) {
-          if (!pendingPromises.includes(inFlight.promise)) {
-            pendingPromises.push(inFlight.promise);
+      for (const targetFrame of missing) {
+        const key = `${src}@${targetFrame}`;
+        if (this.memoryLru.has(key)) {
+          results.set(targetFrame, this.memoryLru.get(key)!.frame);
+          continue;
+        }
+
+        let pipe = this.activePipes.get(src);
+
+        // Check if pipe is open and can be read sequentially
+        if (pipe && pipe.currentFrame <= targetFrame && targetFrame - pipe.currentFrame <= 30) {
+          while (pipe.currentFrame < targetFrame) {
+            const fBuf = await this.pullNextFrame(pipe);
+            this.storeFrame(src, pipe.currentFrame - 1, {
+              width: metadata.width,
+              height: metadata.height,
+              format: "rgba",
+              buffer: fBuf,
+            });
           }
-        } else {
-          neededToDecode.push(frameIdx);
-        }
-      }
-
-      if (neededToDecode.length > 0) {
-        const runs = groupContiguousRuns(neededToDecode, this.prefetchAhead, totalFrames);
-        for (const run of runs) {
-          const decodePromise = this.executeDecodeRange(src, run.start, run.count, metadata);
-          const inFlightEntry: InFlightRange = {
-            startFrame: run.start,
-            count: run.count,
-            promise: decodePromise,
+          const targetBuf = await this.pullNextFrame(pipe);
+          const decoded: DecodedFrame = {
+            width: metadata.width,
+            height: metadata.height,
+            format: "rgba",
+            buffer: targetBuf,
           };
-          const list = this.inFlightRanges.get(src) ?? [];
-          list.push(inFlightEntry);
-          this.inFlightRanges.set(src, list);
-
-          const trackedPromise = decodePromise.finally(() => {
-            const current = this.inFlightRanges.get(src) ?? [];
-            const idx = current.indexOf(inFlightEntry);
-            if (idx >= 0) current.splice(idx, 1);
-          });
-          pendingPromises.push(trackedPromise);
+          this.storeFrame(src, targetFrame, decoded);
+          results.set(targetFrame, decoded);
+          this.onDecode?.({ src, startFrame: targetFrame, count: 1 });
+          continue;
         }
+
+        // Non-sequential or backward seek: close pipe and seek to nearest keyframe
+        await this.closePipe(src);
+        const keyframes = await this.getKeyframeIndex(src);
+        let kf = 0;
+        for (const k of keyframes) {
+          if (k <= targetFrame && k > kf) kf = k;
+        }
+
+        pipe = await this.openPipe(src, kf, metadata);
+        while (pipe.currentFrame < targetFrame) {
+          const fBuf = await this.pullNextFrame(pipe);
+          this.storeFrame(src, pipe.currentFrame - 1, {
+            width: metadata.width,
+            height: metadata.height,
+            format: "rgba",
+            buffer: fBuf,
+          });
+        }
+
+        const targetBuf = await this.pullNextFrame(pipe);
+        const decoded: DecodedFrame = {
+          width: metadata.width,
+          height: metadata.height,
+          format: "rgba",
+          buffer: targetBuf,
+        };
+        this.storeFrame(src, targetFrame, decoded);
+        results.set(targetFrame, decoded);
+        this.onDecode?.({ src, startFrame: kf, count: targetFrame - kf + 1 });
       }
     });
-
-    if (pendingPromises.length > 0) {
-      await Promise.all(pendingPromises);
-    }
-
-    for (const frameIdx of missing) {
-      const key = `${src}@${frameIdx}`;
-      const mem = this.memoryLru.get(key);
-      if (mem) {
-        results.set(frameIdx, mem.frame);
-        continue;
-      }
-      const disk = this.diskLru.get(key);
-      if (disk) {
-        const buffer = await readFile(disk.filePath);
-        results.set(frameIdx, {
-          width: disk.width,
-          height: disk.height,
-          format: disk.format,
-          buffer,
-        });
-        continue;
-      }
-      // If frame index was within video bounds, this is an explicit decode failure
-      if (frameIdx < totalFrames) {
-        const affected = findAffectedClips(this.composition, src);
-        throw createError(
-          ErrorCode.CC4001,
-          {
-            frame: frameIdx,
-            source: src,
-            reason: `frame ${frameIdx} was not produced by decode range`,
-            ...(affected.length > 0 ? { affectedClips: affected.join(", ") } : {}),
-          },
-          { location: { file: src } },
-        );
-      }
-    }
 
     return results;
   }
 
-  private async executeDecodeRange(
-    src: string,
-    startFrame: number,
-    count: number,
-    metadata: MediaMetadata,
-  ): Promise<void> {
-    if (this.aborted) {
-      throw createError(ErrorCode.CC4003, { details: "decode cancelled" });
-    }
+  private async openPipe(src: string, startFrame: number, metadata: MediaMetadata): Promise<ActiveDecoderPipe> {
+    await this.closePipe(src);
 
     const seekTime = startFrame / metadata.fps;
     const args = [
       "-v", "error",
-      "-ss", String(seekTime),
+      ...(startFrame > 0 ? ["-ss", String(seekTime)] : []),
       "-i", src,
       "-an",
-      "-frames:v", String(count),
       "-f", "rawvideo",
       "-pix_fmt", "rgba",
       "-vf", SCALE_FILTER,
       "-",
     ];
 
-    return new Promise<void>((resolve, reject) => {
-      const child = spawn(resolveBinary("ffmpeg").path, args, { windowsHide: true });
-      this.activeProcesses.add(child);
+    recordProcessSpawn();
+    const child = spawn(resolveBinary("ffmpeg").path, args, { windowsHide: true });
+    this.activeProcesses.add(child);
 
-      const chunks: Buffer[] = [];
-      let stderr = "";
+    const frameBytes = metadata.width * metadata.height * 4;
+    const pipe: ActiveDecoderPipe = {
+      process: child,
+      currentFrame: startFrame,
+      metadata,
+      frameBytes,
+      chunks: [],
+      totalBytes: 0,
+      ended: false,
+      error: null,
+      waiting: null,
+    };
 
-      child.stdout.on("data", (chunk: Buffer) => {
-        chunks.push(chunk);
-      });
-      child.stderr.on("data", (chunk: Buffer) => {
-        stderr += chunk.toString();
-      });
-
-      child.on("error", (err) => {
-        this.activeProcesses.delete(child);
-        const affected = findAffectedClips(this.composition, src);
-        reject(
-          createError(
-            ErrorCode.CC4001,
-            {
-              frame: startFrame,
-              source: src,
-              reason: `failed to spawn ffmpeg: ${err.message}`,
-              ...(affected.length > 0 ? { affectedClips: affected.join(", ") } : {}),
-            },
-            { location: { file: src }, cause: err },
-          ),
-        );
-      });
-
-      child.on("close", (code) => {
-        this.activeProcesses.delete(child);
-        if (this.aborted) {
-          reject(createError(ErrorCode.CC4003, { details: "decode cancelled" }));
-          return;
-        }
-
-        if (code !== 0) {
-          const affected = findAffectedClips(this.composition, src);
-          const reasonWithClips = affected.length > 0
-            ? `ffmpeg decode failed (affected clips: ${affected.join(", ")}): exit code ${code}: ${stderr.trim()}`
-            : `ffmpeg decode failed with exit code ${code}: ${stderr.trim()}`;
-          reject(
-            createError(
-              ErrorCode.CC4001,
-              {
-                frame: startFrame,
-                source: src,
-                reason: reasonWithClips,
-                ...(affected.length > 0 ? { affectedClips: affected.join(", ") } : {}),
-              },
-              { location: { file: src } },
-            ),
-          );
-          return;
-        }
-
-        const buffer = Buffer.concat(chunks);
-        const frameSize = metadata.width * metadata.height * 4;
-        const available = Math.floor(buffer.length / frameSize);
-
-        this.decodeCount++;
-        this.framesDecoded += available;
-
-        for (let i = 0; i < available; i++) {
-          const frameBuffer = Buffer.from(buffer.subarray(i * frameSize, (i + 1) * frameSize));
-          this.storeFrame(src, startFrame + i, {
-            width: metadata.width,
-            height: metadata.height,
-            format: "rgba",
-            buffer: frameBuffer,
-          });
-        }
-
-        this.onDecode?.({ src, startFrame, count: available });
-        resolve();
-      });
+    child.stdout.on("data", (chunk: Buffer) => {
+      pipe.chunks.push(chunk);
+      pipe.totalBytes += chunk.length;
+      if (pipe.waiting && pipe.totalBytes >= pipe.frameBytes) {
+        const cb = pipe.waiting;
+        pipe.waiting = null;
+        cb();
+      }
     });
+
+    let stderr = "";
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+
+    child.on("error", (err) => {
+      this.activeProcesses.delete(child);
+      pipe.error = err;
+      if (pipe.waiting) {
+        const cb = pipe.waiting;
+        pipe.waiting = null;
+        cb(err);
+      }
+    });
+
+    child.on("close", (code) => {
+      this.activeProcesses.delete(child);
+      pipe.ended = true;
+      if (code !== 0 && code !== null && !this.aborted && pipe.totalBytes < pipe.frameBytes) {
+        pipe.error = new Error(`ffmpeg pipe exited with code ${code}: ${stderr.trim()}`);
+      }
+      if (pipe.waiting) {
+        const cb = pipe.waiting;
+        pipe.waiting = null;
+        cb(pipe.error ?? undefined);
+      }
+    });
+
+    this.activePipes.set(src, pipe);
+    this.decodeCount++;
+    return pipe;
+  }
+
+  private async pullNextFrame(pipe: ActiveDecoderPipe): Promise<Buffer> {
+    while (pipe.totalBytes < pipe.frameBytes) {
+      if (pipe.ended) {
+        if (pipe.error) throw pipe.error;
+        throw new Error("Unexpected end of video decoder stream");
+      }
+      if (pipe.error) throw pipe.error;
+      await new Promise<void>((resolveWait, rejectWait) => {
+        pipe.waiting = (err) => (err ? rejectWait(err) : resolveWait());
+      });
+    }
+
+    let buffer: Buffer;
+    if (pipe.chunks[0]?.length === pipe.frameBytes) {
+      buffer = pipe.chunks.shift()!;
+    } else {
+      const combined = Buffer.concat(pipe.chunks);
+      buffer = combined.subarray(0, pipe.frameBytes);
+      const remainder = combined.subarray(pipe.frameBytes);
+      pipe.chunks = remainder.length > 0 ? [remainder] : [];
+    }
+    pipe.totalBytes -= pipe.frameBytes;
+    pipe.currentFrame++;
+    this.framesDecoded++;
+    recordFramesDecoded(1, pipe.frameBytes);
+    return buffer;
+  }
+
+  private async closePipe(src: string): Promise<void> {
+    const pipe = this.activePipes.get(src);
+    if (!pipe) return;
+    this.activePipes.delete(src);
+    this.activeProcesses.delete(pipe.process);
+    try {
+      pipe.process.kill("SIGKILL");
+    } catch {
+      // Note: process might already be exited
+    }
   }
 
   private storeFrame(src: string, frameIndex: number, frame: DecodedFrame): void {
@@ -397,7 +420,7 @@ export class DefaultSharedDecodeService implements SharedDecodeService {
       const diskEntry = this.diskLru.get(key)!;
       this.currentDiskBytes -= diskEntry.bytes;
       this.diskLru.delete(key);
-      try { unlinkSync(diskEntry.filePath); } catch {}
+      try { unlinkSync(diskEntry.filePath); } catch { /* Note: file might already be removed */ }
     }
 
     while (this.currentMemoryBytes + bytes > this.memoryBudgetBytes && this.memoryLru.size > 0) {
@@ -419,7 +442,7 @@ export class DefaultSharedDecodeService implements SharedDecodeService {
       const oldestDisk = this.diskLru.get(oldestDiskKey)!;
       this.diskLru.delete(oldestDiskKey);
       this.currentDiskBytes -= oldestDisk.bytes;
-      try { unlinkSync(oldestDisk.filePath); } catch {}
+      try { unlinkSync(oldestDisk.filePath); } catch { /* Note: file might already be removed */ }
       this.evictionCount++;
     }
 
@@ -437,7 +460,7 @@ export class DefaultSharedDecodeService implements SharedDecodeService {
       this.currentDiskBytes += bytes;
       this.spillCount++;
     } catch {
-      // Ignore transient disk write errors
+      // Note: Ignore transient disk write errors
     }
   }
 
@@ -459,19 +482,30 @@ export class DefaultSharedDecodeService implements SharedDecodeService {
     }
   }
 
-  private async getMetadata(src: string): Promise<MediaMetadata> {
-    const cached = this.metadataCache.get(src);
+  async getMetadata(src: string): Promise<MediaMetadata> {
+    const resolvedPath = resolve(src);
+    let identity = resolvedPath;
+    try {
+      if (existsSync(resolvedPath)) {
+        const stat = statSync(resolvedPath);
+        identity = `${resolvedPath}:${stat.mtimeMs}:${stat.size}`;
+      }
+    } catch {
+      // Note: stat error falls back to unsuffixed identity
+    }
+
+    const cached = this.metadataCache.get(identity);
     if (cached) return cached;
 
     const fromMediaCache = await this.mediaCache.getMetadata(src).catch(() => null);
     if (fromMediaCache) {
-      this.metadataCache.set(src, fromMediaCache);
+      this.metadataCache.set(identity, fromMediaCache);
       return fromMediaCache;
     }
 
     try {
       const inspected = await inspectMedia(src, { cache: this.mediaCache, sourceDir: process.cwd() });
-      this.metadataCache.set(src, inspected);
+      this.metadataCache.set(identity, inspected);
       return inspected;
     } catch (err: unknown) {
       const affected = findAffectedClips(this.composition, src);
@@ -493,13 +527,22 @@ export class DefaultSharedDecodeService implements SharedDecodeService {
 
   async cancel(): Promise<void> {
     this.aborted = true;
+    for (const [, pipe] of this.activePipes.entries()) {
+      try {
+        pipe.process.kill("SIGKILL");
+      } catch {
+        // Note: process might already be killed
+      }
+    }
+    this.activePipes.clear();
     for (const child of this.activeProcesses) {
       try {
         child.kill("SIGKILL");
-      } catch {}
+      } catch {
+        // Note: child might already be killed
+      }
     }
     this.activeProcesses.clear();
-    this.inFlightRanges.clear();
   }
 
   async dispose(): Promise<void> {
@@ -512,39 +555,11 @@ export class DefaultSharedDecodeService implements SharedDecodeService {
     if (existsSync(this.tempDir)) {
       try {
         rmSync(this.tempDir, { recursive: true, force: true });
-      } catch {}
+      } catch {
+        // Note: temp dir might already be removed
+      }
     }
   }
-}
-
-function groupContiguousRuns(
-  indices: readonly number[],
-  prefetchAhead: number,
-  totalFrames: number,
-): Array<{ start: number; count: number }> {
-  if (indices.length === 0) return [];
-  const runs: Array<{ start: number; count: number }> = [];
-
-  let start = indices[0]!;
-  let end = start;
-
-  for (let i = 1; i < indices.length; i++) {
-    const next = indices[i]!;
-    // If adjacent or within prefetch window, group together
-    if (next <= end + prefetchAhead + 1) {
-      end = next;
-    } else {
-      const count = Math.min(totalFrames - start, end - start + 1 + prefetchAhead);
-      runs.push({ start, count: Math.max(1, count) });
-      start = next;
-      end = next;
-    }
-  }
-
-  const count = Math.min(totalFrames - start, end - start + 1 + prefetchAhead);
-  runs.push({ start, count: Math.max(1, count) });
-
-  return runs;
 }
 
 function findAffectedClips(composition: Composition | undefined, src: string): string[] {

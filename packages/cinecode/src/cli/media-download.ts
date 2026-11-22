@@ -8,7 +8,7 @@ import { createError, ErrorCode } from "../errors/index.js";
 import { runReport } from "./run-report.js";
 import { createProjectResolver, reportResolution } from "./project-resolver.js";
 
-interface DownloadOptions {
+export interface DownloadOptions {
   force?: boolean;
   confirm?: boolean;
   only?: string;
@@ -17,6 +17,8 @@ interface DownloadOptions {
   verbose?: boolean;
   timeoutMs?: number;
 }
+
+export type MediaDownloadOptions = DownloadOptions;
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_DOWNLOAD_SIZE_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB guard
@@ -133,7 +135,7 @@ export async function downloadFileAtomic(
       lastError = err;
 
       // Do not retry on explicit hash mismatch or size limit
-      if (typeof (err as any)?.code === "string" && (err as any).code === ErrorCode.CC6003) {
+      if (typeof (err as { code?: unknown })?.code === "string" && (err as { code?: unknown }).code === ErrorCode.CC6003) {
         throw err;
       }
 
@@ -231,6 +233,7 @@ export async function mediaDownloadCommand(options: DownloadOptions): Promise<vo
         continue;
       }
     } catch {
+      // Note: file does not exist, proceed with download
       void 0;
     }
 
@@ -251,17 +254,17 @@ export async function mediaDownloadCommand(options: DownloadOptions): Promise<vo
         (downloaded, total) => {
           const line = formatProgress(downloaded, total);
           if (line !== lastProgressLine) {
-            process.stdout.write(`\r  ${fileName}: ${line}`);
+            process.stderr.write(`\r  ${fileName}: ${line}`);
             lastProgressLine = line;
           }
         },
       );
-      process.stdout.write("\r\x1b[K");
-      console.log(`\u2713  ${fileName} - done`);
+      process.stderr.write("\r\x1b[K");
+      process.stderr.write(`\u2713  ${fileName} - done\n`);
       results.push({ name: fileName, status: "ok" });
       runReport.artifact({ kind: "media", path: destPath, units: 1, unit: "file" });
     } catch (e) {
-      process.stdout.write("\r\x1b[K");
+      process.stderr.write("\r\x1b[K");
       const error = e instanceof Error ? e.message : "Unknown error";
       console.error(`\u2717  ${fileName} - ${error}`);
       results.push({ name: fileName, status: "failed", error });
@@ -284,14 +287,10 @@ export async function mediaDownloadCommand(options: DownloadOptions): Promise<vo
   }
 }
 
+import { findCommand, buildCommanderCommand } from "./command-registry.js";
+
 export function createMediaDownloadCommand(): Command {
-  const cmd = new Command("media:download")
-    .description("Download cloud media files into media directory")
-    .option("--force", "Re-download existing files", false)
-    .option("--confirm", "Explicitly allow network downloads")
-    .option("--only <name>", "Download only the specified entry")
-    .action(async (options: DownloadOptions, command: Command) => {
-      await mediaDownloadCommand({ ...command.optsWithGlobals(), ...options });
-    });
-  return cmd;
+  const spec = findCommand("media:download");
+  if (!spec) throw new Error("Command 'media:download' not found in registry");
+  return buildCommanderCommand(spec);
 }

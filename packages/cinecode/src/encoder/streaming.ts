@@ -2,10 +2,12 @@ import { spawn } from "node:child_process";
 import { Transform, type TransformCallback } from "node:stream";
 import { mkdir, rm } from "node:fs/promises";
 import { resolveBinary } from "../binary/resolver.js";
+import { recordProcessSpawn } from "../media/instrumentation.js";
 import type { RenderFormat } from "../core/types/config.js";
 import type { VideoEncoding } from "../core/quality.js";
 import { frameInputPixFmt, outputPlanFor } from "../core/output-plan.js";
 import { buildVideoEncoderArgs, type EncoderOptions, type EncoderResult } from "./index.js";
+import { createError, ErrorCode } from "../errors/index.js";
 
 export interface FrameRingBufferOptions {
   readonly frameBytes: number;
@@ -28,7 +30,7 @@ export class FrameRingBuffer {
 
   constructor(options: FrameRingBufferOptions) {
     if (options.frameBytes <= 0) {
-      throw new RangeError(`[CC2201] frameBytes must be positive, got ${options.frameBytes}`);
+      throw createError(ErrorCode.CC2201, { bytes: options.frameBytes });
     }
     this.frameBytes = options.frameBytes;
     this.capacity = Math.max(1, options.capacity ?? 16);
@@ -166,6 +168,7 @@ export class StreamingEncoder {
 
   async start(): Promise<void> {
     await mkdir(this.options.tempDir, { recursive: true });
+    recordProcessSpawn();
     const child = spawn(resolveBinary("ffmpeg").path, this.buildArgs(), {
       windowsHide: true,
       stdio: ["pipe", "ignore", "pipe"],
@@ -173,7 +176,7 @@ export class StreamingEncoder {
     this.process = child;
     const stdin = child.stdin;
     if (!stdin) {
-      throw new Error("[CC2202] Failed to open ffmpeg stdin for streaming encode");
+      throw createError(ErrorCode.CC2202);
     }
     this.stdin = stdin;
     stdin.on("error", (error) => {
@@ -230,16 +233,16 @@ export class StreamingEncoder {
 
   async writeFrame(buffer: Buffer): Promise<void> {
     if (this.failure) throw this.failure;
-    if (this.closed || !this.stdin) throw new Error("[CC2204] Streaming encoder is not accepting frames");
+    if (this.closed || !this.stdin) throw createError(ErrorCode.CC2204, { reason: "Streaming encoder is not accepting frames" });
     const expected = this.options.width * this.options.height * 4;
     if (buffer.length !== expected) {
-      throw new RangeError(`[CC2205] Frame buffer must be ${expected} bytes, got ${buffer.length}`);
+      throw createError(ErrorCode.CC2205, { expected, actual: buffer.length });
     }
     while (this.pendingFrames >= this.highWaterMark) {
       this.paused = true;
       await this.awaitDrain();
       if (this.failure) throw this.failure;
-      if (this.closed) throw new Error("[CC2204] Streaming encoder closed while waiting for drain");
+      if (this.closed) throw createError(ErrorCode.CC2204, { reason: "Streaming encoder closed while waiting for drain" });
     }
     this.paused = false;
     this.pendingFrames += 1;
@@ -248,7 +251,7 @@ export class StreamingEncoder {
         this.pendingFrames = Math.max(0, this.pendingFrames - 1);
         if (this.waiters.length > 0) this.flushWaiters();
         if (error) {
-          reject(new Error(`[CC2206] ffmpeg stdin write failed: ${error.message}`));
+          reject(createError(ErrorCode.CC2206, { reason: `ffmpeg stdin write failed: ${error.message}` }, { cause: error }));
           return;
         }
         this.frameCount += 1;

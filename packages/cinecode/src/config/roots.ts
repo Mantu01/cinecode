@@ -1,4 +1,4 @@
-import { realpathSync } from "node:fs";
+import { accessSync, constants, existsSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { CinecodeConfig } from "../core/types/index.js";
 import { createError, ErrorCode, type CinecodeError } from "../errors/index.js";
@@ -111,6 +111,16 @@ export function validateProjectRoots(
           `Point ${value.key}Dir at a subdirectory of the project root, for example "./${value.key}".`,
         ),
       );
+    } else if (!containsPath(project, value.compare)) {
+      errors.push(
+        rootError(
+          value.key === "source" ? "sourceDir" : `${value.key}Dir`,
+          value.absolute,
+          `root resolves outside the project root "${resolve(root)}"; the four roots must be inside it`,
+          options.configPath,
+          `Point ${value.key}Dir at a directory inside the project root.`,
+        ),
+      );
     }
   }
 
@@ -196,4 +206,28 @@ export const RESERVED_NAMES = new Set([
 /** Root used for validation when a caller only knows the config file. */
 export function rootOfConfig(configPath: string): string {
   return dirname(resolve(configPath));
+}
+
+function isDirectoryWritable(dirPath: string): boolean {
+  let cur = resolve(dirPath);
+  while (!existsSync(cur)) {
+    const parent = dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  try {
+    accessSync(cur, constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function checkRootsWritability(roots: ProjectRoots): Record<RootKey, boolean> {
+  return {
+    source: isDirectoryWritable(roots.source),
+    media: isDirectoryWritable(roots.media),
+    output: isDirectoryWritable(roots.output),
+    cache: isDirectoryWritable(roots.cache),
+  };
 }

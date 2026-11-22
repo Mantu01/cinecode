@@ -2,13 +2,20 @@ import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeSync } from 
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
+export {
+  MAX_SPOOL_AGE_MS,
+  MAX_SPOOL_FILES,
+  MAX_SPOOL_TOTAL_BYTES,
+  sweepSpools,
+  type SpoolSweepResult,
+} from "./spool.js";
+
 /** Incidental stdout larger than this is kept in its file and named in the document. */
 export const MACHINE_INLINE_LIMIT = 64 * 1024;
 
 /**
- * Captures stdout during a machine-mode run. Output is spooled to a file in the
- * project cache, never to an unbounded in-memory buffer: the document carries the
- * text while it fits, otherwise the byte count and the path of the spool file.
+ * Spool utility for non-stream captures.
+ * Note: stdout monkey-patching has been removed per Phase 08.
  */
 export class StdoutCapture {
   private size = 0;
@@ -45,7 +52,6 @@ export class StdoutCapture {
     return this.size;
   }
 
-  /** Raw text, for informational commands that print rather than report. */
   text(): string {
     if (this.fd === undefined) return this.chunks.join("");
     closeSync(this.fd);
@@ -53,15 +59,15 @@ export class StdoutCapture {
     return readFileSync(this.file!, "utf8");
   }
 
-  /** Fields for the machine document; empty when nothing was captured. */
   drain(): Record<string, unknown> {
     if (this.size === 0) return {};
     const text = this.text();
     if (this.size <= MACHINE_INLINE_LIMIT) {
       if (this.file !== undefined) rmSync(this.file, { force: true });
-      return { capturedOutput: text };
+      return { output: text, capturedOutput: text };
     }
     return {
+      output: `<truncated: captured stdout is ${this.size} bytes, full text at ${this.file}>`,
       capturedOutput: `<truncated: captured stdout is ${this.size} bytes, full text at ${this.file}>`,
       outputFile: this.file,
       outputBytes: this.size,

@@ -27,6 +27,7 @@ out/
 build
 dist
 dist-test
+packages/cinecode/src/version.generated.ts
 
 
 # Debug

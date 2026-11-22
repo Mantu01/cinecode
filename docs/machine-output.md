@@ -1,10 +1,12 @@
 # Machine output contract
 
+<!-- Generated automatically from machine envelope contract and registry metadata. Do not edit manually. -->
+
 Every CLI command supports one switch, `--json`. In machine mode stdout carries
 exactly one well-formed JSON document and nothing else. Human text, progress
 and structured logs go to stderr.
 
-Informational commands (`help`, `version`, `license`) are the single exception:
+Informational commands (`help`, `version`, `licence`) are the single exception:
 they print plain text on stdout, write nothing on stderr, exit `0` and never
 emit the envelope, with or without `--json`. Help and version are clean exits,
 not reports.
@@ -16,54 +18,88 @@ Schema version: `1` (`MACHINE_SCHEMA_VERSION` in the CLI package).
   "schemaVersion": 1,
   "command": "render",
   "ok": true,
+  "exitCode": 0,
   "degraded": false,
+  "timing": { "startedAt": "2026-11-22T00:00:00.000Z", "durationMs": 1250 },
   "project": {
     "root": "/project",
     "config": "/project/cinecode.config.ts",
     "manifest": "/project/main.ts"
   },
+  "selection": [{ "id": "hero", "name": "Hero", "kind": "timeline", "width": 1920, "height": 1080, "fps": 30, "duration": 10 }],
   "result": {},
   "artifacts": [
-    { "kind": "video", "path": "/project/output/videos/main.mp4", "units": 300, "unit": "frames" }
+    { "kind": "video", "path": "/project/output/videos/hero.mp4", "units": 300, "unit": "frames" }
   ],
-  "warnings": [{ "code": "CC7002", "message": "hardware encoder unavailable" }],
-  "degradations": [
-    {
-      "code": "CC4001",
-      "what": "chunk 4 failed to render",
-      "reason": "frame decode failed",
-      "input": "main",
-      "instead": "32 placeholder frame(s) substituted"
-    }
-  ],
-  "timing": { "startedAt": "2026-01-01T00:00:00.000Z", "durationMs": 1200 }
+  "warnings": [],
+  "degradations": [],
+  "issues": [],
+  "resourceUsage": {
+    "memoryRssMb": 85,
+    "wallClockMs": 1250,
+    "processSpawns": 3,
+    "framesDecoded": 120,
+    "framesFromCache": 0,
+    "bytesTransferred": 248832000
+  },
+  "explain": null,
+  "descriptor": null
 }
 ```
 
-## Fields
+## Envelope Fields
 
-| Field | Meaning |
-| --- | --- |
-| `schemaVersion` | Always `1` for this contract. |
-| `command` | Resolved command token, after alias expansion. |
-| `ok` | False when the run failed; then `error` is present. |
-| `degraded` | True when `degradations` is non-empty. |
-| `project` | Resolved root/config/manifest paths, or `null` when the command has no project. |
-| `result` | Command payload. Incidental stdout appears as `capturedOutput` (a name no command uses, so payload data is never overwritten); above 64 KiB the document carries `outputFile` and `outputBytes` instead of truncating silently. |
-| `artifacts` | Files the run produced, with `units`/`unit` when countable. |
-| `warnings` | Non-fatal diagnostics; they do not mark the run degraded. |
-| `degradations` | Recoverable substitutions: what degraded, why, which input, what the user got instead. |
-| `timing` | ISO start time and wall-clock duration. |
-| `error` | Only on failure: `code`, `message`, optional `path`, `location`, `fixHint`, `cause`. |
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `schemaVersion` | `1` | Schema version constant. |
+| `command` | `string` | Resolved command name after alias expansion. |
+| `ok` | `boolean` | `true` if command completed without unhandled errors; `false` on failure. |
+| `exitCode` | `number` | Deterministic process exit code (`0`, `1`, `2`, `3`, `4`, `78`, `130`). |
+| `degraded` | `boolean` | `true` when recoverable substitutions or degradation events occurred. |
+| `timing` | `object` | Start timestamp (`startedAt`) and total elapsed time (`durationMs`). |
+| `project` | `object | null` | Resolved paths for `root`, `config`, and `manifest` (null if standalone). |
+| `selection` | `array | null` | Summary of resolved target timelines, scenes, or compositions. |
+| `result` | `object` | Typed per-command payload matching the declared command result shape. |
+| `artifacts` | `array` | Produced artifact records (path, kind, units, unit, sha256). |
+| `warnings` | `array` | Non-fatal diagnostic warning records (`code`, `message`, `input`). |
+| `degradations` | `array` | Recorded graceful degradations (`code`, `what`, `reason`, `instead`). |
+| `issues` | `array` | Validation or execution issues encountered during run. |
+| `resourceUsage` | `object | null` | Runtime telemetry (`memoryRssMb`, `processSpawns`, `framesDecoded`, `bytesTransferred`). |
+| `explain` | `object | null` | Resolved execution plan, parameter origins, and resource plan when requested. |
+| `descriptor` | `object | null` | Command descriptor metadata (options, flags, contracts). |
+| `error` | `object` | Only on failure: coded error record (`code`, `message`, `fixHint`, `issues`). |
 
-## Errors
+## Per-Command Result Shapes
 
-Failures use the `CC####` namespace. Exit codes map by category: usage `2`
-(`CC0001`, `CC1014`), validation `3` (`CC1`, `CC2`, `CC3`, `CC8`),
-environment `4` (`CC6`, `CC7`), cancellation `130` (`CC4003`), runtime `1`
-(everything else). An unsupported Node.js version exits `78` before the envelope
-exists: the guard writes the plain `[CINECODE_RUNTIME_UNSUPPORTED]` message to
-standard error, prints nothing on standard output, and creates no files.
-
-A missing artifact that a command requested fails with `CC4004` instead of
-reporting success.
+| Command | Result Shape Type | Declared Properties |
+| --- | --- | --- |
+| `cinecode dev` | `object` | port, host, url, pid |
+| `cinecode preview` | `object` | port, url, pid |
+| `cinecode render` | `object` | rendered, budget, audioPlacements, presets, chunkSize, hardwareAcceleration, explain, dryRun |
+| `cinecode still` | `object` | composition, frame, output, format, explain |
+| `cinecode generate` | `object` | generated, kind, count |
+| `cinecode validate` | `object` | valid, mode, stoppedAtGate, notes, contract, categories, errors, warnings, manifest, config, references |
+| `cinecode clean` | `object` | deleted, cleaned, cache, output, files, bytes, summary, dryRun, spoolsSwept, spoolsBytes |
+| `cinecode init` | `object` | created, directory, path, dryRun, template, name |
+| `cinecode doctor` | `object` | passed, checks, system |
+| `cinecode inspect` | `object` | composition, tracks, manifest, compositions, timelines, scenes, assets, explain, references, resolution |
+| `cinecode media` | `object` | media, total, missing, unused, downloaded, skipped, failed, files |
+| `cinecode plugin` | `object` | plugins, action, target |
+| `cinecode formats` | `object` | output, input, helpers, planned, formats |
+| `cinecode presets` | `object` | presets, preset, name, width, height, fps |
+| `cinecode thumbnail` | `object` | thumbnail, frame, files, candidates, score |
+| `cinecode export-svg` | `object` | files, composition, frames, frame, output |
+| `cinecode story` | `object` | bundle, composition, html, frames, slides |
+| `cinecode tts` | `object` | voices, language, provider, generated |
+| `cinecode compare` | `object` | similarity, diff, metrics, images, identical |
+| `cinecode diff` | `object` | changes, differences, equal, files, patch |
+| `cinecode audit` | `object` | licenses, status, scannedDependencies, scannedAssets, vulnerabilities, issues |
+| `cinecode benchmark` | `object` | fps, frameTimeMs, frames, averageMs, peakMemoryMb, workers, totalMs, minMs, p95Ms, maxMs, comparison |
+| `cinecode migrate` | `object` | migrated, output |
+| `cinecode check-ignore` | `object` | ignored, included, paths |
+| `cinecode alias` | `object` | aliases, name, expansion, action |
+| `cinecode publish` | `object` | published, destination, success, target, message, url |
+| `cinecode upgrade` | `object` | current, latest, currentVersion, latestVersion, upToDate, changelogUrl, breakingChanges |
+| `cinecode help` | `object` | help, commands, command, usage, options |
+| `cinecode version` | `object` | version, framework, node |
+| `cinecode licence` | `object` | license, text, dependencies |

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import type {
   CinecodeConfig,
   EncoderPreset,
@@ -9,51 +10,63 @@ import type {
 } from "./types/config.js";
 import { STILL_FORMATS } from "./output-plan.js";
 import { createError, ErrorCode } from "../errors/codes.js";
+import { DEFAULT_IMAGES } from "../config/defaults.js";
+import { recordNote } from "../errors/degradations.js";
 
 /** Which physical encoder family a codec runs on. */
-export type EncoderBackend = "software" | "nvenc" | "videotoolbox" | "qsv";
+export type EncoderBackend = "software" | "nvenc" | "videotoolbox" | "vaapi" | "qsv";
+
+let cachedHardwareAcceleration: EncoderBackend | null = null;
+
+export function resetHardwareAccelerationCache(): void {
+  cachedHardwareAcceleration = null;
+}
+
+function probeNvidia(): boolean {
+  try {
+    const out = execFileSync("nvidia-smi", ["--query-gpu=name", "--format=csv,noheader"], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
+      timeout: 2000,
+    });
+    return typeof out === "string" && out.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function probeVideotoolbox(): boolean {
+  if (process.platform !== "darwin") return false;
+  try {
+    const out = execFileSync("ffmpeg", ["-hide_banner", "-encoders"], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
+      timeout: 2000,
+    });
+    return typeof out === "string" && (out.includes("h264_videotoolbox") || out.includes("hevc_videotoolbox"));
+  } catch {
+    return false;
+  }
+}
 
 /**
- * Detects available hardware encoders by probing the system.
- * On Windows/Linux: checks nvidia-smi availability.
- * On macOS: Videotoolbox is always available.
+ * Detects available hardware encoders by probing the system once and caching the result.
+ * Never guesses platform availability.
  */
 export function detectHardwareAcceleration(): EncoderBackend {
-  const hasNvidia = process.platform === "win32"
-    ? checkNvidiaWindows()
-    : process.platform === "linux"
-      ? checkNvidiaLinux()
-      : false;
+  if (cachedHardwareAcceleration !== null) return cachedHardwareAcceleration;
 
-  if (hasNvidia) return "nvenc";
-  if (process.platform === "darwin") return "videotoolbox";
-  return "software";
-}
-
-function checkNvidiaWindows(): boolean {
-  try {
-    const { execSync } = require("node:child_process");
-    const out = execSync("nvidia-smi --query-gpu=name --format=csv,noheader", {
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return out.trim().length > 0;
-  } catch {
-    return false;
+  let backend: EncoderBackend = "software";
+  if (process.platform === "win32" || process.platform === "linux") {
+    if (probeNvidia()) backend = "nvenc";
+  } else if (process.platform === "darwin") {
+    if (probeVideotoolbox()) backend = "videotoolbox";
   }
-}
 
-function checkNvidiaLinux(): boolean {
-  try {
-    const { execSync } = require("node:child_process");
-    const out = execSync("nvidia-smi --query-gpu=name --format=csv,noheader", {
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return out.trim().length > 0;
-  } catch {
-    return false;
-  }
+  cachedHardwareAcceleration = backend;
+  return backend;
 }
 
 export interface VideoEncoding {
@@ -131,21 +144,15 @@ function backendFor(
   codec: VideoCodec,
 ): EncoderBackend {
   if (codec === "prores" || codec === "ffv1" || codec === "utvideo") return "software";
-  switch (accel) {
-    case "nvenc":
-      return "nvenc";
-    case "videotoolbox":
-      return "videotoolbox";
-    case "qsv":
-      return "qsv";
-    case "auto":
-      break;
-    case "off":
-    case undefined:
-    default:
-      return "software";
+  if (!accel || accel === "off") return "software";
+  const detected = detectHardwareAcceleration();
+  if (accel === "auto") {
+    return detected;
   }
-  return detectHardwareAcceleration();
+  if (accel === detected) {
+    return accel;
+  }
+  return "software";
 }
 
 export interface ResolveEncodingOptions {
@@ -176,9 +183,14 @@ export function resolveVideoEncoding(options: ResolveEncodingOptions = {}): Vide
     backend = detectHardwareAcceleration() as HardwareAcceleration;
   }
 
+  const chosenBackend = backendFor(backend, codec);
+  if (backend && backend !== "off" && chosenBackend === "software") {
+    recordNote(`Hardware acceleration "${backend}" unavailable or not supported for codec "${codec}"; using software encoding`);
+  }
+
   return {
     codec,
-    backend: backendFor(backend, codec),
+    backend: chosenBackend,
     crf,
     preset,
     pixFmt,
@@ -207,7 +219,7 @@ export interface ResolveImageEncodingOptions {
 
 /** Resolves still-image encoding, defaulting to lossless PNG at 1x. */
 export function resolveImageEncoding(options: ResolveImageEncodingOptions = {}): ImageEncoding {
-  const requested = options.format ?? options.images?.defaultFormat ?? "png";
+  const requested = options.format ?? options.images?.defaultFormat ?? DEFAULT_IMAGES.defaultFormat;
   if (requested === "svg") {
     throw createError(
       ErrorCode.CC1008,
@@ -217,8 +229,8 @@ export function resolveImageEncoding(options: ResolveImageEncodingOptions = {}):
   }
   return {
     format: requested,
-    quality: Math.max(1, Math.min(100, Math.round(options.quality ?? options.images?.quality ?? 90))),
-    scaleFactor: Math.max(0.1, options.scaleFactor ?? options.images?.scaleFactor ?? 1),
+    quality: Math.max(1, Math.min(100, Math.round(options.quality ?? options.images?.quality ?? DEFAULT_IMAGES.quality))),
+    scaleFactor: Math.max(0.1, options.scaleFactor ?? options.images?.scaleFactor ?? DEFAULT_IMAGES.scaleFactor),
   };
 }
 

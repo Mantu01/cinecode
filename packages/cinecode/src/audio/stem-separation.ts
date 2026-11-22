@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { decodeAudioFile } from "./decode.js";
 import { encodeWavBuffer } from "./muxer.js";
 import type { AudioBuffer } from "./types.js";
+import { createError, ErrorCode } from "../errors/index.js";
 
 export const STEM_NAMES = ["vocals", "drums", "bass", "other"] as const;
 export type StemName = (typeof STEM_NAMES)[number];
@@ -195,13 +196,13 @@ export async function separateStems(
     if (fallback) {
       return { sourcePath: absolute, sourceHash, cacheDirectory, stems: fallback, cached: false };
     }
-    throw new Error(`CC5201: Demucs is not available. ${demucsSetupGuidance()}`);
+    throw createError(ErrorCode.CC5201, { reason: `Demucs is not available. ${demucsSetupGuidance()}` });
   }
 
   const staging = join(cacheDirectory, `.demucs-${Date.now().toString(36)}`);
   await mkdir(staging, { recursive: true });
   const [command, ...prefix] = availability.command.split(" ");
-  if (!command) throw new Error(`CC5201: Invalid Demucs command: ${availability.command}`);
+  if (!command) throw createError(ErrorCode.CC5201, { reason: `Invalid Demucs command: ${availability.command}` });
 
   const args = [
     ...prefix,
@@ -219,9 +220,9 @@ export async function separateStems(
   if (result.code !== 0) {
     await rm(staging, { recursive: true, force: true }).catch(() => undefined);
     const reason = result.timedOut ? "timed out" : `exit code ${result.code}`;
-    throw new Error(
-      `CC5202: Demucs separation failed (${reason}): ${result.stderr.trim().slice(-800)}`,
-    );
+    throw createError(ErrorCode.CC5202, {
+      reason: `Demucs separation failed (${reason}): ${result.stderr.trim().slice(-800)}`,
+    });
   }
 
   const produced = await findStemFiles(staging);
@@ -240,7 +241,7 @@ export async function separateStems(
   await rm(staging, { recursive: true, force: true }).catch(() => undefined);
 
   if (Object.keys(exported).length === 0) {
-    throw new Error(`CC5203: Demucs produced no recognised stems in ${staging}`);
+    throw createError(ErrorCode.CC5203, { path: staging });
   }
 
   return { sourcePath: absolute, sourceHash, cacheDirectory, stems: exported, cached: false };
@@ -253,7 +254,7 @@ export async function resolveStemSource(
 ): Promise<string> {
   const result = await separateStems(audioPath, { ...options, stems: [stem] });
   const path = result.stems[stem];
-  if (!path) throw new Error(`CC5204: Stem '${stem}' was not produced for ${audioPath}`);
+  if (!path) throw createError(ErrorCode.CC5204, { stem, path: audioPath });
   return path;
 }
 
@@ -284,7 +285,7 @@ async function channelSplitFallback(
     exported[stem] = target;
   }
   if (Object.keys(exported).length === 0) {
-    throw new Error("CC5205: channel-split fallback produced no stems");
+    throw createError(ErrorCode.CC5205);
   }
   return exported;
 }

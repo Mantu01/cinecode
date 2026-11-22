@@ -54,7 +54,27 @@ export class ExitSignal extends Error {
   }
 }
 
+export class CancellationSignal extends ExitSignal {
+  readonly isCancellation = true;
+  constructor(message = "operation cancelled") {
+    super(EXIT_CODES.cancelled, message);
+    this.name = "CancellationSignal";
+  }
+}
+
+export function isCancellation(error: unknown): boolean {
+  if (error instanceof CancellationSignal) return true;
+  if (error instanceof ExitSignal && error.exitCode === EXIT_CODES.cancelled) return true;
+  if (typeof error === "object" && error !== null && (error as { isCancellation?: boolean }).isCancellation === true) return true;
+  const code = (error as { code?: unknown })?.code;
+  if (code === ErrorCode.CC4003 || code === "CC4003") return true;
+  return false;
+}
+
 export function exitCodeForError(code: ErrorCode | string): number {
   const rule = EXIT_CODE_RULES.find((entry) => code.startsWith(entry.prefix));
-  return EXIT_CODES[rule?.exit ?? "runtime"];
+  if (!rule) {
+    throw new Error(`Unmapped error code prefix for exit mapping: ${code}`);
+  }
+  return EXIT_CODES[rule.exit];
 }

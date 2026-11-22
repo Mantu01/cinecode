@@ -1,5 +1,6 @@
 import { Command } from "commander";
-import { resolve } from "node:path";
+import { existsSync, statSync } from "node:fs";
+import { resolve, extname } from "node:path";
 import { assertExclusive } from "./usage-error.js";
 import { renderStill, setMediaCacheForRenderer } from "../renderer/engine.js";
 import { runReport } from "./run-report.js";
@@ -12,6 +13,7 @@ import { assertRenderableFormat } from "./format-preflight.js";
 import { encodeStillImage, type StillImageFormat } from "../encoder/outputs.js";
 import { withAtomicOutput } from "../encoder/output.js";
 import { TIME_GRAMMAR } from "../core/time-input.js";
+import { parseTimeArgument } from "./shared.js";
 
 export interface StillOptions {
   composition?: string;
@@ -49,6 +51,28 @@ export async function stillCommand(options: StillOptions): Promise<void> {
   const project = await resolver.resolve();
   reportResolution(project, (options as { verbose?: boolean }).verbose === true);
   const composition = (await resolver.selected())[0]!;
+
+  const fps = composition.fps || 30;
+  const durationSec = typeof composition.duration === "number" ? composition.duration : typeof composition.duration === "string" ? parseFloat(composition.duration) : (composition.contentDuration ?? 5);
+  const totalFrames = Math.max(1, Math.round(durationSec * fps));
+  if (options.frame !== undefined) {
+    if (isNaN(options.frame) || options.frame < 0) {
+      throw createError(ErrorCode.CC0001, { reason: `Frame index must be a non-negative integer, got ${options.frame}` });
+    }
+    if (options.frame >= totalFrames) {
+      throw createError(ErrorCode.CC0001, { reason: `Frame index ${options.frame} is out of range for composition with ${totalFrames} frames [0..${totalFrames - 1}]` });
+    }
+  }
+  if (options.time !== undefined) {
+    const parsedTime = parseTimeArgument(options.time, fps);
+    if (parsedTime < 0) {
+      throw createError(ErrorCode.CC0001, { reason: `Time '${options.time}' resolves to negative frame ${parsedTime}` });
+    }
+    if (parsedTime >= totalFrames) {
+      throw createError(ErrorCode.CC0001, { reason: `Time '${options.time}' resolves to frame ${parsedTime}, which is out of range for composition with ${totalFrames} frames [0..${totalFrames - 1}]` });
+    }
+  }
+
   const fontResult = registerProjectFonts(project.config.fonts, {
     projectRoot: project.root,
     mediaDir: project.config.mediaDir ?? "media",
@@ -64,7 +88,7 @@ export async function stillCommand(options: StillOptions): Promise<void> {
   const { parameters, explain } = resolveRenderParameters({
     flags: {
       resolution: options.resolution,
-      format: options.format as any,
+      format: options.format as import("../core/types/index.js").RenderFormat | undefined,
       out: options.out,
       from: options.frame !== undefined ? options.frame : options.time,
     },
@@ -89,7 +113,9 @@ export async function stillCommand(options: StillOptions): Promise<void> {
     kind: "still",
   });
 
-  runReport.result({ explain: describeExplainReport(explain) });
+  const explained = describeExplainReport(explain);
+  runReport.result({ explain: explained });
+  runReport.explain(explained);
   assertRenderableFormat({
     command: "still",
     format: parameters.format.value,
@@ -105,10 +131,35 @@ export async function stillCommand(options: StillOptions): Promise<void> {
   const media = await project.media();
   setMediaCacheForRenderer(media.cache);
 
-  const frame = Math.max(0, parameters.frameWindow.value.from);
-  const out = parameters.outputPath.value;
+  const frame = options.frame !== undefined
+    ? options.frame
+    : options.time !== undefined
+      ? parseTimeArgument(options.time, fps)
+      : 0;
+
   const format = asStillFormat(parameters.format.value);
   const plan = outputPlanFor(format);
+  let out = parameters.outputPath.value;
+
+  if (options.out) {
+    const rawOut = resolve(project.root, options.out);
+    if (existsSync(rawOut) && statSync(rawOut).isDirectory()) {
+      throw createError(ErrorCode.CC1003, {
+        key: "out",
+        path: rawOut,
+        reason: "a file path must not be an existing directory",
+      });
+    }
+    const givenExt = extname(out);
+    if (plan.extension && givenExt.toLowerCase() !== plan.extension.toLowerCase()) {
+      runReport.warn(
+        ErrorCode.CC1012,
+        `Output extension for format '${format}' should be '${plan.extension}'; corrected '${givenExt}' to '${plan.extension}'`,
+        out,
+      );
+      out = out.slice(0, out.length - givenExt.length) + plan.extension;
+    }
+  }
 
   runReport.expectArtifact("image");
   const canvas = await renderStill(
@@ -141,27 +192,10 @@ export async function stillCommand(options: StillOptions): Promise<void> {
   console.log(`Rendered frame ${frame} (${parameters.width.value}x${parameters.height.value}) to ${out}`);
 }
 
+import { findCommand, buildCommanderCommand } from "./command-registry.js";
+
 export function createStillCommand(): Command {
-  const cmd = new Command("still")
-    .description("Render a single frame to PNG or JPEG")
-    .option("--file <path>", "Standalone composition file (file mode)")
-    .option("-c, --composition <name>", "Composition name (requires --file)")
-    .option("-T, --timeline <id>", "Timeline id from main.ts")
-    .option("-s, --scene <id>", "Scene id from main.ts")
-    .option("-f, --frame <number>", "Frame number", (v) => parseInt(v, 10))
-    .option("--time <time>", `Time (${TIME_GRAMMAR})`)
-    .option("-o, --out <path>", "Output file path")
-    .option("--format <format>", `Output format: ${STILL_FORMATS.join(", ")}`)
-    .option("--resolution <WIDTHxHEIGHT>", "Override resolution")
-    .option("--seed <number>", "Random seed", (v) => parseInt(v, 10))
-    .option("--dry-run", "Print render plan without rendering", false)
-    .option("--explain", "Print resolved parameters and their origins without rendering", false)
-    .action(async (options: StillOptions) => {
-      assertExclusive([
-        ["--frame", options.frame !== undefined],
-        ["--time", options.time !== undefined],
-      ]);
-      await stillCommand(options);
-    });
-  return cmd;
+  const spec = findCommand("still");
+  if (!spec) throw new Error("Command 'still' not found in registry");
+  return buildCommanderCommand(spec);
 }

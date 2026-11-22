@@ -10,15 +10,20 @@ import type {
   VideoConfig,
 } from "../core/types/index.js";
 import { findMissingEnvVarsWithPaths, substituteEnvVarsDeep, type MissingEnvVar } from "./envsubst.js";
-import { mergeConfigInheritance } from "./inherit.js";
+import { resolveConfigInheritance, mergeConfigInheritance } from "./inherit.js";
 import { isUserModuleFile, loadUserModule } from "../loader/index.js";
 import { createError, ErrorCode, isCinecodeError } from "../errors/index.js";
 import { RESOLUTION_DIMENSIONS, SCHEMA_VERSION } from "./zod-schema.js";
 
 export { SCHEMA_VERSION };
-import { validateAuthoringConfig, validateNormalizedConfig } from "./validator.js";
+import {
+  validateAuthoringConfig,
+  validateNormalizedConfig,
+  assertNotCompositionExport,
+  assertNoConflictingAliases,
+} from "./validator.js";
 import { rootOfConfig, validateProjectRoots } from "./roots.js";
-import { isConfigValidated } from "./validated.js";
+import { migrateV1ToV2Transform } from "./migration/engine.js";
 
 export interface LoadConfigOptions {
   readonly configPath?: string;
@@ -27,45 +32,33 @@ export interface LoadConfigOptions {
   readonly root?: string;
 }
 
-export const DEFAULT_PROJECT: ProjectConfig = {
-  entry: "./main.ts",
-  sourceDir: "./src",
-  mediaDir: "./media",
-  outputDir: "./output",
-  cacheDir: ".cinecode/cache",
+import {
+  DEFAULT_PROJECT,
+  DEFAULT_VIDEO,
+  DEFAULT_IMAGES,
+  DEFAULT_DEV,
+  DEFAULT_AUDIO,
+  DEFAULT_RENDER,
+  DEFAULT_COLOR_MANAGEMENT,
+  DEFAULT_CHUNK_SIZE,
+  calculateAdaptiveChunkSize,
+  DEFAULTS,
+} from "./defaults.js";
+
+export {
+  DEFAULT_PROJECT,
+  DEFAULT_VIDEO,
+  DEFAULT_IMAGES,
+  DEFAULT_DEV,
+  DEFAULT_AUDIO,
+  DEFAULT_RENDER,
+  DEFAULT_COLOR_MANAGEMENT,
+  DEFAULT_CHUNK_SIZE,
+  calculateAdaptiveChunkSize,
+  DEFAULTS,
 };
 
-export const DEFAULT_VIDEO: VideoConfig = {
-  width: 1920,
-  height: 1080,
-  fps: 30,
-  background: "#000000",
-};
-
-export const DEFAULT_RENDER: RenderConfig = {
-  fps: 30,
-  resolution: "1920x1080",
-  format: "mp4",
-  quality: "final",
-  codec: "h264",
-  preset: "slow",
-  hardwareAcceleration: "off",
-};
-
-export const DEFAULT_IMAGES: ImageConfig = {
-  defaultFormat: "png",
-  quality: 92,
-  scaleFactor: 1,
-};
-
-export const DEFAULT_DEV: DevConfig = {
-  port: 3000,
-  host: "localhost",
-  open: false,
-  hmr: true,
-};
-
-const DEFAULT_CONFIG: CinecodeConfig = {
+export const DEFAULT_CONFIG: CinecodeConfig = {
   schemaVersion: SCHEMA_VERSION,
   project: DEFAULT_PROJECT,
   video: DEFAULT_VIDEO,
@@ -77,11 +70,7 @@ const DEFAULT_CONFIG: CinecodeConfig = {
   cacheDir: DEFAULT_PROJECT.cacheDir,
   cloudMedia: [],
   render: DEFAULT_RENDER,
-  audio: {
-    sampleRate: 48000,
-    channels: 2,
-    masterVolume: 1,
-  },
+  audio: DEFAULT_AUDIO,
   fonts: [],
   concurrency: "auto",
   overwrite: false,
@@ -92,10 +81,57 @@ const DEFAULT_CONFIG: CinecodeConfig = {
   ignorePatterns: [],
 };
 
-/** The loader's result: the normalized config plus the keys the author actually wrote. */
+export function getDefaultConfig(): CinecodeConfig {
+  return DEFAULT_CONFIG;
+}
+
+export interface ConfigFieldTrace {
+  readonly path: string;
+  readonly value: unknown;
+  readonly source: "explicit" | "inherited" | "default";
+  readonly chain: readonly string[];
+}
+
+/** The loader's result: the normalized config plus the keys the author actually wrote and the resolution trace. */
 export interface LoadedConfig {
   readonly config: CinecodeConfig;
   readonly explicit: ReadonlySet<string>;
+  readonly trace: ReadonlyMap<string, ConfigFieldTrace>;
+}
+
+function buildResolutionTrace(
+  config: CinecodeConfig,
+  explicit: ReadonlySet<string>,
+  chain: readonly string[],
+  configPath: string,
+): ReadonlyMap<string, ConfigFieldTrace> {
+  const trace = new Map<string, ConfigFieldTrace>();
+
+  function record(path: string, val: unknown): void {
+    if (val === undefined) return;
+    const isExplicit = explicit.has(path);
+    const source: "explicit" | "inherited" | "default" = isExplicit
+      ? "explicit"
+      : chain.length > 1
+        ? "inherited"
+        : "default";
+    const fieldChain = isExplicit ? [configPath] : chain.length > 1 ? chain : ["defaults"];
+    trace.set(path, { path, value: val, source, chain: fieldChain });
+  }
+
+  function walk(prefix: string, obj: Record<string, unknown>): void {
+    for (const [k, v] of Object.entries(obj)) {
+      const p = prefix ? `${prefix}.${k}` : k;
+      if (v !== null && typeof v === "object" && !Array.isArray(v)) {
+        walk(p, v as Record<string, unknown>);
+      } else {
+        record(p, v);
+      }
+    }
+  }
+
+  walk("", config as unknown as Record<string, unknown>);
+  return trace;
 }
 
 /** Authoring paths present in a source document, for the precedence engine. */
@@ -150,22 +186,37 @@ export async function loadConfigDocument(
   }
 
   try {
-    assertEnvVarsPresent(findMissingEnvVarsWithPaths(rawConfig), resolvedPath);
-    const withEnv = substituteEnvVarsDeep(rawConfig);
-    const merged = await mergeConfigInheritance(resolvedPath, withEnv);
-    const validatedInPlace = isConfigValidated(rawConfig) && merged === withEnv;
-    const declaredVersion = merged.schemaVersion;
-    if (typeof declaredVersion === "number" && declaredVersion > SCHEMA_VERSION) {
+    assertNotCompositionExport(rawConfig, resolvedPath);
+
+    // Schema-version handling: v1 migrated in-memory to v2 with warning, invalid versions rejected
+    if (rawConfig.schemaVersion === 1) {
+      migrateV1ToV2Transform(rawConfig);
+      rawConfig.schemaVersion = SCHEMA_VERSION;
+    } else if (
+      rawConfig.schemaVersion !== undefined &&
+      rawConfig.schemaVersion !== SCHEMA_VERSION
+    ) {
       throw createError(
         ErrorCode.CC1004,
-        { version: String(declaredVersion), expected: String(SCHEMA_VERSION) },
-        { location: { file: resolvedPath }, fixHint: `This Cinecode release supports schema version ${SCHEMA_VERSION}; upgrade cinecode or lower schemaVersion.` },
+        { version: String(rawConfig.schemaVersion), expected: String(SCHEMA_VERSION) },
+        {
+          location: { file: resolvedPath },
+          fixHint: `This Cinecode release supports schema version ${SCHEMA_VERSION}; upgrade cinecode or lower schemaVersion.`,
+        },
       );
     }
-    if (!validatedInPlace) assertAuthoringSchema(merged, resolvedPath);
+
+    assertEnvVarsPresent(findMissingEnvVarsWithPaths(rawConfig), resolvedPath);
+    const withEnv = substituteEnvVarsDeep(rawConfig);
+    const { merged, chain } = await resolveConfigInheritance(resolvedPath, withEnv, options.root);
+
+    assertNoConflictingAliases(merged, resolvedPath);
+    assertAuthoringSchema(merged, resolvedPath);
+
     const config = normalizeConfig(merged);
     const normalized = validateNormalizedConfig(config, resolvedPath);
     if (normalized.errors.length > 0) throw normalized.errors[0];
+
     const rootErrors = validateProjectRoots(options.root ?? rootOfConfig(resolvedPath), config, {
       configPath: resolvedPath,
     });
@@ -173,7 +224,27 @@ export async function loadConfigDocument(
       (rootErrors[0] as { issues?: readonly unknown[] }).issues = rootErrors;
       throw rootErrors[0];
     }
-    return { config, explicit: explicitPathsOf(merged) };
+
+    const { setBinaryConfig } = await import("../binary/resolver.js");
+    setBinaryConfig({
+      ffmpegPath: config.binaries?.ffmpegPath,
+      ffprobePath: config.binaries?.ffprobePath,
+      root: options.root ?? rootOfConfig(resolvedPath),
+    });
+
+    const explicit = explicitPathsOf(merged);
+    const trace = buildResolutionTrace(config, explicit, chain, resolvedPath);
+
+    // Freeze validated configuration so downstream code cannot mutate it
+    Object.freeze(config.project);
+    Object.freeze(config.video);
+    Object.freeze(config.images);
+    Object.freeze(config.dev);
+    Object.freeze(config.render);
+    Object.freeze(config.audio);
+    Object.freeze(config);
+
+    return { config, explicit, trace };
   } catch (e) {
     if (isCinecodeError(e)) throw e;
     const reason = e instanceof Error ? e.message : String(e);
@@ -219,6 +290,7 @@ export function normalizeConfig(raw: Record<string, unknown>): CinecodeConfig {
   const rawDev = (raw.dev as Partial<DevConfig> | undefined) ?? {};
   const rawRender = (raw.render as Partial<RenderConfig> | undefined) ?? {};
   const rawAudio = (raw.audio as CinecodeConfig["audio"]) ?? {};
+  const rawBinaries = raw.binaries as CinecodeConfig["binaries"] | undefined;
 
   const entry =
     rawProject.entry ??
@@ -296,7 +368,7 @@ export function normalizeConfig(raw: Record<string, unknown>): CinecodeConfig {
     preset: rawRender.preset ?? DEFAULT_RENDER.preset!,
     hardwareAcceleration: rawRender.hardwareAcceleration ?? DEFAULT_RENDER.hardwareAcceleration!,
     concurrency: rawRender.concurrency ?? (raw.concurrency as number | "auto" | undefined),
-    chunkSize: rawRender.chunkSize,
+    chunkSize: rawRender.chunkSize ?? DEFAULT_RENDER.chunkSize,
     ...(rawRender.memoryBudgetMb !== undefined ? { memoryBudgetMb: rawRender.memoryBudgetMb } : {}),
     alpha: rawRender.alpha,
     twoPass: rawRender.twoPass,
@@ -324,6 +396,7 @@ export function normalizeConfig(raw: Record<string, unknown>): CinecodeConfig {
     mediaDir,
     outputDir,
     cacheDir,
+    binaries: rawBinaries ? { ffmpegPath: rawBinaries.ffmpegPath, ffprobePath: rawBinaries.ffprobePath } : undefined,
     allowCoLocatedMedia,
     cloudMedia: (raw.cloudMedia as CinecodeConfig["cloudMedia"]) ?? DEFAULT_CONFIG.cloudMedia,
     render,
@@ -369,8 +442,4 @@ export function findConfigFile(dir = process.cwd()): string {
     if (existsSync(full)) return full;
   }
   return resolve(dir, "cinecode.config.js");
-}
-
-export function getDefaultConfig(): CinecodeConfig {
-  return normalizeConfig({});
 }

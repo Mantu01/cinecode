@@ -18,6 +18,18 @@ export enum ErrorCode {
   CC2002 = "CC2002",
   CC2003 = "CC2003",
   CC2004 = "CC2004",
+  CC2101 = "CC2101",
+  CC2201 = "CC2201",
+  CC2202 = "CC2202",
+  CC2203 = "CC2203",
+  CC2204 = "CC2204",
+  CC2205 = "CC2205",
+  CC2206 = "CC2206",
+  CC2301 = "CC2301",
+  CC2501 = "CC2501",
+  CC2502 = "CC2502",
+  CC2601 = "CC2601",
+  CC2602 = "CC2602",
   CC3001 = "CC3001",
   CC3002 = "CC3002",
   CC3003 = "CC3003",
@@ -39,14 +51,41 @@ export enum ErrorCode {
   CC4009 = "CC4009",
   CC5001 = "CC5001",
   CC5002 = "CC5002",
+  CC5101 = "CC5101",
+  CC5201 = "CC5201",
+  CC5202 = "CC5202",
+  CC5203 = "CC5203",
+  CC5204 = "CC5204",
+  CC5205 = "CC5205",
+  CC5301 = "CC5301",
   CC5401 = "CC5401",
+  CC5501 = "CC5501",
+  CC5601 = "CC5601",
   CC6001 = "CC6001",
   CC6002 = "CC6002",
   CC6003 = "CC6003",
+  CC6004 = "CC6004",
+  CC6005 = "CC6005",
+  CC6006 = "CC6006",
+  CC6007 = "CC6007",
+  CC6008 = "CC6008",
+  CC6101 = "CC6101",
+  CC6201 = "CC6201",
+  CC6301 = "CC6301",
   CC7001 = "CC7001",
   CC7002 = "CC7002",
   CC7003 = "CC7003",
   CC7004 = "CC7004",
+  CC7005 = "CC7005",
+  CC7100 = "CC7100",
+  CC7101 = "CC7101",
+  CC7102 = "CC7102",
+  CC7103 = "CC7103",
+  CC7104 = "CC7104",
+  CC7105 = "CC7105",
+  CC7106 = "CC7106",
+  CC7107 = "CC7107",
+  CC7108 = "CC7108",
   CC8001 = "CC8001",
   CC8002 = "CC8002",
   CC8003 = "CC8003",
@@ -76,6 +115,18 @@ export const ErrorMessages: Record<ErrorCode, string> = {
   [ErrorCode.CC2002]: "Unsupported media type: {type} for file: {path}",
   [ErrorCode.CC2003]: "Media file unreadable: {path}. {reason}",
   [ErrorCode.CC2004]: "Media cache entry unreadable: {path}. {reason}",
+  [ErrorCode.CC2101]: "Multi-camera clip has no resolvable camera: {camera}",
+  [ErrorCode.CC2201]: "Streaming encoder frameBytes must be positive, got {bytes}",
+  [ErrorCode.CC2202]: "Failed to open ffmpeg stdin for streaming encode",
+  [ErrorCode.CC2203]: "Streaming encode failed: {reason}",
+  [ErrorCode.CC2204]: "Streaming encoder is not accepting frames: {reason}",
+  [ErrorCode.CC2205]: "Frame buffer size mismatch: expected {expected} bytes, got {actual}",
+  [ErrorCode.CC2206]: "Frame encode write failed: {reason}",
+  [ErrorCode.CC2301]: "Pixel buffer dimensions must be positive, got {dimensions}",
+  [ErrorCode.CC2501]: "Singular color transform matrix",
+  [ErrorCode.CC2502]: "Unsupported color transform {from} -> {to}",
+  [ErrorCode.CC2601]: "Frame extraction failed: {reason}",
+  [ErrorCode.CC2602]: "Frame extraction produced no data at timestamp {time}",
   [ErrorCode.CC3001]: "Overlapping clips detected on track {track}: {clip1} and {clip2}",
   [ErrorCode.CC3002]: "Invalid duration for clip {clip}: {duration}. Duration must be positive",
   [ErrorCode.CC3003]: "Clip {clip} extends outside composition bounds",
@@ -97,14 +148,41 @@ export const ErrorMessages: Record<ErrorCode, string> = {
   [ErrorCode.CC4009]: "Render failed for {count} output variant(s): {reason}",
   [ErrorCode.CC5001]: "Audio track '{name}' could not be mixed: {reason}",
   [ErrorCode.CC5002]: "Audio synthesis failed for sound '{name}': {reason}",
+  [ErrorCode.CC5101]: "Sample rate must be positive for K-weighting: {sampleRate}",
+  [ErrorCode.CC5201]: "Demucs stem separation is unavailable: {reason}",
+  [ErrorCode.CC5202]: "Demucs separation failed: {reason}",
+  [ErrorCode.CC5203]: "Demucs produced no recognised stems in {path}",
+  [ErrorCode.CC5204]: "Stem '{stem}' was not produced for {path}",
+  [ErrorCode.CC5205]: "Channel-split fallback produced no stems",
+  [ErrorCode.CC5301]: "Audio EQ supports at most {max} bands, got {count}",
   [ErrorCode.CC5401]: "Text-to-speech engine '{engine}' is unavailable or unsupported offline: {reason}",
+  [ErrorCode.CC5501]: "Not a valid MIDI file: missing MThd header in {path}",
+  [ErrorCode.CC5601]: "Audio encode validation failed: {reason}",
   [ErrorCode.CC6001]: "Unsupported URL scheme for cloud media: {url}",
   [ErrorCode.CC6002]: "Download failed for {url}: {reason}",
   [ErrorCode.CC6003]: "Checksum mismatch for {url}: expected {expected}, got {actual}",
+  [ErrorCode.CC6004]: "LUT file '{source}' is missing LUT_1D_SIZE or LUT_3D_SIZE",
+  [ErrorCode.CC6005]: "DOMAIN_MAX must be greater than DOMAIN_MIN in '{source}'",
+  [ErrorCode.CC6006]: "LUT size mismatch in '{source}': expected {expected} entries, found {actual}",
+  [ErrorCode.CC6007]: "LUT file '{source}' contains no data",
+  [ErrorCode.CC6008]: "Operation requires a 3D LUT, but '{path}' is a 1D LUT",
+  [ErrorCode.CC6101]: "Overlay application failed: {reason}",
+  [ErrorCode.CC6201]: "Unknown procedural texture type: {type}",
+  [ErrorCode.CC6301]: "Unknown typography preset: {preset}",
   [ErrorCode.CC7001]: "Node.js version {version} is not supported. Minimum required: 20",
   [ErrorCode.CC7002]: "Encoder unavailable: {reason}",
   [ErrorCode.CC7003]: "Folder not writable: {path}",
   [ErrorCode.CC7004]: "Environment health check failed: {reason}",
+  [ErrorCode.CC7005]: "Memory allocation or byte budget error: {reason}",
+  [ErrorCode.CC7100]: "Render memory budget: {details}",
+  [ErrorCode.CC7101]: "Frame transport: {details}",
+  [ErrorCode.CC7102]: "Renderer caches: {details}",
+  [ErrorCode.CC7103]: "Worker startup: {details}",
+  [ErrorCode.CC7104]: "Shared decode: {details}",
+  [ErrorCode.CC7105]: "Streaming pipeline: {details}",
+  [ErrorCode.CC7106]: "Cache identity: {details}",
+  [ErrorCode.CC7107]: "Cache identity inputs: {details}",
+  [ErrorCode.CC7108]: "Render cache GC warning: {details}",
   [ErrorCode.CC8001]: "Plugin load failed: {plugin}. {reason}",
   [ErrorCode.CC8002]: "Plugin validation failed: {plugin}. {reason}",
   [ErrorCode.CC8003]: "Plugin hook '{hook}' threw in {plugin}: {reason}. Other plugins continued.",
@@ -140,7 +218,7 @@ export interface ErrorOptions {
 }
 
 /** Fix hints for every error code. Concrete, copy-pasteable remediation steps. */
-const FIX_HINTS: Partial<Record<ErrorCode, string>> = {
+export const FIX_HINTS: Record<ErrorCode, string> = {
   [ErrorCode.CC0001]: "Run `cinecode help <command>` for the accepted arguments and flags.",
   [ErrorCode.CC1001]:
     "Add the missing required field to your config. Run `cinecode doctor` to see all validation errors at once.",
@@ -174,6 +252,18 @@ const FIX_HINTS: Partial<Record<ErrorCode, string>> = {
     "Verify the file is not corrupted: run `ffmpeg -i <file>` manually to inspect. Try re-exporting from your source application.",
   [ErrorCode.CC2004]:
     "Delete the stale cache entry or run `cinecode clean --cache`; the affected item is re-derived on the next run.",
+  [ErrorCode.CC2101]: "Specify a valid camera ID in the multi-camera clip configuration.",
+  [ErrorCode.CC2201]: "Verify composition width, height, and pixel format produce positive frame size.",
+  [ErrorCode.CC2202]: "Check ffmpeg installation and system permissions for process pipes.",
+  [ErrorCode.CC2203]: "Check ffmpeg log output and verify codec parameters and output path.",
+  [ErrorCode.CC2204]: "Ensure streaming encoder is initialized and not closed before submitting frames.",
+  [ErrorCode.CC2205]: "Verify canvas rendering dimensions match composition dimensions.",
+  [ErrorCode.CC2206]: "Increase memory budget with --memory-budget or check disk space.",
+  [ErrorCode.CC2301]: "Ensure composition width and height are greater than zero.",
+  [ErrorCode.CC2501]: "Check color profile configuration; matrix inversion requires non-zero determinant.",
+  [ErrorCode.CC2502]: "Use supported color spaces (sRGB, Display P3, Rec.2020).",
+  [ErrorCode.CC2601]: "Check video source integrity and ensure ffmpeg is available.",
+  [ErrorCode.CC2602]: "Verify requested timestamp is inside the media duration.",
   [ErrorCode.CC3001]:
     "Clips on the same track cannot overlap. Adjust their start times or move one to a different track layer.",
   [ErrorCode.CC3002]:
@@ -216,19 +306,46 @@ const FIX_HINTS: Partial<Record<ErrorCode, string>> = {
     "Check that the audio file format is supported and the sample rate matches the composition ({fps}fps → 48000Hz). Add `--audio-codec aac` if needed.",
   [ErrorCode.CC5002]:
     "Verify the sound definition is valid — oscillators, envelope, and filter params must be within acceptable ranges.",
+  [ErrorCode.CC5101]: "Specify standard audio sample rate (44100 or 48000 Hz).",
+  [ErrorCode.CC5201]: "Install Demucs with `pip install demucs` or use channel-split fallback.",
+  [ErrorCode.CC5202]: "Inspect audio file format and verify Demucs dependencies.",
+  [ErrorCode.CC5203]: "Check output folder for separated audio files (.wav).",
+  [ErrorCode.CC5204]: "Verify requested stem name (vocals, drums, bass, other) matches model.",
+  [ErrorCode.CC5205]: "Ensure input audio contains stereo or multi-channel data.",
+  [ErrorCode.CC5301]: "Reduce the number of equalizer bands to {max} or fewer.",
   [ErrorCode.CC5401]:
     "Use the local 'system' TTS engine or install a local offline synthesis engine.",
+  [ErrorCode.CC5501]: "Provide a valid Standard MIDI File (.mid) with MThd header.",
+  [ErrorCode.CC5601]: "Verify audio sample rate, channels, and codec settings.",
   [ErrorCode.CC6001]: "Only http:// and https:// schemes are supported for cloud media downloads.",
   [ErrorCode.CC6002]:
     "Check network connectivity and retry. If persistent, download the file manually and reference locally.",
   [ErrorCode.CC6003]:
     "Redownload the file. The cached copy may have been corrupted during transfer.",
+  [ErrorCode.CC6004]: "Ensure .cube file conforms to Adobe Cube LUT specification.",
+  [ErrorCode.CC6005]: "Correct DOMAIN_MIN and DOMAIN_MAX in the .cube LUT header.",
+  [ErrorCode.CC6006]: "Verify data lines in .cube file match declared 1D or 3D cube size.",
+  [ErrorCode.CC6007]: "Provide a complete non-empty .cube LUT file.",
+  [ErrorCode.CC6008]: "Supply a 3D cube LUT or use 1D application function.",
+  [ErrorCode.CC6101]: "Verify overlay dimensions and blend mode settings.",
+  [ErrorCode.CC6201]: "Use a supported procedural texture type (noise, gradient, grid).",
+  [ErrorCode.CC6301]: "Use a registered typography preset or configure font explicitly.",
   [ErrorCode.CC7001]: "Upgrade Node.js to version 20 or later: `nvm install 20` then `nvm use 20`.",
   [ErrorCode.CC7002]: "Ensure ffmpeg is installed and in PATH. Run `cinecode doctor` to diagnose.",
   [ErrorCode.CC7003]:
     "Create the output directory manually or run with elevated permissions: `mkdir -p <path>`",
   [ErrorCode.CC7004]:
     "Resolve each reported issue, then rerun `cinecode health`; use `cinecode doctor` for remediation hints.",
+  [ErrorCode.CC7005]: "Increase memory budget with --memory-budget or reduce worker concurrency.",
+  [ErrorCode.CC7100]: "Informational diagnostic; no action required.",
+  [ErrorCode.CC7101]: "Informational diagnostic; no action required.",
+  [ErrorCode.CC7102]: "Informational diagnostic; no action required.",
+  [ErrorCode.CC7103]: "Informational diagnostic; no action required.",
+  [ErrorCode.CC7104]: "Informational diagnostic; no action required.",
+  [ErrorCode.CC7105]: "Informational diagnostic; no action required.",
+  [ErrorCode.CC7106]: "Informational diagnostic; no action required.",
+  [ErrorCode.CC7107]: "Informational diagnostic; no action required.",
+  [ErrorCode.CC7108]: "Run `cinecode clean --cache` if cache space is constrained.",
   [ErrorCode.CC8001]:
     "Check that the plugin exports a valid `register()` function and is compatible with this cinecode version.",
   [ErrorCode.CC8002]:
@@ -312,8 +429,17 @@ export function formatError(error: CinecodeError, verbose = false, color = true)
     parts.push(`  ${yellow}Fix${reset}: ${error.fixHint}`);
   }
 
-  if (verbose && error.cause instanceof Error && error.cause.message !== error.message) {
-    parts.push(`  ${gray}Cause${reset}: ${error.cause.message}`);
+  if (verbose && error.cause) {
+    let current: unknown = error.cause;
+    let depth = 1;
+    while (current && depth <= 5) {
+      const msg = current instanceof Error ? current.message : String(current);
+      if (msg !== error.message) {
+        parts.push(`  ${gray}Cause${depth > 1 ? ` (${depth})` : ""}${reset}: ${msg}`);
+      }
+      current = current instanceof Error ? current.cause : undefined;
+      depth += 1;
+    }
   }
 
   if (verbose && error.stack) {

@@ -147,7 +147,7 @@ export function resolveClipKeyframes<T extends Record<string, any>>(clip: T, fra
   const overrides: Record<string, unknown> = {};
   for (const [prop, tuples] of entries) {
     if (!Array.isArray(tuples) || tuples.length === 0) continue;
-    const engineKfs = tuples.map((t: any) => {
+    const engineKfs = tuples.map((t: readonly [time: number, value: unknown, easing?: unknown]) => {
       const atTime = typeof t[0] === "number" ? t[0] : 0;
       const atFrames = typeof t[0] === "number" && t[0] <= 1000 && !Number.isInteger(t[0])
         ? Math.round(t[0] * fps)
@@ -160,7 +160,7 @@ export function resolveClipKeyframes<T extends Record<string, any>>(clip: T, fra
     overrides[prop] = interpolateProperty(sorted, localFrame, ctx);
   }
 
-  const result = { ...clip } as any;
+  const result = { ...clip } as Record<string, unknown>;
   for (const [prop, value] of Object.entries(overrides)) {
     if (prop.includes(".")) {
       const parts = prop.split(".");

@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { ErrorCode } from "../../errors/index.js";
-import { isConfigValidated } from "../validated.js";
 import { configValidationCounts } from "../validator.js";
 import { explicitPathsOf, loadConfig, loadConfigDocument, normalizeConfig } from "../schema.js";
 import { resolveRenderParameters } from "../../cli/precedence.js";
@@ -55,9 +54,7 @@ test("a malformed authored config fails at import with one coded error naming fi
   });
 });
 
-test("the validated marker cannot be forged by a document", async () => {
-  assert.equal(isConfigValidated({}), false);
-  assert.equal(isConfigValidated({ __cinecodeValidated: true }), false);
+test("validation runs on every config load", async () => {
   const before = configValidationCounts();
   const file = await tsConfig('{ schemaVersion: 2, project: { entry: "./main.ts" } }');
   await loadConfig(file);

@@ -3,7 +3,6 @@ import { createError, ErrorCode, type CinecodeError } from "../errors/index.js";
 import { validateManifestShape } from "../config/zod-schema.js";
 
 export const MANIFEST_COLLECTIONS = ["images", "audio", "scenes", "timelines"] as const;
-const RESERVED_COLLECTIONS = ["characters", "motions"] as const;
 
 const DEFINITIONS = new WeakSet<object>();
 let shapeValidations = 0;
@@ -12,9 +11,29 @@ export function manifestShapeValidationCount(): number {
   return shapeValidations;
 }
 
+export function deepFreezeManifest<T extends MainManifest>(manifest: T): Readonly<T> {
+  if (!manifest || typeof manifest !== "object") return manifest;
+  for (const col of MANIFEST_COLLECTIONS) {
+    const list = (manifest as Record<string, unknown>)[col];
+    if (Array.isArray(list)) {
+      for (const item of list) {
+        if (item && typeof item === "object") {
+          Object.freeze(item);
+        }
+      }
+      Object.freeze(list);
+    }
+  }
+  return Object.freeze(manifest);
+}
+
 /** Describes what the entry file exported, in authoring terms. */
 export function describeShape(value: unknown): string {
   if (value === null) return "null";
+  if (value === undefined) return "a named-only export (no default export)";
+  if (value instanceof Promise || (typeof value === "object" && typeof (value as { then?: unknown }).then === "function")) {
+    return "a promise";
+  }
   if (Array.isArray(value)) return `an array of ${value.length} item(s)`;
   if (typeof value === "function") return "a function";
   if (typeof value !== "object") return `a primitive (${typeof value})`;
@@ -43,7 +62,10 @@ function shapeErrors(raw: unknown): CinecodeError[] {
 /** Validates a definition at import time, exactly as defineConfig does. */
 export function validateMainDefinition(manifest: unknown): MainManifest {
   const errors = shapeErrors(manifest);
-  if (errors.length > 0) throw errors[0];
+  if (errors.length > 0) {
+    (errors[0] as { issues?: readonly unknown[] }).issues = errors;
+    throw errors[0];
+  }
   const def = manifest as MainManifest;
   DEFINITIONS.add(def as object);
   return def;
@@ -59,13 +81,19 @@ export function isMainDefinition(value: unknown): boolean {
 }
 
 function carriesKnownCollection(value: Record<string, unknown>): boolean {
-  return [...MANIFEST_COLLECTIONS, ...RESERVED_COLLECTIONS].some((key) => Array.isArray(value[key]));
+  return MANIFEST_COLLECTIONS.some((key) => Array.isArray(value[key]));
 }
 
 /** Accepts a branded definition or the documented raw shape; rejects everything else. */
 export function assertMainContract(raw: unknown, entryPath = "main.ts"): MainManifest {
   if (isMainDefinition(raw)) return raw as MainManifest;
-  if (typeof raw === "object" && raw !== null && !Array.isArray(raw) && carriesKnownCollection(raw as Record<string, unknown>)) {
+  if (
+    typeof raw === "object" &&
+    raw !== null &&
+    !Array.isArray(raw) &&
+    !("rootTimeline" in (raw as object)) &&
+    carriesKnownCollection(raw as Record<string, unknown>)
+  ) {
     return raw as MainManifest;
   }
   const error = createError(

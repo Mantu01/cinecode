@@ -1,4 +1,5 @@
 import type { SKRSContext2D } from "@napi-rs/canvas";
+import { createError, ErrorCode } from "../../errors/index.js";
 import {
   evaluateTypewriter,
   typewriterEvents,
@@ -121,7 +122,7 @@ export function createTypographyEffect(
         }),
       };
     default:
-      throw new Error(`CC6301: Unknown typography preset: ${preset}`);
+      throw createError(ErrorCode.CC6301, { preset });
   }
 }
 

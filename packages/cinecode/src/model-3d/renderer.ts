@@ -132,7 +132,7 @@ export class Model3dRenderer {
 
     let gl: Gl | null = null;
     try {
-      const offscreen = new (globalThis as any).OffscreenCanvas(options.width, options.height);
+      const offscreen = new (globalThis as any).OffscreenCanvas(options.width, options.height); // Note: environment OffscreenCanvas detection
       gl = offscreen.getContext("webgl2") as Gl;
     } catch {
       gl = canvas.getContext("webgl2" as never) as Gl;

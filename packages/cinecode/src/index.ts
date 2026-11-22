@@ -1,137 +1,85 @@
 export { CINECODE_VERSION } from "./version.js";
+
+// Authoring types, time, easing, keyframes, random, validation, define, clips & builders
 export * from "./core/index.js";
 
+// Definition helpers
+export { defineEffect } from "./effects/engine.js";
+export type { EffectDefinition } from "./effects/engine.js";
+export {
+  defineTransition,
+  BUILTIN_TRANSITION_NAMES,
+} from "./transitions/index.js";
+export type { TransitionDefinition } from "./transitions/index.js";
+export { defineConfig } from "./config/scaffold.js";
+export {
+  definePlugin,
+  defineManifest,
+  hook,
+  effectPlugin,
+  transitionPlugin,
+  audioProcessorPlugin,
+  commandPlugin,
+} from "./plugin/sdk.js";
+export type {
+  CinecodePlugin,
+  PluginManifest,
+  PluginHooks,
+} from "./plugin/types.js";
+
+// Render API & Canvas rendering
+export { render } from "./api/render.js";
+export type { RenderApiOptions, RenderApiResult } from "./api/render.js";
 export {
   renderFrame,
   renderStill,
   renderSplitScreen,
-  type RenderContext,
-  type RenderResult,
 } from "./renderer/engine.js";
-
-export {
-  resolveRegions,
-  resolveLayout,
-  computeFitRect,
-  drawSourceIntoRegion,
-  drawRegionShadow,
-  createSideBySide,
-  createPiP,
-  createGrid,
-  createThirds,
-  type SplitRegion,
-  type ResolvedRegion,
-  type SplitLayoutPreset,
-  type RegionFit,
-  type FitRect,
-} from "./renderer/pip.js";
-
-export {
-  renderImageClip,
-  renderImageBuffer,
-  type RenderImageOptions,
-  type RenderImageBufferOptions,
-} from "./renderer/image.js";
-
-export {
-  renderMultiCameraFrame,
-  renderMultiCameraView,
-  renderMultiCameraPreview,
-  compositeCameraTransition,
-  type MultiCameraRenderOptions,
-  type MultiCameraPreviewOptions,
-} from "./renderer/multi-camera.js";
-
-export {
-  measureTextWidth,
-  layoutTextLetters,
-  type TextMeasureStyle,
-  type TextLetter,
-  type TextLetterLayout,
-} from "./renderer/text/measure.js";
-
-export {
-  createCanvas,
-  createContext,
-  clearCanvas,
-  compositeLayers,
-  copyCanvas,
-  applyOpacity,
-  compositeCanvases,
-  convertCanvasAlphaMode,
-  type CompositedLayer,
-  type Mask,
-  type Matte,
-  type MaskShape,
-  type CanvasCompositeOptions,
-} from "./renderer/composite/engine.js";
-
-export {
-  premultiplyAlpha,
-  unpremultiplyAlpha,
-  convertAlphaMode,
-  compositeBuffers,
-  applyBufferOpacity,
-  porterDuffPixel,
-  canvasOperationForPorterDuff,
-  type AlphaMode,
-  type PorterDuffOperator,
-  type BufferCompositeOptions,
-} from "./renderer/composite/porter-duff.js";
-
-export {
-  createDefaultTransform,
-  applyTransform,
-  applyBlendMode,
-  drawRectangle,
-  drawRoundedRectangle,
-  drawEllipse,
-  drawLine,
-  drawPolygon,
-  drawPath,
-  type Point,
-  type Size,
-  type Rect,
-  type Fill,
-  type Stroke,
-  type Shadow,
-  type Transform,
-  type BlendMode,
-  type DrawContext,
-  type ShapeDrawParams,
-  type PathSegment,
-} from "./renderer/shapes/index.js";
-
-export {
-  regularPolygon,
-  star,
-  arc,
-  ring,
-  spiral,
-  grid,
-  morphingPolygon,
-  pointsToClosedPath,
-} from "./renderer/geometry.js";
-
-export {
-  createCanvasPool,
-  createBufferPool,
-  evictOldest,
-  type CanvasPool,
-  type CanvasPoolEntry,
-  type BufferPool,
-} from "./renderer/pool.js";
-
+export type { RenderContext, RenderResult } from "./renderer/engine.js";
 export {
   buildFrame,
   createDrawList,
   withDrawList,
-  type FrameBuilder,
-  type FrameDrawContext,
-  type DrawOp,
-  type DrawList,
 } from "./renderer/frame-builder.js";
+export type {
+  FrameBuilder,
+  FrameDrawContext,
+  DrawOp,
+  DrawList,
+} from "./renderer/frame-builder.js";
+export {
+  anchorPosition,
+  layoutRow,
+  layoutColumn,
+  layoutStack,
+} from "./renderer/layout/engine.js";
+export type {
+  LayoutItem,
+  LayoutOptions,
+  LayoutResult,
+} from "./renderer/layout/engine.js";
+export {
+  createSideBySide,
+  createPiP,
+  createGrid,
+  createThirds,
+} from "./renderer/pip.js";
+export type {
+  SplitRegion,
+  ResolvedRegion,
+  SplitLayoutPreset,
+} from "./renderer/pip.js";
+export {
+  renderMultiCameraFrame,
+  renderMultiCameraView,
+  renderMultiCameraPreview,
+} from "./renderer/multi-camera.js";
+export type {
+  MultiCameraRenderOptions,
+  MultiCameraPreviewOptions,
+} from "./renderer/multi-camera.js";
 
+// Motion & loops helpers
 export {
   oscillate,
   triangle,
@@ -145,7 +93,6 @@ export {
   pulse,
   remap,
 } from "./renderer/motion.js";
-
 export {
   cycle,
   pingPong,
@@ -155,132 +102,82 @@ export {
   loopScope,
   nestedScope,
   beat,
-  type TimeScopeOptions,
 } from "./renderer/loops.js";
+export type { TimeScopeOptions } from "./renderer/loops.js";
 
+// Config API
+export { loadConfig } from "./config/schema.js";
+export type { LoadConfigOptions } from "./config/schema.js";
 export {
-  poseSkeleton,
-  drawSkeleton,
-  humanoidSkeleton,
-  type Bone,
-  type Skeleton,
-  type Pose,
-  type JointPositions,
-  type SkeletonAnchor,
-  type DrawSkeletonParams,
-} from "./renderer/skeleton.js";
-
-export * from "./effects/index.js";
-export * from "./transitions/index.js";
-export * from "./media/index.js";
-export * from "./audio/index.js";
-export * from "./config/schema.js";
-
-export {
-  substituteEnvVars,
-  substituteEnvVarsDeep,
-  substituteEnvVarsWithReport,
-  findMissingEnvVars,
-  findMissingEnvVarsDeep,
-} from "./config/envsubst.js";
-
-export {
-  resolveConfigChain,
-  mergeConfigInheritance,
-  deepMergeConfig,
-  extendComposition,
-  extendCompositionProps,
-} from "./config/inherit.js";
-
+  validateConfigWithZod,
+  CinecodeConfigSchema,
+} from "./config/zod-schema.js";
+export type { InferredCinecodeConfig } from "./config/zod-schema.js";
 export { generateSchema, generateSchemaJson } from "./config/json-schema.js";
-
 export {
   CinecodeIgnore,
   DEFAULT_IGNORE_PATTERNS,
   loadCinecodeIgnore,
   parseIgnoreContent,
 } from "./config/ignore.js";
-
-export { defineConfig } from "./config/scaffold.js";
-
+export type { CinecodeIgnoreOptions, IgnoreRule } from "./config/ignore.js";
 export { ConfigMigrationEngine } from "./config/migration/engine.js";
 
-export { validateConfigWithZod, CinecodeConfigSchema } from "./config/zod-schema.js";
-
-export { ConfigDependencyTracker } from "./config/hot-swap.js";
-
+// Pipeline, Caches & Resource Plan
+export {
+  createResourcePlan,
+} from "./pipeline/resource-planner.js";
 export type {
-  CinecodeIgnoreOptions,
-  IgnoreRule,
-  JsonSchemaDocument,
-  JsonSchemaNode,
-} from "./config/index.js";
+  ResourcePlan,
+  ResourcePlanInput,
+} from "./pipeline/resource-planner.js";
+export {
+  GlobalCacheService,
+  getGlobalCacheService,
+  buildContractCacheKey,
+} from "./pipeline/global-cache.js";
+export {
+  ByteBudget,
+  resolveTransportBudget,
+  estimateFrameBytes,
+  formatBytes,
+} from "./pipeline/memory.js";
 
-export * from "./manifest/index.js";
-export * from "./pipeline/index.js";
-export * from "./encoder/index.js";
-export * from "./plugin/index.js";
-export * from "./extensions/index.js";
-export * from "./noise/index.js";
-export * from "./subtitles/index.js";
-export * from "./stickers/index.js";
-export * from "./gradients/index.js";
-export * from "./warp/index.js";
-export * from "./text-3d/index.js";
+// Error API
+export {
+  ErrorCode,
+  ErrorMessages,
+  FIX_HINTS,
+  createError,
+  isCinecodeError,
+  formatError,
+} from "./errors/codes.js";
+export type { CinecodeError } from "./errors/codes.js";
+export {
+  recordDegradation,
+  pendingDegradations,
+} from "./errors/degradations.js";
+export type { Degradation } from "./errors/degradations.js";
+export { exitCodeForError, EXIT_CODES } from "./cli/exit-codes.js";
 
+// Binary resolution
 export {
-  buildSkinBindings as buildGltfSkinBindings,
-  parseAnimationClips as parseGltfAnimationClips,
-  applySkinning as applyGltfSkinning,
-} from "./model-3d/skeleton/index.js";
-export {
-  loadCubeMap,
-  loadEquirectangular,
-  renderSkybox,
-  createProceduralSkybox,
-  sampleEnvMap,
-  type CubeTexture,
-  type CubeFace,
-} from "./model-3d/environment/index.js";
-export {
-  renderShadowMap,
-  applyShadowMap,
-  drawGroundPlane,
-  createGroundPlaneCanvas,
-  projectPointToGround,
-  sampleShadow,
-  type ShadowMap,
-  type GroundPlaneOptions,
-} from "./model-3d/shadows/index.js";
-export * from "./dataviz/index.js";
-export * from "./svg/index.js";
+  resolveBinary,
+  setBinaryConfig,
+  getBinaryConfig,
+} from "./binary/resolver.js";
+export type { BinaryResolution } from "./binary/resolver.js";
 
+// Observability
 export {
-  Model3dRenderer,
-  parseGLB,
-  getAccessorData,
-  buildSkeletonState,
-  buildSkinBindings,
-  parseAnimationClips,
-  applySkinning,
-  computeBoneWorldMatrices,
-  computeSkinMatrices,
-  sampleChannel,
-  quatMultiply,
-  quatSlerp,
-  quatNormalize,
-  type Model3dOptions,
-  type CameraConfig,
-  type SkeletalAnimationConfig,
-  type SkeletonState,
-  type AnimationClip as SkeletalAnimationClip,
-  type SkinBinding,
-  type AnimationChannel as SkeletalAnimationChannel,
-  type SkinnedMeshResult,
-} from "./model-3d/index.js";
-export * from "./particles/index.js";
-export * from "./midi/index.js";
-export * from "./tts/index.js";
-export * from "./api/index.js";
-export * from "./observability/index.js";
-export * from "./security/index.js";
+  StructuredLogger,
+  logger,
+  setJsonMode,
+  log,
+} from "./observability/index.js";
+export type {
+  LogFormat,
+  LogEntry,
+  LoggerOptions,
+  StructuredLogLevel,
+} from "./observability/index.js";

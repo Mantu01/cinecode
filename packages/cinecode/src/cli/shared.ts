@@ -11,6 +11,7 @@ import { CinecodeIgnore } from "../config/ignore.js";
 import { parseDurationInput, parseTimeInput } from "../core/time-input.js";
 import { UsageError } from "./usage-error.js";
 import type { ProjectLocation } from "../config/project.js";
+import { DEFAULT_RENDER } from "../config/defaults.js";
 
 /** Frame index for a command-line time; malformed input is a usage error. */
 export function parseTimeArgument(input: string, fps: number): number {
@@ -150,7 +151,7 @@ export function startCompositionRender(options: StartRenderOptions): RenderJob {
     cacheDir: resolve(options.projectRoot, options.config.cacheDir ?? ".cinecode/cache"),
     seed: options.seed ?? 0,
     concurrency,
-    chunkSize: options.chunkSize ?? options.config.render?.chunkSize ?? 32,
+    chunkSize: options.chunkSize ?? options.config.render?.chunkSize ?? DEFAULT_RENDER.chunkSize,
     memoryBudgetMb: options.memoryBudgetMb ?? options.config.render?.memoryBudgetMb,
     encoding,
     quality: options.quality,
@@ -180,6 +181,7 @@ export function startCompositionRender(options: StartRenderOptions): RenderJob {
     mediaDir: options.mediaDir,
     strictFonts: options.strictFonts,
     entryContent: options.entryContent,
+    binaries: options.config.binaries,
   });
 
   const preset = getPreset(options.config.render?.platformPreset ?? "");

@@ -42,8 +42,9 @@ a cache-busting key so an edited module and its transitive imports reload.
 ## Version ownership
 
 - `packages/cinecode/package.json` `version` is the single source of truth for the
-  framework version. `CINECODE_VERSION` reads the manifest at runtime; no version
-  is duplicated in source.
+  framework version. `version.generated.ts` is generated at build time, and
+  `CINECODE_VERSION` resolves as a build-time constant without directory walking
+  or file reads at import time.
 - `packages/create-cinecode` releases in lockstep with the framework at the same
   version, and scaffolds the matching `^<major>.<minor>.<patch>` framework range.
 - A release updates the manifest and `CHANGELOG.md` together; the two never
@@ -51,9 +52,12 @@ a cache-busting key so an edited module and its transitive imports reload.
 
 ## Artifact contents
 
-- Published files are built output, the generated JSON schema, `README.md`,
-  `CHANGELOG.md` and `LICENSE`. Source, tests, fixtures, coverage and build
+- Published files for `packages/cinecode` are `dist/`, `cinecode.schema.json`, `README.md`,
+  `CHANGELOG.md`, `THIRD_PARTY_NOTICES.md`, and `LICENSE`. Source, tests, fixtures, coverage and build
   scripts are never published.
+- Emitted output (`dist`, `version.generated.ts`) is strictly a build
+  artifact and is never tracked in git. All emitted outputs are covered by
+  repository `.gitignore` rules.
 - Source and declaration maps are not shipped: no `src` is published, so maps
   would point at absent files.
 - The committed manifest is the manifest that ships. No build step edits

@@ -40,58 +40,54 @@ async function loadCompositionData(target: string): Promise<{ comp: Composition;
   }
 }
 
+import { findCommand, buildCommanderCommand } from "./command-registry.js";
+
+export async function diffCommand(srcA: string, srcB?: string, options: { format?: string; sideBySide?: boolean; json?: boolean } = {}): Promise<void> {
+  const targetB = srcB || (fs.existsSync(srcA) ? srcA : "HEAD");
+  const targetA = srcB ? srcA : "HEAD";
+
+  const { comp: compA, label: labelA } = await loadCompositionData(targetA);
+  const { comp: compB, label: labelB } = await loadCompositionData(targetB);
+
+  const diff = diffCompositions(compA, compB, labelA, labelB);
+  runReport.result({ ...diff });
+
+  if (options.json) return;
+
+  if (options.format === "markdown") {
+    console.log(formatDiffMarkdown(diff));
+    return;
+  }
+
+  console.log(`\nSemantic Diff: ${pc.bold(labelA)} -> ${pc.bold(labelB)}`);
+  console.log(`Summary: ${pc.green(`+${diff.summary.added} added`)}, ${pc.red(`-${diff.summary.removed} removed`)}, ${pc.yellow(`~${diff.summary.moved} moved`)}, ${pc.blue(`*${diff.summary.modified} modified`)}\n`);
+
+  if (diff.changes.length === 0) {
+    console.log(pc.green("✔ Compositions are semantically identical."));
+    return;
+  }
+
+  for (const change of diff.changes) {
+    switch (change.type) {
+      case "clip_added":
+        console.log(pc.green(`  + [ADDED]    ${change.description}`));
+        break;
+      case "clip_removed":
+        console.log(pc.red(`  - [REMOVED]  ${change.description}`));
+        break;
+      case "clip_moved":
+        console.log(pc.yellow(`  ~ [MOVED]    ${change.description}`));
+        break;
+      default:
+        console.log(pc.blue(`  * [MODIFIED] ${change.description}`));
+        break;
+    }
+  }
+  console.log();
+}
+
 export function createDiffCommand(): Command {
-  const cmd = new Command("diff")
-    .description("Semantic comparison between two compositions or git revisions")
-    .argument("<sourceA>", "First composition file or git revision")
-    .argument("[sourceB]", "Second composition file or git revision (defaults to working copy if sourceA is a git ref)")
-    .option("--format <format>", "Output format: text or markdown (use --json for machine output)", "text")
-    .option("--side-by-side", "Display terminal diff side-by-side", false)
-    .action(async (srcA: string, srcB?: string, options = {}) => {
-      const targetB = srcB || (fs.existsSync(srcA) ? srcA : "HEAD");
-      const targetA = srcB ? srcA : "HEAD";
-
-      {
-        const { comp: compA, label: labelA } = await loadCompositionData(targetA);
-        const { comp: compB, label: labelB } = await loadCompositionData(targetB);
-
-        const diff = diffCompositions(compA, compB, labelA, labelB);
-        runReport.result({ ...diff });
-
-        if ((options as { json?: boolean }).json) return;
-
-        if (options.format === "markdown") {
-          console.log(formatDiffMarkdown(diff));
-          return;
-        }
-
-        console.log(`\nSemantic Diff: ${pc.bold(labelA)} -> ${pc.bold(labelB)}`);
-        console.log(`Summary: ${pc.green(`+${diff.summary.added} added`)}, ${pc.red(`-${diff.summary.removed} removed`)}, ${pc.yellow(`~${diff.summary.moved} moved`)}, ${pc.blue(`*${diff.summary.modified} modified`)}\n`);
-
-        if (diff.changes.length === 0) {
-          console.log(pc.green("✔ Compositions are semantically identical."));
-          return;
-        }
-
-        for (const change of diff.changes) {
-          switch (change.type) {
-            case "clip_added":
-              console.log(pc.green(`  + [ADDED]    ${change.description}`));
-              break;
-            case "clip_removed":
-              console.log(pc.red(`  - [REMOVED]  ${change.description}`));
-              break;
-            case "clip_moved":
-              console.log(pc.yellow(`  ~ [MOVED]    ${change.description}`));
-              break;
-            default:
-              console.log(pc.blue(`  * [MODIFIED] ${change.description}`));
-              break;
-          }
-        }
-        console.log();
-      }
-    });
-
-  return cmd;
+  const spec = findCommand("diff");
+  if (!spec) throw new Error("Command 'diff' not found in registry");
+  return buildCommanderCommand(spec);
 }

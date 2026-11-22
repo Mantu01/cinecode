@@ -93,11 +93,11 @@ These keys had no consumer and are rejected with the replacement hint.
 | `render.background` | Use `video.background`. |
 | `render.enforceAspectRatio` | Use `render.platformPreset` or explicit geometry. |
 | `render.variants` | Run `cinecode multi-res`. |
-| `dev.historyDepth` | Canvas editor owns its history depth. |
-| `dev.metricsPort` | Prometheus metrics are served on the dev port at `/metrics`. |
+| `dev.historyDepth` | Editor state is not configurable. |
+| `dev.metricsPort` | Metrics are served on the dev port at /metrics. |
 | `logLevel` | Use the CLI `--verbose` flag. |
 | `audio.normalize`, `audio.limiter`, `audio.sidechains` | Apply audio processing in the timeline mixer. |
-| `security`, `security.pluginVerification`, `security.trustedKeys` | Marketplace client controls verification. |
-| `telemetry`, `telemetry.enabled`, `telemetry.endpoint` | Use `cinecode telemetry`. |
+| `security`, `security.pluginVerification`, `security.trustedKeys` | Plugin verification is controlled by local capabilities. |
+| `telemetry`, `telemetry.enabled`, `telemetry.endpoint` | Telemetry is not supported. |
 | `pluginPermissions` | Sandbox permissions are configured per plugin. |
-| `composition` | Select a composition with `--composition`; do not embed it in config. |
+| `composition` | Select a composition with `--composition` or render the file directly. |

@@ -118,8 +118,7 @@ export const OUTPUT_PLANS: Readonly<Record<RenderFormat, OutputPlan>> = {
     codecs: ["vp9", "av1"],
     defaultCodec: "vp9",
     pixFmt: "yuv420p",
-    alpha: true,
-    alphaPixFmt: "yuva420p",
+    alpha: false,
     audio: WEBM_AUDIO,
     description: "WebM with muxed Opus audio (VP9, AV1)",
   },
@@ -132,8 +131,7 @@ export const OUTPUT_PLANS: Readonly<Record<RenderFormat, OutputPlan>> = {
     codecs: ["prores"],
     defaultCodec: "prores",
     pixFmt: "yuv422p10le",
-    alpha: true,
-    alphaPixFmt: "yuva444p10le",
+    alpha: false,
     audio: MOV_AUDIO,
     description: "ProRes 422 HQ in a QuickTime container",
   },
@@ -306,11 +304,21 @@ export function resolveOutputPlan(request: OutputRequest): ResolvedOutputPlan {
   const alpha = request.alpha === true || plan.defaultAlpha === true;
 
   if (request.alpha === true && !plan.alpha) {
-    throw createError(ErrorCode.CC1008, {
-      format,
-      supported: ALPHA_FORMATS.join(", "),
-      reason: `format "${format}" cannot carry an alpha channel; alpha-capable formats are ${ALPHA_FORMATS.join(", ")}`,
-    });
+    const hint =
+      format === "webm"
+        ? "use --format webm-alpha"
+        : format === "prores"
+          ? "use --format prores-alpha"
+          : `alpha-capable formats are ${ALPHA_FORMATS.join(", ")}`;
+    throw createError(
+      ErrorCode.CC1008,
+      {
+        format,
+        supported: `${ALPHA_FORMATS.join(", ")} (${hint})`,
+        reason: `format "${format}" cannot carry an alpha channel; ${hint}`,
+      },
+      { fixHint: hint },
+    );
   }
   if (plan.codecs.length === 0) {
     if (request.codec !== undefined) {

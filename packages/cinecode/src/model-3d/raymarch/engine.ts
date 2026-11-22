@@ -199,7 +199,7 @@ export class RaymarchEngine {
       }
     }
 
-    ctx.putImageData(img as any, 0, 0);
+    ctx.putImageData(img as any, 0, 0); // Note: Canvas ImageData type boundary
     return { depthBuffer };
   }
 

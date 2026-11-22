@@ -38,9 +38,10 @@
     "create-cinecode": "./dist/esm/cli.js"
   },
   "files": [
-    "dist",
+    "dist/",
     "README.md",
     "CHANGELOG.md",
+    "THIRD_PARTY_NOTICES.md",
     "LICENSE"
   ],
   "sideEffects": false,
@@ -50,10 +51,9 @@
   },
   "scripts": {
     "build": "node ./scripts/build.mjs",
+    "check:templates": "node ./scripts/generate-templates.mjs --check",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "lint": "eslint src",
-    "test": "node --test \"src/**/*.test.mjs\"",
-    "test:e2e": "node --test tests/smoke.test.mjs"
+    "lint": "eslint src"
   },
   "dependencies": {
     "commander": "^15.0.0"

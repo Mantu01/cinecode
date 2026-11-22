@@ -156,11 +156,11 @@ export default defineScene("intro", 6, () =>
 | `cinecode clean` | Delete render cache and intermediate chunks | `cinecode clean --cache` |
 | `cinecode inspect` | Print resolved timeline tracks and clips | `cinecode inspect --config ./cinecode.config.ts` |
 
-For all 34 commands and detailed flag options, see the [CLI Command Reference](docs/command-reference.md).
+For all 30 canonical commands and detailed flag options, see the [CLI Command Reference](docs/command-reference.md).
 
 ## Documentation
 
-- [CLI Command Reference](docs/command-reference.md) — Exhaustive reference of all 34 commands, flags, and exit codes.
+- [CLI Command Reference](docs/command-reference.md) — Exhaustive reference of all 30 commands, flags, and exit codes.
 - [Configuration Reference](docs/config-reference.md) — Field-by-field reference for `cinecode.config.ts` and `main.ts`.
 - [Support Matrix & Limits](docs/support-matrix.md) — Supported Node versions, OS platforms, video/audio formats, and limitations.
 - [Architecture & Invariants](docs/architecture.md) — Design contracts, precedence order, zero-copy pipeline, and determinism.

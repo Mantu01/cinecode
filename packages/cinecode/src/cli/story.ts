@@ -10,6 +10,7 @@ import { createError, ErrorCode, isCinecodeError } from "../errors/index.js";
 import { runReport } from "./run-report.js";
 import { loadProjectContext } from "./project-context.js";
 import { validateComposition } from "../core/validation/index.js";
+import { buildCommanderCommand, findCommand } from "./command-registry.js";
 
 export interface SceneShot {
   readonly type: "scene";
@@ -198,83 +199,83 @@ async function interactiveStoryboard(): Promise<Storyboard> {
   return template?.board ?? BOARD_TEMPLATES[0]!.board;
 }
 
-export function createStoryCommand(): Command {
-  const cmd = new Command("story")
-    .description("Generate a standalone interactive web player bundle for team review")
-    .argument("[entry]", "Composition entry file or storyboard JSON", "src/main.ts")
-    .option("-o, --out <dir>", "Output directory for web bundle", "./dist/story")
-    .option("--title <title>", "Story title", "Cinecode Review")
-    .option("--board <path>", "Storyboard JSON path (auto-detects ./storyboard.json)")
-    .action(async (entry: string, options, command: Command) => {
-      console.log(`Generating interactive story for '${entry}'...`);
-      const merged = { ...command.optsWithGlobals(), ...options } as { root?: string; config?: string };
-      const context = await loadProjectContext({ root: merged.root, config: merged.config, allowStandalone: true });
-      const entryPath = path.resolve(context.root, entry);
-
-      const outDir = path.resolve(context.root, options.out);
-      fs.mkdirSync(outDir, { recursive: true });
-      runReport.setProject({ root: context.root, manifest: entryPath });
-      runReport.expectArtifact("story");
-
-      let board: Storyboard | undefined;
-      let boardSource: string | undefined;
-      if (options.board) {
-        boardSource = path.resolve(options.board);
-      } else {
-        const candidate = path.resolve(context.root, "storyboard.json");
-        if (!fs.existsSync(entryPath) && fs.existsSync(candidate)) {
-          boardSource = candidate;
-        }
-      }
-      if (!boardSource && !fs.existsSync(entryPath)) {
-        board = await interactiveStoryboard();
-        console.log(pc.dim("No entry or storyboard.json found — using template storyboard"));
-      }
-      if (boardSource) {
-        board = loadStoryboard(boardSource);
-      }
-
-      if (board) {
-        const composition = storyboardToComposition(board);
-        const generatedPath = writeGeneratedComposition(board, path.join(context.roots.output, "scenes"));
-        runReport.artifact({ kind: "composition", path: generatedPath, units: 1, unit: "file" });
-        console.log(pc.green(`✔ Generated composition from storyboard: ${generatedPath}`));
-        const html = bundleStoryHtml(composition, { title: options.title });
-        const htmlPath = path.join(outDir, "index.html");
-        fs.writeFileSync(htmlPath, html, "utf8");
-        runReport.artifact({ kind: "story", path: htmlPath, units: 1, unit: "file" });
-        runReport.result({ composition: generatedPath, html: htmlPath });
-        console.log(pc.green(`✔ Bundled standalone review story: ${htmlPath}`));
-        return;
-      }
-
-      let comp: Composition;
-      const absEntry = entryPath;
-      if (absEntry.endsWith(".json")) {
-        try {
-          comp = JSON.parse(fs.readFileSync(absEntry, "utf8"));
-        } catch (error) {
-          throw createError(ErrorCode.CC1006, { path: absEntry, reason: error instanceof Error ? error.message : String(error) }, { location: { file: absEntry }, cause: error });
-        }
-      } else {
-        try {
-          const mod = await import(absEntry);
-          comp = mod.default || mod.composition || mod;
-        } catch (error) {
-          if (isCinecodeError(error)) throw error;
-          throw createError(ErrorCode.CC3008, { path: absEntry, expected: "a composition export" }, { location: { file: absEntry }, cause: error });
-        }
-      }
-
-      const html = bundleStoryHtml(comp, { title: options.title });
-      const htmlPath = path.join(outDir, "index.html");
-      fs.writeFileSync(htmlPath, html, "utf8");
-      runReport.artifact({ kind: "story", path: htmlPath, units: 1, unit: "file" });
-      runReport.result({ html: htmlPath });
-
-      console.log(pc.green(`✔ Bundled standalone review story: ${htmlPath}`));
-    });
-
-  return cmd;
+export interface StoryOptions {
+  out?: string;
+  title?: string;
+  board?: string;
+  root?: string;
+  config?: string;
 }
 
+export async function storyCommand(entry = "src/main.ts", options: StoryOptions = {}): Promise<void> {
+  console.log(`Generating interactive story for '${entry}'...`);
+  const context = await loadProjectContext({ root: options.root, config: options.config, allowStandalone: true });
+  const entryPath = path.resolve(context.root, entry);
+
+  const outDir = path.resolve(context.root, options.out ?? "./dist/story");
+  fs.mkdirSync(outDir, { recursive: true });
+  runReport.setProject({ root: context.root, manifest: entryPath });
+  runReport.expectArtifact("story");
+
+  let board: Storyboard | undefined;
+  let boardSource: string | undefined;
+  if (options.board) {
+    boardSource = path.resolve(options.board);
+  } else {
+    const candidate = path.resolve(context.root, "storyboard.json");
+    if (!fs.existsSync(entryPath) && fs.existsSync(candidate)) {
+      boardSource = candidate;
+    }
+  }
+  if (!boardSource && !fs.existsSync(entryPath)) {
+    board = await interactiveStoryboard();
+    console.log(pc.dim("No entry or storyboard.json found — using template storyboard"));
+  }
+  if (boardSource) {
+    board = loadStoryboard(boardSource);
+  }
+
+  if (board) {
+    const composition = storyboardToComposition(board);
+    const generatedPath = writeGeneratedComposition(board, path.join(context.roots.output, "scenes"));
+    runReport.artifact({ kind: "composition", path: generatedPath, units: 1, unit: "file" });
+    console.log(pc.green(`✔ Generated composition from storyboard: ${generatedPath}`));
+    const html = bundleStoryHtml(composition, { title: options.title ?? "Cinecode Review" });
+    const htmlPath = path.join(outDir, "index.html");
+    fs.writeFileSync(htmlPath, html, "utf8");
+    runReport.artifact({ kind: "story", path: htmlPath, units: 1, unit: "file" });
+    runReport.result({ composition: generatedPath, html: htmlPath });
+    console.log(pc.green(`✔ Bundled standalone review story: ${htmlPath}`));
+    return;
+  }
+
+  let comp: Composition;
+  const absEntry = entryPath;
+  if (absEntry.endsWith(".json")) {
+    try {
+      comp = JSON.parse(fs.readFileSync(absEntry, "utf8"));
+    } catch (error) {
+      throw createError(ErrorCode.CC1006, { path: absEntry, reason: error instanceof Error ? error.message : String(error) }, { location: { file: absEntry }, cause: error });
+    }
+  } else {
+    try {
+      const mod = await import(absEntry);
+      comp = mod.default || mod.composition || mod;
+    } catch (error) {
+      if (isCinecodeError(error)) throw error;
+      throw createError(ErrorCode.CC3008, { path: absEntry, expected: "a composition export" }, { location: { file: absEntry }, cause: error });
+    }
+  }
+
+  const html = bundleStoryHtml(comp, { title: options.title ?? "Cinecode Review" });
+  const htmlPath = path.join(outDir, "index.html");
+  fs.writeFileSync(htmlPath, html, "utf8");
+  runReport.artifact({ kind: "story", path: htmlPath, units: 1, unit: "file" });
+  runReport.result({ html: htmlPath });
+
+  console.log(pc.green(`✔ Bundled standalone review story: ${htmlPath}`));
+}
+
+export function createStoryCommand(): Command {
+  return buildCommanderCommand(findCommand("story")!);
+}

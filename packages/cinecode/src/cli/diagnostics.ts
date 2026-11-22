@@ -68,7 +68,9 @@ export function formatDiagnostic(options: DiagnosticOptions): string {
           }
         }
         outLines.push(isNoColor ? "   |" : pc.dim("   |"));
-      } catch {}
+      } catch {
+        // Note: ignore snippet read error during diagnostic formatting
+      }
     }
   }
 

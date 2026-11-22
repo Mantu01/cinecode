@@ -67,7 +67,7 @@ import type { PcmBitDepth } from "../audio/encode.js";
 import { normalizeMediaCodec, probeMediaFile } from "../media/inspector.js";
 import { computeCompositionHash, computeCanonicalCacheIdentity, fingerprintFonts, canonicalJsonString } from "./cache.js";
 import { CINECODE_VERSION } from "../version.js";
-import { outputPlanFor, resolveAudioPlan, resolveOutputPlan } from "../core/output-plan.js";
+import { outputPlanFor, resolveAudioPlan, resolveOutputPlan, STREAM_FORMATS, OUTPUT_PLANS } from "../core/output-plan.js";
 import { createError, ErrorCode } from "../errors/codes.js";
 import type { FontEntry } from "../core/types/index.js";
 import { registerProjectFonts } from "../renderer/text/fonts.js";
@@ -175,6 +175,11 @@ export interface RenderOptions {
     | { readonly outputPath?: string; readonly formats?: readonly ("png" | "jpg" | "webp")[] };
   /** Artificial encoder frame write delay (ms) for testing streaming pipeline overlap. */
   readonly encoderDelayMs?: number;
+  /** Custom binary overrides for ffmpeg/ffprobe. */
+  readonly binaries?: {
+    readonly ffmpegPath?: string;
+    readonly ffprobePath?: string;
+  };
 }
 
 export interface RenderResult {
@@ -245,16 +250,18 @@ export class FrameQueue {
   /** Resolves once the frame has been written to the encoder. */
   async enqueue(frame: { index: number; buffer: Buffer }): Promise<void> {
     if (frame.buffer.byteLength !== this.frameBytes) {
-      throw new RangeError(
-        `[CC2205] frame ${frame.index} is ${frame.buffer.byteLength} bytes, expected ${this.frameBytes}`,
-      );
+      throw createError(ErrorCode.CC2205, {
+        actual: String(frame.buffer.byteLength),
+        expected: String(this.frameBytes),
+      });
     }
     const bytes = frame.buffer.byteLength;
     const reservation = await this.budget.reserve(bytes);
     if (!reservation.ok) {
-      throw new RangeError(
-        `[CC2206] frame ${frame.index} (${formatBytes(bytes)}) exceeds render memory budget (${formatBytes(this.budget.limitBytes)})`,
-      );
+      throw createError(ErrorCode.CC2206, {
+        required: formatBytes(bytes),
+        budget: formatBytes(this.budget.limitBytes),
+      });
     }
     this.pendingWrites += 1;
     this.pendingBytes += bytes;
@@ -378,9 +385,17 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
   const alpha = output.alpha;
   const requestedAudioChannels = composition.audio?.channels ?? 2;
   const hasAudioTracks = composition.rootTimeline.tracks.some((track) => track.kind === "audio");
+  const forceAudio = options.forceAudio === true || (options as { withAudio?: boolean }).withAudio === true;
   const audioPlan = resolveAudioPlan(format, options.audioCodec);
+  if ((forceAudio || options.audioCodec !== undefined) && audioPlan === null) {
+    throw createError(ErrorCode.CC1008, {
+      format: requestedFormat ?? "mp4",
+      supported: STREAM_FORMATS.filter((f) => OUTPUT_PLANS[f].audio !== undefined).join(", "),
+      reason: `format "${requestedFormat ?? "mp4"}" does not support audio`,
+    });
+  }
   const muxPlan: MuxAudioPlan | null =
-    audioPlan !== null && (hasAudioTracks || options.forceAudio === true)
+    audioPlan !== null && (hasAudioTracks || forceAudio)
       ? planMuxAudio({
           audioCodec: options.audioCodec ?? audioPlan.defaultCodec,
           audioBitrateKbps: options.audioBitrateKbps,
@@ -510,10 +525,10 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
   for (const track of composition.rootTimeline.tracks) {
     if (track.kind !== "visual") continue;
     for (const clip of track.clips) {
-      if (clip.type !== "video" || !(clip as any).preprocess) continue;
-      const src = (clip as any).src;
+      if (clip.type !== "video" || !clip.preprocess) continue;
+      const src = clip.src;
       if (preprocessedVideos.has(src)) continue;
-      const processedPath = await preprocessVideo(src, (clip as any).preprocess, cacheDir);
+      const processedPath = await preprocessVideo(src, clip.preprocess, cacheDir);
       preprocessedVideos.set(src, processedPath);
     }
   }
@@ -531,10 +546,10 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
           return {
             ...track,
             clips: track.clips.map((clip) => {
-              if (clip.type !== "video" || !(clip as any).preprocess) return clip;
-              const processedSrc = preprocessedVideos.get((clip as any).src);
+              if (clip.type !== "video" || !clip.preprocess) return clip;
+              const processedSrc = preprocessedVideos.get(clip.src);
               if (!processedSrc) return clip;
-              const { preprocess, ...rest } = clip as any;
+              const { preprocess, ...rest } = clip;
               return { ...rest, src: processedSrc };
             }),
           };
@@ -924,6 +939,7 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
       mediaDir: options.mediaDir ?? "media",
       errorPolicy: options.frameErrorPolicy ?? "placeholder",
       plugins: workerPlugins,
+      binaries: options.binaries,
       cacheProvider: async (request: { key: string }) => {
         if (!request.key.startsWith("video:")) return undefined;
         const at = request.key.lastIndexOf("@");
@@ -1416,7 +1432,7 @@ export async function renderVideo(options: RenderOptions): Promise<RenderResult>
       });
     }
     const mixResult = audioOutcome.value ?? mixAudioTracks([], mixerOptions);
-    const muxAudio = muxPlan !== null && (!mixResult.report.silent || options.forceAudio === true);
+    const muxAudio = muxPlan !== null && (!mixResult.report.silent || forceAudio);
     if (muxAudio && mixResult.report.silent) {
       recordDegradation({
         code: ErrorCode.CC5001,
@@ -1812,3 +1828,32 @@ export {
   type DecodedFrame,
   type DecodeServiceStats,
 } from "../media/decode-service.js";
+export {
+  createResourcePlan,
+  type ResourcePlan,
+  type ResourcePlanInput,
+  type CachePartitionSizes,
+} from "./resource-planner.js";
+export {
+  GlobalCacheService,
+  CachePartition,
+  buildContractCacheKey,
+  getGlobalCacheService,
+  setGlobalCacheService,
+  type CacheKeyContract,
+  type GlobalCacheStats,
+  type PartitionStats,
+  type GlobalCacheEntry,
+} from "./global-cache.js";
+export {
+  ByteBudget,
+  resolveTransportBudget,
+  estimateFrameBytes,
+  formatBytes,
+  createMemoryBudget,
+  type TransportBudget,
+  type TransportBudgetInput,
+  type MemoryBudget,
+  type MemoryBudgetOptions,
+  type ReservationOutcome,
+} from "./memory.js";

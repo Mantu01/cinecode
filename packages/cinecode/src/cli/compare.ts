@@ -85,40 +85,40 @@ export async function compareCompositions(
   return { frames, averageDifference: average, maxDifference: max, worstFrames };
 }
 
+import { findCommand, buildCommanderCommand } from "./command-registry.js";
+
+export async function compareCommand(
+  a: string,
+  b: string,
+  options: { frames?: number; seed?: number; diff?: string; compositionA?: string; compositionB?: string; root?: string; config?: string } = {},
+): Promise<void> {
+  const result = await compareCompositions(a, b, {
+    frames: options.frames ?? 60,
+    seed: options.seed ?? 42,
+    diffOutput: options.diff,
+    root: options.root,
+    config: options.config,
+    compositionA: options.compositionA,
+    compositionB: options.compositionB,
+  });
+  console.log(`Frames compared: ${result.frames.length}`);
+  console.log(`Average diff:    ${result.averageDifference.toFixed(4)} (0-255)`);
+  console.log(`Max diff:        ${result.maxDifference.toFixed(4)}`);
+  console.log(`Worst frames:    ${result.worstFrames.join(", ")}`);
+  runReport.result({
+    frames: result.frames,
+    averageDifference: result.averageDifference,
+    maxDifference: result.maxDifference,
+    worstFrames: result.worstFrames,
+  });
+  if (options.diff) runReport.artifact({ kind: "diff", path: options.diff, units: 1, unit: "image" });
+  if (result.maxDifference > 2) {
+    throw createError(ErrorCode.CC9002, { reason: `max pixel difference ${result.maxDifference.toFixed(2)} exceeds 2.00` });
+  }
+}
+
 export function createCompareCommand(): Command {
-  return new Command("compare")
-    .description("Render two compositions and report per-frame pixel differences")
-    .argument("<a>", "First composition file")
-    .argument("<b>", "Second composition file")
-    .option("-n, --frames <number>", "Frames to compare", (value) => parseInt(value, 10), 60)
-    .option("--seed <number>", "Deterministic seed", (value) => parseInt(value, 10))
-    .option("--diff <path>", "Write a side-by-side diff image of the worst frame")
-    .option("--composition-a <name>", "Composition name in first file")
-    .option("--composition-b <name>", "Composition name in second file")
-    .action(async (a: string, b: string, options: { frames: number; seed?: number; diff?: string; compositionA?: string; compositionB?: string; root?: string; config?: string }, command: Command) => {
-      const merged = { ...command.optsWithGlobals(), ...options };
-      const result = await compareCompositions(a, b, {
-        frames: merged.frames,
-        seed: merged.seed ?? 42,
-        diffOutput: merged.diff,
-        root: merged.root,
-        config: merged.config,
-        compositionA: merged.compositionA,
-        compositionB: merged.compositionB,
-      });
-      console.log(`Frames compared: ${result.frames.length}`);
-      console.log(`Average diff:    ${result.averageDifference.toFixed(4)} (0-255)`);
-      console.log(`Max diff:        ${result.maxDifference.toFixed(4)}`);
-      console.log(`Worst frames:    ${result.worstFrames.join(", ")}`);
-      runReport.result({
-        frames: result.frames,
-        averageDifference: result.averageDifference,
-        maxDifference: result.maxDifference,
-        worstFrames: result.worstFrames,
-      });
-      if (options.diff) runReport.artifact({ kind: "diff", path: options.diff, units: 1, unit: "image" });
-      if (result.maxDifference > 2) {
-        throw createError(ErrorCode.CC9002, { reason: `max pixel difference ${result.maxDifference.toFixed(2)} exceeds 2.00` });
-      }
-    });
+  const spec = findCommand("compare");
+  if (!spec) throw new Error("Command 'compare' not found in registry");
+  return buildCommanderCommand(spec);
 }

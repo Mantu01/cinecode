@@ -1,13 +1,17 @@
 import { Command } from "commander";
-import type { CinecodeConfig, Composition } from "../core/types/index.js";
-import { validateConfig } from "../config/validator.js";
-import { ensureGitignoreEntries } from "../config/gitignore.js";
-import { createError, ErrorCode, type CinecodeError, formatError } from "../errors/index.js";
-import { createProjectResolver, reportResolution, type MediaAccess } from "./project-resolver.js";
-import { allClips } from "../core/types/tracks.js";
+import { createError, ErrorCode, formatError } from "../errors/index.js";
+import { createProjectResolver, reportResolution } from "./project-resolver.js";
 import { runReport } from "./run-report.js";
-import { pendingNotes } from "../errors/degradations.js";
-import type { ValidationIssue } from "../core/validation/index.js";
+import { buildCommanderCommand, findCommand } from "./command-registry.js";
+import {
+  runValidation,
+  applySafeFixes,
+  type ValidationReport,
+  type ValidateMode,
+  type ValidationIssue,
+  type ValidationGate,
+  type ProjectContractSummary,
+} from "./validation-engine.js";
 
 export interface ValidateOptions {
   config?: string;
@@ -15,182 +19,129 @@ export interface ValidateOptions {
   strict?: boolean;
   json?: boolean;
   fix?: boolean;
+  mode?: ValidateMode;
+  verbose?: boolean;
 }
 
-async function checkCompositionDeterminism(compositions: Composition[], file: string): Promise<CinecodeError[]> {
-  const errors: CinecodeError[] = [];
-  const nonDeterministicFunctions = ["Date.now", "Math.random", "performance.now"];
-
-  function checkValue(value: unknown, path: string): void {
-    if (typeof value === "function") {
-      const fnStr = value.toString();
-      for (const ndf of nonDeterministicFunctions) {
-        if (fnStr.includes(ndf)) {
-          errors.push(createError(ErrorCode.CC3005, { context: path, function: ndf }, { location: { file }, fixHint: `Replace ${ndf} with deterministic alternative` }));
-        }
-      }
-    } else if (value && typeof value === "object") {
-      if (Array.isArray(value)) {
-        value.forEach((v, i) => checkValue(v, `${path}[${i}]`));
-      } else {
-        for (const [k, v] of Object.entries(value)) {
-          checkValue(v, `${path}.${k}`);
-        }
-      }
-    }
-  }
-
-  for (const comp of compositions) {
-    checkValue(comp, `composition.${comp.name}`);
-  }
-
-  return errors;
+export function printContractTable(contract: ProjectContractSummary): void {
+  console.log("Project Contract:");
+  console.log(`  source   : ${contract.roots.source.path} [exists: ${contract.roots.source.exists ? "yes" : "no"}, writable: ${contract.roots.source.writable ? "yes" : "no"}]`);
+  console.log(`  media    : ${contract.roots.media.path} [exists: ${contract.roots.media.exists ? "yes" : "no"}, writable: ${contract.roots.media.writable ? "yes" : "no"}]`);
+  console.log(`  output   : ${contract.roots.output.path} [exists: ${contract.roots.output.exists ? "yes" : "no"}, writable: ${contract.roots.output.writable ? "yes" : "no"}]`);
+  console.log(`  cache    : ${contract.roots.cache.path} [exists: ${contract.roots.cache.exists ? "yes" : "no"}, writable: ${contract.roots.cache.writable ? "yes" : "no"}]`);
+  console.log(`  entry    : ${contract.entry.path} [exists: ${contract.entry.exists ? "yes" : "no"}, readable: ${contract.entry.readable ? "yes" : "no"}]`);
+  console.log(`  manifest : ${contract.manifest.path} [exists: ${contract.manifest.exists ? "yes" : "no"}, readable: ${contract.manifest.readable ? "yes" : "no"}]`);
 }
 
-async function checkMediaFiles(access: MediaAccess): Promise<CinecodeError[]> {
-  const errors: CinecodeError[] = [];
-  for (const media of await access.catalog.listMedia()) {
-    try {
-      await access.catalog.resolve(media.name);
-    } catch (error) {
-      errors.push(createError(ErrorCode.CC2003, { path: media.path, reason: error instanceof Error ? error.message : "Unknown error" }, { location: { file: media.path } }));
-    }
+export function printGroupedIssues(issues: readonly ValidationIssue[]): void {
+  const byFile = new Map<string, ValidationIssue[]>();
+  for (const issue of issues) {
+    const key = issue.file ?? "(project)";
+    const list = byFile.get(key) ?? [];
+    list.push(issue);
+    byFile.set(key, list);
   }
-  return errors;
-}
 
-async function checkFonts(config: CinecodeConfig): Promise<CinecodeError[]> {
-  const errors: CinecodeError[] = [];
-
-  if (config.fonts) {
-    for (const font of config.fonts) {
-      try {
-        await import(font.src);
-      } catch {
-        errors.push(createError(ErrorCode.CC3006, { font: font.family, text: "font file" }, { fixHint: `Verify font path: ${font.src}` }));
+  for (const [file, fileIssues] of byFile) {
+    console.log(`\n${file}:`);
+    for (const issue of fileIssues) {
+      const loc = issue.line !== undefined ? `:${issue.line}${issue.column !== undefined ? `:${issue.column}` : ""}` : "";
+      const prefix = issue.severity === "error" ? "  error" : "  warn ";
+      console.log(`${prefix} [${issue.code}] ${issue.message}${loc}`);
+      if (issue.fix || issue.fixHint) {
+        console.log(`    fix: ${issue.fix ?? issue.fixHint}`);
       }
     }
   }
-
-  return errors;
 }
 
-async function checkProps(compositions: Composition[]): Promise<CinecodeError[]> {
-  const errors: CinecodeError[] = [];
-
-  for (const comp of compositions) {
-    const clips = allClips(comp.rootTimeline);
-    for (const clip of clips) {
-      if (clip.type === "component" && clip.props) {
-        for (const [key, prop] of Object.entries(clip.props)) {
-          if (prop === undefined || prop === null) {
-            errors.push(createError(ErrorCode.CC3005, { context: `prop.${key}`, function: "missing type" }, { fixHint: `Add type to prop '${key}'` }));
-          }
-        }
-      }
-    }
-  }
-
-  return errors;
-}
-
-function validationIssueError(issue: ValidationIssue, file: string): CinecodeError {
-  const error = createError(ErrorCode.CC1013, { count: 1 }, {
-    location: { file, clip: issue.clipName, track: issue.trackName, time: issue.timecode },
-    fixHint: issue.hint,
-  });
-  (error as { code: ErrorCode }).code = issue.code as ErrorCode;
-  error.message = issue.message;
-  return error;
-}
-
-export async function validateCommand(options: ValidateOptions): Promise<void> {
+export async function validateCommand(options: ValidateOptions = {}): Promise<void> {
   const resolver = createProjectResolver({ root: options.root, config: options.config });
   const resolution = await resolver.resolve();
-  reportResolution(resolution, (options as { verbose?: boolean }).verbose === true);
-  const projectRoot = resolution.root;
-  const resolvedConfigPath = resolution.configPath;
-  const config: CinecodeConfig = resolution.config;
-  const validation = validateConfig(config, resolvedConfigPath, projectRoot);
-  const compositions = await resolver.all();
-  const timelineResults = await resolver.validateCompositions();
-  const timelineErrors = timelineResults.flatMap((result) =>
-    result.errors.map((issue) => validationIssueError(issue, resolvedConfigPath)),
-  );
-  const timelineWarnings = timelineResults.flatMap((result) =>
-    result.warnings.map((issue) => validationIssueError(issue, resolvedConfigPath)),
-  );
-
-  const determinismErrors = await checkCompositionDeterminism([...compositions], resolvedConfigPath);
-  const mediaErrors = await checkMediaFiles(await resolution.media());
-  const fontErrors = await checkFonts(config);
-  const propErrors = await checkProps([...compositions]);
-
-  const manifestErrors = resolution.validation?.errors ?? [];
-  const manifestWarnings = resolution.validation?.warnings ?? [];
-  const allErrors = [...validation.errors, ...manifestErrors, ...timelineErrors, ...determinismErrors, ...mediaErrors, ...fontErrors, ...propErrors];
-  const allWarnings = [...validation.warnings, ...manifestWarnings, ...timelineWarnings];
+  reportResolution(resolution, options.verbose === true);
 
   if (options.fix) {
-    const added = await ensureGitignoreEntries({
-      sourceDir: config.sourceDir,
-      outputDir: config.outputDir ?? "output",
-      cacheDir: config.cacheDir ?? ".cinecode/cache",
-      projectRoot,
-      enabled: config.gitignore ?? true,
-    });
-    console.log(added.length > 0 ? `Fixed: added ${added.join(", ")} to .gitignore` : "No .gitignore changes needed");
+    const fixResult = await applySafeFixes(resolution);
+    if (!runReport.isMachine()) {
+      if (fixResult.applied.length > 0) {
+        console.log("Safe fixes applied:");
+        for (const item of fixResult.applied) console.log(`  - ${item}`);
+      } else {
+        console.log("No safe fixes needed");
+      }
+    }
   }
 
-  const output = {
-    valid: allErrors.length === 0,
-    notes: pendingNotes(),
-    errors: allErrors.map(e => ({
+  const report = await runValidation(resolution, {
+    mode: options.mode ?? "all",
+    strict: options.strict,
+  });
+
+  const machineOutput = {
+    valid: report.ok,
+    mode: report.mode,
+    stoppedAtGate: report.stoppedAtGate,
+    notes: report.notes,
+    contract: report.contract,
+    categories: report.categories,
+    errors: report.errors.map((e) => ({
       code: e.code,
       severity: e.severity,
+      gate: e.gate,
       message: e.message,
-      fixHint: e.fixHint,
-      location: e.location,
+      fix: e.fix ?? e.fixHint,
+      fixHint: e.fixHint ?? e.fix,
+      file: e.file,
+      line: e.line,
+      column: e.column,
     })),
-    warnings: allWarnings.map(w => ({
+    warnings: report.warnings.map((w) => ({
       code: w.code,
       severity: w.severity,
+      gate: w.gate,
       message: w.message,
-      fixHint: w.fixHint,
-      location: w.location,
+      fix: w.fix ?? w.fixHint,
+      fixHint: w.fixHint ?? w.fix,
+      file: w.file,
+      line: w.line,
+      column: w.column,
     })),
   };
-  runReport.result(output);
-  for (const warning of allWarnings) runReport.warn(warning.code, warning.message, warning.location?.file);
+  runReport.result(machineOutput);
+  for (const warning of report.warnings) runReport.warn(warning.code, warning.message, warning.file);
 
   if (!runReport.isMachine()) {
-    for (const error of allErrors) {
-      console.error(formatError(error, false, true));
-    }
-    for (const warning of allWarnings) {
-      console.warn(formatError(warning, false, true));
+    printContractTable(report.contract);
+    const allIssues = [...report.errors, ...report.warnings];
+    if (allIssues.length > 0) {
+      printGroupedIssues(allIssues);
     }
 
-    if (allErrors.length === 0 && allWarnings.length === 0) {
-      console.log("Validation passed");
-    } else if (allErrors.length === 0) {
-      console.log(`${allWarnings.length} warning(s)`);
+    if (report.ok && report.warnings.length === 0) {
+      console.log(`\nValidation passed (${report.mode} mode)`);
+    } else if (report.ok) {
+      console.log(`\nValidation passed with ${report.warnings.length} warning(s) (${report.mode} mode)`);
+    } else {
+      console.log(`\nValidation failed at gate "${report.stoppedAtGate}": ${report.errors.length} error(s), ${report.warnings.length} warning(s)`);
     }
   }
 
-  if (allErrors.length > 0 || (options.strict && allWarnings.length > 0)) {
-    const count = allErrors.length + (options.strict ? allWarnings.length : 0);
-    throw createError(ErrorCode.CC1013, { count }, { location: { file: resolvedConfigPath } });
+  const failed = !report.ok || (options.strict && report.warnings.length > 0);
+  if (failed) {
+    const count = report.errors.length + (options.strict ? report.warnings.length : 0);
+    throw createError(ErrorCode.CC1013, { count }, { location: { file: resolution.configPath } });
   }
 }
 
 export function createValidateCommand(): Command {
-  const cmd = new Command("validate")
-    .description("Validate configuration, compositions, media, and fonts")
-    .option("--strict", "Treat warnings as errors", false)
-    .option("--fix", "Auto-fix issues (currently: .gitignore)", false)
-    .action(async (options: ValidateOptions, command: Command) => {
-      await validateCommand({ ...command.optsWithGlobals(), ...options });
-    });
-  return cmd;
+  return buildCommanderCommand(findCommand("validate")!);
 }
+
+export {
+  runValidation,
+  applySafeFixes,
+  type ValidationReport,
+  type ValidateMode,
+  type ValidationIssue,
+  type ValidationGate,
+};

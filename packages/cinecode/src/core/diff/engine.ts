@@ -43,15 +43,16 @@ interface NormalizedClip {
   track: string;
   start: number;
   duration: number;
-  effects: any[];
-  raw: any;
+  effects: readonly unknown[];
+  raw: unknown;
 }
 
 function extractClips(comp: Composition): NormalizedClip[] {
   const result: NormalizedClip[] = [];
-  if ((comp as any).clips && Array.isArray((comp as any).clips)) {
-    for (let i = 0; i < (comp as any).clips.length; i++) {
-      const c = (comp as any).clips[i];
+  const legacyComp = comp as unknown as { clips?: Array<{ track?: string; id?: string; name?: string; type?: string; start?: number; duration?: number; effects?: readonly unknown[] }> };
+  if (legacyComp.clips && Array.isArray(legacyComp.clips)) {
+    for (let i = 0; i < legacyComp.clips.length; i++) {
+      const c = legacyComp.clips[i]!;
       const track = c.track || "default";
       const id = c.id || `${track}:${c.type || "clip"}:${i}`;
       result.push({
@@ -70,16 +71,16 @@ function extractClips(comp: Composition): NormalizedClip[] {
     for (const track of comp.rootTimeline.tracks) {
       const trackName = track.name || track.kind || "default";
       for (const c of track.clips) {
-        const cAny = c as any;
-        const id = cAny.id || `${trackName}:${cAny.type || "clip"}:${i}`;
+        const cRecord = c as unknown as Record<string, unknown>;
+        const id = (cRecord.id as string | undefined) || `${trackName}:${cRecord.type || "clip"}:${i}`;
         result.push({
           id,
-          name: cAny.name || cAny.id || cAny.type || `clip-${i}`,
-          type: cAny.type || "clip",
+          name: (cRecord.name as string | undefined) || (cRecord.id as string | undefined) || (cRecord.type as string | undefined) || `clip-${i}`,
+          type: (cRecord.type as string | undefined) || "clip",
           track: trackName,
-          start: Number(cAny.start ?? 0),
-          duration: Number(cAny.duration ?? 5),
-          effects: cAny.effects || [],
+          start: Number(cRecord.start ?? 0),
+          duration: Number(cRecord.duration ?? 5),
+          effects: (cRecord.effects as readonly unknown[] | undefined) || [],
           raw: c,
         });
         i++;

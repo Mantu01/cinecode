@@ -79,9 +79,4 @@ export {
   type InferredCinecodeConfig,
   type ZodValidationResult,
 } from "./zod-schema.js";
-export {
-  ConfigDependencyTracker,
-  type Subsystem,
-  type ConfigDiffReport,
-} from "./hot-swap.js";
 

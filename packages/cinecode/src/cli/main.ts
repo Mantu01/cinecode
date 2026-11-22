@@ -1,7 +1,9 @@
-import "./runtime-guard.js";
+#!/usr/bin/env node
+import { guardRuntime } from "./runtime-guard.js";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { runCli } from "./program.js";
+import { RUNTIME_EXIT_CODE } from "./exit-codes.js";
 
 export { createProgram, runCli, type RunCliOptions } from "./program.js";
 export { MACHINE_SCHEMA_VERSION, runReport, validateMachineReport, type MachineReport } from "./run-report.js";
@@ -17,4 +19,17 @@ function isEntryPoint(): boolean {
   }
 }
 
-if (isEntryPoint()) process.exitCode = await runCli(process.argv);
+if (isEntryPoint()) {
+  try {
+    guardRuntime();
+  } catch (error) {
+    if (error && error instanceof Error && error.name === "UnsupportedRuntimeError") {
+      process.stderr.write(`${error.message}\n`);
+      process.exit(RUNTIME_EXIT_CODE);
+    }
+    throw error;
+  }
+  const code = await runCli(process.argv);
+  process.exit(code);
+}
+

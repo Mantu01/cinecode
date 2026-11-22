@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { createError, ErrorCode } from "../errors/index.js";
 
 /**
  * Canonical frame buffer, used by every producer and consumer of rendered
@@ -94,6 +95,6 @@ export function frameFromTransfer(view: ArrayBufferView, transferred: boolean): 
 export function assertFrameBuffer(buffer: Buffer, width: number, height: number): void {
   const expected = frameBytes(width, height);
   if (buffer.byteLength !== expected) {
-    throw new RangeError(`[CC2205] frame buffer must be ${expected} bytes, got ${buffer.byteLength}`);
+    throw createError(ErrorCode.CC2205, { expected, actual: buffer.byteLength });
   }
 }

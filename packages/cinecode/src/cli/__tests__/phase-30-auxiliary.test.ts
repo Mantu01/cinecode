@@ -2,7 +2,6 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { collectHealth } from "../health.js";
 import { buildSyncReport } from "../sync.js";
-import { parseEditorCommand } from "../edit.js";
 import { parseVariantLabel, PREDEFINED_VARIANTS } from "../../pipeline/multiResolution.js";
 import { getBenchmarkHistoryPath } from "../benchmark.js";
 import { buildStoryboardClips, storyboardToComposition, type Storyboard } from "../story.js";
@@ -50,16 +49,6 @@ describe("Phase 30: Auxiliary commands tell the truth", () => {
     const histPath = getBenchmarkHistoryPath("/test-project");
     assert.ok(!histPath.includes("/cache/"));
     assert.ok(histPath.endsWith("history.json"));
-  });
-
-  it("edit command parses quoted paths with spaces safely", () => {
-    const parsed = parseEditorCommand('"C:\\Program Files\\VS Code\\Code.exe" --wait');
-    assert.equal(parsed.command, "C:\\Program Files\\VS Code\\Code.exe");
-    assert.deepEqual(parsed.args, ["--wait"]);
-
-    const parsedSingle = parseEditorCommand("'/opt/my tools/editor' file.ts");
-    assert.equal(parsedSingle.command, "/opt/my tools/editor");
-    assert.deepEqual(parsedSingle.args, ["file.ts"]);
   });
 
   it("storyboard rejects unregistered transitions and validates composition", () => {

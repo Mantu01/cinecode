@@ -1,94 +1,59 @@
-# Testing Strategy & Test Pyramid
+# Testing Strategy & Verification Architecture
 
-Cinecode enforces a strict test pyramid designed to catch silent failures, ensure cross-platform rendering parity, and guarantee zero-drift between implementation, schema, templates, and documentation.
+Cinecode enforces deterministic, self-contained verification tooling designed to catch silent failures, ensure cross-platform parity, and guarantee zero-drift between implementation, schema, templates, and documentation.
 
-## Test Pyramid Layers
+## Testing Architecture
 
 ```
               ┌───────────────────────────┐
-              │      End-to-End Gate      │  (Tarball install, clean project,
-              │        (12 checks)        │   CLI 1-frame render, scaffolding)
+              │      End-to-End Gate      │  (Tarball pack & install gate, clean project
+              │   (install-gate.mjs)      │   CLI 1-frame render, scaffolding, packaging)
               ├───────────────────────────┤
-              │      Pipeline & Preview   │  (60s mix, mux policy, cancellation,
-              │      Contract Tests       │   preview HTTP 405, watcher graph)
+              │    Deterministic Suite    │  (26 automated check scripts running across
+              │       (verify.mjs)        │   contracts, builders, preflight, codecs, etc)
               ├───────────────────────────┤
-              │     Visual Golden Tests   │  (Text, gradient, blur, alpha,
-              │        (7 features)       │   transitions, motion, split-screen)
-              ├───────────────────────────┤
-              │    Worker Isolation Layer │  (Worker registry, pixel parity,
-              │                           │   worker font registration, plugins)
-              ├───────────────────────────┤
-              │      Fast Unit Layer      │  (Schema parity, config validation,
-              │                           │   manifest, normalization, timecodes)
+              │   Package Test Harness    │  (DEFERRED — node --test is not executed
+              │        (deferred)         │   in this development pass)
               └───────────────────────────┘
 ```
 
-### 1. Fast Unit Layer
-- **Schema Parity**: Runtime Zod schema, normalized schema, JSON schema, and CLI authoring validators test every field against valid and invalid fixtures (`schema-parity.test.ts`).
-- **Config & Normalization**: Safe token-based migration, unknown key refusal, explicit path preservation, version alignment (`normalization.test.ts`, `migration.test.ts`).
-- **Manifest Validation**: Shape checking, duplicate ID detection, entry file resolution, and root boundary enforcement (`manifest-validation.test.ts`).
-- **Audio Math & Timecodes**: Sample rate conversion, timecode parsing across frame rates (24, 25, 30, 60 fps), and non-finite track exclusion (`prepare.test.ts`).
+### 1. Deterministic Verification Suite (`scripts/verify.mjs`)
 
-### 2. Worker & Isolation Layer
-- **Worker Registry**: Asserts all 28 built-in effects and 14 transitions resolve in worker thread runtimes (`registry.test.ts`).
-- **Main vs Worker Pixel Parity**: Bit-for-bit identical canvas buffers between main thread and worker rendering.
-- **Worker Font Registration**: Configured font faces register across worker boundary before rendering (`fonts.test.ts`).
-- **Plugin Lifecycle**: Denied capabilities fail closed with `CC7001`, and contributions bootstrap cleanly into workers (`phase-31-plugin-lifecycle.test.ts`).
+The primary verification engine consists of focused check scripts chained in `scripts/verify.mjs`:
 
-### 3. Visual Golden Integration Tests
-Small fixtures (64x64 or 64x32) run fast (<100ms) while asserting rendering correctness:
-- **Text**: Sub-pixel font rasterization, weight, and layout.
-- **Linear Gradient**: Continuous multi-stop color interpolation across canvas dimensions.
-- **Blur**: Gaussian blur dispersion into neighboring regions with zero bleed outside kernel.
-- **Alpha**: True transparency preservation in composite buffers and canvas corners.
-- **Transitions**: Crossfades and wipes sampled at three time points ($t = 0.25$, $t = 0.50$, $t = 0.75$) asserting strict monotonic opacity progression.
-- **Motion & Incremental Parity**: Keyframed animations verify bit-for-bit equality between fresh renders and dirty-rect incremental sessions.
-- **Split-Screen**: Layout geometry and region bounds accurately map tracks to viewports without clipping.
+1. **Source Check** (`check-source.mjs`): Asserts no Windows backslash import specifiers and no unsanctioned `shell: true` child process invocations.
+2. **Error Model** (`check-errors.mjs`): Validates 94 error codes (`CC0001`–`CC9002`), messages, fix hints, typed constructors, and exit codes.
+3. **Command Registry** (`check-registry.mjs`): Enforces 30 canonical commands, aliases, contracts, and parameter boundaries.
+4. **Option Parsing** (`check-options.mjs`): Validates 160+ options across all commands, pre-parser, and numeric bounds.
+5. **Preflight Pipeline** (`check-preflight.mjs`): Validates resolution order, discovery boundary, roots, write boundary, consent gates, and dry-run.
+6. **Machine Envelope** (`check-envelope.mjs`): Verifies stream purity (stdout = single JSON envelope), schema validation, artifact verification, and stable exit codes.
+7. **Surface Contracts** (`check-surface.mjs`): Verifies CLI help contracts, aliases, removed command rejection, and help partitioning.
+8. **Config Load** (`check-config-load.mjs`, `check-config-consumers.mjs`): Safe token-based migration, unknown key refusal, explicit path preservation, and consumer tracing.
+9. **Manifest Contract** (`check-manifest-contract.mjs`, `check-entry-resolution.mjs`): Shape checking, duplicate ID detection, entry file resolution, and root boundary enforcement.
+10. **Builder Semantics** (`check-builder-semantics.mjs`): Sequence chaining, track builders, transitions, and clip timing invariants.
+11. **Audio Contract** (`check-audio-contract.mjs`): 4096-frame chunk streaming, sample rate conversion (22050, 44100, 48000, 96000 Hz), peak detection, limiter, and non-finite exclusion.
+12. **Media Policy** (`check-media-policy.mjs`): Four non-overlapping roots (`sourceDir`, `mediaDir`, `outputDir`, `cacheDir`), read-only media root, and path escape prevention.
+13. **Output Plans** (`check-output-plans.mjs`): 13 canonical output plans (`mp4`, `webm`, `prores`, `mkv`, `avi`, `gif`, `apng`, `png`, `jpg`, `webp`, `pdf`, `webm-alpha`, `prores-alpha`).
+14. **Render Unification** (`check-render-unification.mjs`): Unified render execution for timelines, scenes, and compositions.
+15. **Validation Engine** (`check-validation-engine.mjs`): Multi-tier validator reporting coded errors and actionable fix hints.
+16. **Doctor & Health** (`check-doctor-health.mjs`): Offline environment and project health checks with auto-repair diagnostics.
+17. **Maintenance Commands** (`check-maintenance.mjs`): Cache pruning, orphan reporting, spool sweeping, and artifact cleanup.
+18. **First-Run Scaffolding** (`check-first-run.mjs`): Scaffold creation, templates, questionnaire wizard, and manifest generation.
+19. **Preview Host & Engine** (`check-preview-host.mjs`, `check-preview-engine.mjs`): Read-only HTTP/WebSocket preview server, binary frame transport (`CCFR`), and camera overrides.
+20. **Dev Incremental Updates** (`check-dev-incremental.mjs`): Transitive module dependency graph, watcher lifecycle, and dirty-rect invalidation.
+21. **Binary Memoization & Decode** (`check-binary-decode.mjs`): Subprocess spawn bounding, memoized binary resolver, and single persistent decoder pipe per source.
+22. **Resource Planner & Global Cache** (`check-resources.mjs`): Single byte budget driving workers, chunk size, queue depth, and global cross-partition LRU cache.
+23. **Documentation Drift** (`check-docs.mjs`): Automated generation and drift validation ensuring docs match runtime constants exactly.
 
-#### Tolerances
-- **Exact Features** (Gradients, shapes, alpha, split-screen, incremental parity): Delta $= 0$.
-- **Rasterized Text**: Max channel difference $\le 2$ (due to platform/OS antialiasing).
+### 2. Clean Installation Gate (`scripts/gate/install-gate.mjs`)
 
-#### Golden Update Procedure
-1. Run golden tests: `node --test packages/cinecode/dist-test/renderer/__tests__/golden-output.test.js`.
-2. To inspect or regenerate visual baselines: `node packages/cinecode/scripts/update-goldens.mjs`.
-3. Verify git diff confirms only intentional rendering improvements or bugfixes.
+The install gate simulates real user installations:
+- Packs `packages/cinecode` and `packages/create-cinecode` into `.tgz` tarballs using `npm pack`.
+- Installs the tarballs into an isolated temporary directory.
+- Runs CLI scaffolding, single-frame rendering, and validation in clean environment.
+- Fails closed if any tarball lacks essential files or includes untracked build artifacts.
 
-### 4. Pipeline Layer
-- **Audio Mix**: 60-second stereo 48 kHz mix with fades, panning, and sidechain compression completes under the duration ceiling.
-- **Mux Policy**: Verifies container, codec, 24-bit PCM depth, and stream preservation. Silent renders omit audio tracks.
-- **Cancellation Teardown**: Interrupting a render cleanly settles worker pools, removes in-flight chunks, and deletes partial artifacts.
-- **Resume & Checkpoints**: Byte-for-byte identical frames when resuming from checkpoints.
+### 3. Package Test Harness (Deferred)
 
-### 5. Preview & Watcher Contract
-- **Read-Only Invariant**: Mutation and persist endpoints reject writes with HTTP 405 Method Not Allowed; WebSocket state updates reject with `CC6001`.
-- **Transitive Invalidation**: When shared helpers or transitive dependencies change, the module graph invalidates all dependent nodes and broadcasts HMR updates.
-
-### 6. End-to-End Install Gate
-Runs outside the workspace in an isolated temporary directory:
-1. `npm pack` builds production tarballs.
-2. Fresh npm project installs tarballs with isolated cache.
-3. 12 automated checks run without workspace symlinks:
-   - CLI version & `--help` listing all documented commands.
-   - Public API module loading (`defineConfig`, `defineMain`, `defineScene`).
-   - CJS require blocked (`ERR_PACKAGE_PATH_NOT_EXPORTED`).
-   - Shipped JSON schema valid and loadable.
-   - 1-frame still render produced (`64x32`).
-   - Scaffolding tool runs and pins registry range (`^1.0.0`).
-   - Scaffolded project installs and executes a dry-run render.
-
----
-
-## Verification Single Entry Point
-
-Run the entire verification pyramid locally or in CI with a single command:
-
-```bash
-node scripts/verify.mjs
-```
-
-Or via pnpm:
-
-```bash
-pnpm verify
-```
+> [!NOTE]
+> The internal package test harness (`node --test`) is explicitly **DEFERRED** in this pass. All functional and contract guarantees are enforced by the deterministic verification suite (`scripts/verify.mjs`) and the clean installation gate (`scripts/gate/install-gate.mjs`).

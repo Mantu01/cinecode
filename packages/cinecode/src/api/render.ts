@@ -2,6 +2,7 @@ import { loadComposition, selectComposition } from "../cli/composition-loader.js
 import { createRenderJob, type RenderOptions, type RenderJob } from "../pipeline/index.js";
 import { resolveRenderParameters } from "../cli/precedence.js";
 import { loadProjectContext } from "../cli/project-context.js";
+import { DEFAULT_RENDER } from "../config/defaults.js";
 import { mkdir } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 
@@ -86,9 +87,9 @@ export async function render(options: RenderApiOptions): Promise<RenderJob> {
       from,
       to,
       concurrency,
-      memoryBudgetMb: options.memoryBudgetMb,
+      memoryBudget: options.memoryBudgetMb,
       preview,
-      quality: quality as any,
+      quality: quality as import("../core/types/index.js").QualityPreset | undefined,
     },
     selection: {
       name: composition.name,
@@ -122,7 +123,7 @@ export async function render(options: RenderApiOptions): Promise<RenderJob> {
     cacheDir: resolvedCacheDir,
     seed,
     concurrency: parameters.concurrency.value,
-    chunkSize: options.chunkSize ?? 8,
+    chunkSize: options.chunkSize ?? DEFAULT_RENDER.chunkSize,
     memoryBudgetMb: parameters.memoryBudgetMb.value,
     quality: parameters.quality.value,
     overwrite,

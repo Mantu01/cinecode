@@ -7,6 +7,7 @@ import { createError, ErrorCode } from "../errors/index.js";
 import { runReport } from "./run-report.js";
 import { createProjectResolver, reportResolution } from "./project-resolver.js";
 import { OUTPUT_SUBDIRS } from "./shared.js";
+import { buildCommanderCommand, findCommand } from "./command-registry.js";
 
 interface ThumbnailCliOptions {
   composition?: string;
@@ -53,16 +54,5 @@ export async function thumbnailCommand(file: string, options: ThumbnailCliOption
 }
 
 export function createThumbnailCommand(): Command {
-  return new Command("thumbnail")
-    .description("Pick the best frame of a composition and write poster images")
-    .argument("<composition>", "Composition file")
-    .option("-c, --composition <name>", "Composition name")
-    .option("-o, --output-dir <dir>", "Output directory")
-    .option("-n, --count <number>", "Number of candidates to list", (value) => parseInt(value, 10), 5)
-    .option("-f, --frame <number>", "Force a specific frame", (value) => parseInt(value, 10))
-    .option("--format <png|jpg|webp>", "Image format", "png")
-    .option("--seed <number>", "Random seed", (value) => parseInt(value, 10), 0)
-    .action(async (file: string, options: ThumbnailCliOptions, command: Command) => {
-      await thumbnailCommand(file, { ...command.optsWithGlobals(), ...options });
-    });
+  return buildCommanderCommand(findCommand("thumbnail")!);
 }

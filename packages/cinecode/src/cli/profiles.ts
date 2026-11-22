@@ -65,20 +65,32 @@ export function loadGlobalAliases(): Record<string, string> {
   return aliasTable(loadGlobalConfig().aliases);
 }
 
+export function findProjectRoot(startDir = process.cwd()): string {
+  let curr = path.resolve(startDir);
+  while (true) {
+    if (
+      fs.existsSync(path.join(curr, "cinecode.config.ts")) ||
+      fs.existsSync(path.join(curr, "cinecode.config.js")) ||
+      fs.existsSync(path.join(curr, "cinecode.config.mjs")) ||
+      fs.existsSync(path.join(curr, "cinecode.config.json")) ||
+      fs.existsSync(path.join(curr, "cinecode.json"))
+    ) {
+      return curr;
+    }
+    const parent = path.dirname(curr);
+    if (parent === curr) break;
+    curr = parent;
+  }
+  return path.resolve(startDir);
+}
+
 export function loadAliases(projectDir = process.cwd()): Record<string, string> {
   const local = loadLocalAliases(projectDir);
   const global = loadGlobalAliases();
   if (Object.keys(global).length > 0) {
-    const file = path.join(projectDir, "cinecode.json");
-    const existing = readJson(file) ?? {};
-    existing.aliases = { ...global, ...aliasTable(existing.aliases), ...local };
-    fs.writeFileSync(file, JSON.stringify(existing, null, 2), "utf8");
-    const cfg = loadGlobalConfig();
-    delete cfg.aliases;
-    saveGlobalConfig(cfg);
-    process.stderr.write("Migrated global CLI aliases to project-local cinecode.json\n");
+    process.stderr.write("Note: Global CLI aliases detected. Run 'cinecode alias migrate' to copy them to project-local cinecode.json.\n");
   }
-  return loadLocalAliases(projectDir);
+  return { ...global, ...local };
 }
 
 export function aliasesEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -90,8 +102,9 @@ export function loadEnabledAliases(projectDir = process.cwd(), env: NodeJS.Proce
   return aliasesEnabled(env) ? loadAliases(projectDir) : {};
 }
 
-export function setAlias(name: string, expansion: string): void {
-  const file = path.join(process.cwd(), "cinecode.json");
+export function setAlias(name: string, expansion: string, projectDir?: string): void {
+  const root = projectDir ? path.resolve(projectDir) : findProjectRoot();
+  const file = path.join(root, "cinecode.json");
   const local = readJson(file) ?? {};
   const aliases = aliasTable(local.aliases);
   aliases[name] = expansion;
@@ -100,8 +113,9 @@ export function setAlias(name: string, expansion: string): void {
   fs.writeFileSync(file, JSON.stringify(local, null, 2), "utf8");
 }
 
-export function removeAlias(name: string): boolean {
-  const file = path.join(process.cwd(), "cinecode.json");
+export function removeAlias(name: string, projectDir?: string): boolean {
+  const root = projectDir ? path.resolve(projectDir) : findProjectRoot();
+  const file = path.join(root, "cinecode.json");
   const local = readJson(file) ?? {};
   const aliases = aliasTable(local.aliases);
   if (!(name in aliases)) return false;
@@ -109,6 +123,25 @@ export function removeAlias(name: string): boolean {
   local.aliases = aliases;
   fs.writeFileSync(file, JSON.stringify(local, null, 2), "utf8");
   return true;
+}
+
+export function migrateGlobalAliases(projectDir?: string): { migrated: string[] } {
+  const global = loadGlobalAliases();
+  const keys = Object.keys(global);
+  if (keys.length === 0) return { migrated: [] };
+
+  const root = projectDir ? path.resolve(projectDir) : findProjectRoot();
+  const file = path.join(root, "cinecode.json");
+  const existing = readJson(file) ?? {};
+  existing.aliases = { ...global, ...aliasTable(existing.aliases) };
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(existing, null, 2), "utf8");
+
+  const cfg = loadGlobalConfig();
+  delete cfg.aliases;
+  saveGlobalConfig(cfg);
+
+  return { migrated: keys };
 }
 
 export interface AliasResolution {

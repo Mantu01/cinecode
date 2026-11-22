@@ -53,9 +53,11 @@ export function serializeFrameToSvg(
   const fps = comp.fps || 30;
   const time = frame / fps;
 
-  const rawClips = (comp as any).clips ?? (comp.rootTimeline?.tracks ? comp.rootTimeline.tracks.flatMap((t: any) => t.clips) : []);
+  const rawClips = comp.rootTimeline?.tracks
+    ? comp.rootTimeline.tracks.flatMap((t) => t.clips)
+    : ((comp as unknown as { clips?: Array<{ type?: string; text?: string; start?: number; duration?: number }> }).clips ?? []);
   for (const c of rawClips) {
-    const clip = c as any;
+    const clip = c as { type?: string; text?: string; start?: number; duration?: number };
     const start = Number(clip.start ?? 0);
     const dur = Number(clip.duration ?? 5);
     if (time < start || time > start + dur) continue;

@@ -11,7 +11,7 @@ import type {
   AudioPlacement,
 } from "../core/types/index.js";
 import type { AudioBuffer } from "../audio/types.js";
-import type { AudioDef, ImageDef, SceneDef } from "../core/define/definitions.js";
+import type { AudioDef, ImageDef, SceneDef, SoundContext } from "../core/define/definitions.js";
 import {
   audioTrack as makeAudioTrack,
   composition as makeComposition,
@@ -21,10 +21,10 @@ import {
 import { createConversion } from "../core/time/index.js";
 import { computeClipSpan } from "../core/validation/index.js";
 import { loadModuleFile, resolveEntryFile } from "./loader.js";
-import { hotReloadEnabled } from "../loader/index.js";
-import { assertMainContract } from "./contract.js";
+import { hotReloadEnabled, loadUserModuleNamespace } from "../loader/index.js";
+import { assertMainContract, deepFreezeManifest } from "./contract.js";
 import { assertDeterministicAuthoredModules } from "./determinism.js";
-import { idRule } from "./ids.js";
+import { idRule, type ManifestId } from "./ids.js";
 import { checkDeclaredDuration } from "./duration.js";
 import { createError, ErrorCode } from "../errors/index.js";
 import {
@@ -33,6 +33,12 @@ import {
   type ManifestValidationOptions,
   type ManifestValidationResult,
 } from "./validation.js";
+import { resolveCompositionGeometry, applyCompositionGeometry } from "./target.js";
+
+export { defineMain } from "../core/define/definitions.js";
+export { deepFreezeManifest } from "./contract.js";
+export type { ManifestId } from "./ids.js";
+export * from "./target.js";
 
 export interface ManifestProject {
   readonly rootDir: string;
@@ -47,14 +53,12 @@ export interface ManifestProject {
 
 export function normalizeManifest(raw: unknown, manifestPath = "main.ts"): MainManifest {
   const manifest = (raw ?? {}) as MainManifest;
-  return {
+  return deepFreezeManifest({
     images: manifest.images ?? [],
     audio: manifest.audio ?? [],
     scenes: manifest.scenes ?? [],
     timelines: manifest.timelines ?? [],
-    characters: manifest.characters ?? [],
-    motions: manifest.motions ?? [],
-  };
+  });
 }
 
 /** Loads the root manifest (`main.ts`); the caller decides whether a missing one is fatal. */
@@ -67,8 +71,21 @@ export async function loadManifestProject(
   if (!existsSync(entryPath)) {
     return { rootDir, entryPath, config, manifest: normalizeManifest({}, entryPath), hasManifest: false };
   }
-  const raw = await loadModuleFile<unknown>(entry, rootDir, { fresh: hotReloadEnabled() });
-  const definition = assertMainContract(raw, entryPath);
+  const mod = await loadUserModuleNamespace<Record<string, unknown>>(entry, rootDir, { fresh: hotReloadEnabled() });
+  if (!("default" in mod) || mod.default === undefined) {
+    throw createError(
+      ErrorCode.CC1010,
+      {
+        path: entryPath,
+        reason: "the entry file must default-export defineMain({ images, audio, scenes, timelines }), but it exported a named-only export (no default export)",
+      },
+      {
+        location: { file: entryPath },
+        fixHint: "Default-export defineMain({ images, audio, scenes, timelines }).",
+      },
+    );
+  }
+  const definition = assertMainContract(mod.default, entryPath);
   assertDeterministicAuthoredModules(definition, entryPath, rootDir);
   return {
     rootDir,
@@ -80,9 +97,10 @@ export async function loadManifestProject(
   };
 }
 
-export function assertSelectorId(kind: string, id: string): void {
+export function assertSelectorId(kind: string, id: string): ManifestId {
   const rule = idRule(id);
   if (rule) throw createError(ErrorCode.CC1012, { reason: `Invalid ${kind} id "${id}": ${rule}` });
+  return id as ManifestId;
 }
 
 export function findEntry<T extends { id: string }>(
@@ -91,7 +109,8 @@ export function findEntry<T extends { id: string }>(
   kind: string,
 ): T {
   assertSelectorId(kind, id);
-  const found = entries?.find((entry) => entry.id === id);
+  const targetKey = id.toLowerCase();
+  const found = entries?.find((entry) => entry.id.toLowerCase() === targetKey);
   if (!found) {
     const available = (entries ?? []).map((entry) => entry.id).join(", ") || "none";
     throw createError(ErrorCode.CC3007, { kind, id, available });
@@ -141,21 +160,21 @@ export function shiftTimeline(timeline: Timeline, offsetSeconds: number): Timeli
 // Scene / timeline resolution
 // ---------------------------------------------------------------------------
 
-type MaybeComposition = Composition & { readonly rootTimeline: Timeline };
+export type MaybeComposition = Composition & { readonly rootTimeline: Timeline };
 
-function isComposition(value: unknown): value is MaybeComposition {
+export function isComposition(value: unknown): value is MaybeComposition {
   return !!value && typeof value === "object" && "rootTimeline" in (value as object);
 }
 
-function isTimeline(value: unknown): value is Timeline {
+export function isTimeline(value: unknown): value is Timeline {
   return !!value && typeof value === "object" && Array.isArray((value as Timeline).tracks);
 }
 
-function isSceneDef(value: unknown): value is SceneDef<unknown> {
+export function isSceneDef(value: unknown): value is SceneDef<unknown> {
   return !!value && typeof value === "object" && (value as SceneDef<unknown>).kind === "scene";
 }
 
-async function resolveTimelineValue(raw: unknown, file: string): Promise<Timeline> {
+export async function resolveTimelineValue(raw: unknown, file: string): Promise<Timeline> {
   if (isComposition(raw)) return raw.rootTimeline;
   if (isTimeline(raw)) return raw;
   if (isSceneDef(raw)) return raw.build(undefined as never);
@@ -236,72 +255,57 @@ export async function assembleTimelineComposition(
   const { config, manifest, rootDir } = project;
   const entry = findEntry(manifest.timelines, timelineEntryId, "timeline");
 
-  const video = config.video;
-  const width = entry.width ?? video?.width ?? 1920;
-  const height = entry.height ?? video?.height ?? 1080;
-  const fps = entry.fps ?? video?.fps ?? 30;
-  const background = entry.background ?? video?.background ?? "#000000";
-
+  const fps = entry.fps ?? config.video?.fps ?? 30;
   let timeline: Timeline;
   if (entry.file) {
     const resolved = resolveEntryFile(entry.file, rootDir);
     const raw = project.moduleCache?.get(resolved) ?? project.moduleCache?.get(entry.file) ?? await loadModuleFile<unknown>(entry.file, rootDir, { fresh: hotReloadEnabled() });
     if (isComposition(raw)) {
-      const content = timelineDurationSeconds(raw.rootTimeline, fps);
-      const issues = checkDeclaredDuration({
-        kind: "timeline",
-        id: entry.id,
-        declared: toSeconds(entry.duration, fps) ?? toSeconds(raw.duration, fps),
-        content,
-        fps,
-        truncate: entry.truncate,
+      const geometry = resolveCompositionGeometry({
+        entry,
+        config,
         manifestPath: project.entryPath,
+        rawComposition: raw,
+        kind: "timeline",
       });
-      if (issues.length > 0) throw issues[0];
-      return { ...raw, name: raw.name ?? entry.id, contentDuration: content };
+      return applyCompositionGeometry(raw, geometry, entry.id);
     }
     timeline = await resolveTimelineValue(raw, entry.file);
   } else {
     timeline = await assembleTimelineFromRefs(project, entry);
   }
 
-  const declaredDuration = toSeconds(entry.duration, fps) ?? toSeconds(timeline.duration, fps);
   const contentDuration = timelineDurationSeconds(timeline, fps);
-  const durationIssues = checkDeclaredDuration({
-    kind: "timeline",
-    id: entry.id,
-    declared: toSeconds(entry.duration, fps) ?? toSeconds(timeline.duration, fps),
-    content: contentDuration,
-    fps,
-    truncate: entry.truncate,
+  const geometry = resolveCompositionGeometry({
+    entry,
+    config,
+    contentDuration,
     manifestPath: project.entryPath,
+    kind: "timeline",
   });
-  if (durationIssues.length > 0) throw durationIssues[0];
-  const resolvedDuration = declaredDuration ?? contentDuration;
 
-  const audio = await assembleAudioTracks(project, entry.audioRef, resolvedDuration || 1);
-
+  const audio = await assembleAudioTracks(project, entry.audioRef, geometry.duration || 1);
   const allTracks: AnyTrack[] = [...timeline.tracks, ...audio.tracks];
 
   return makeComposition({
     name: entry.id,
-    width,
-    height,
-    fps,
-    background,
-    duration: resolvedDuration > 0 ? resolvedDuration : undefined,
-    contentDuration,
+    width: geometry.width,
+    height: geometry.height,
+    fps: geometry.fps,
+    background: geometry.background,
+    duration: geometry.duration > 0 ? geometry.duration : undefined,
+    contentDuration: geometry.contentDuration,
     audioPlacements: audio.placements,
     audio: {
       sampleRate: config.audio?.sampleRate ?? 48000,
       channels: config.audio?.channels ?? 2,
       masterVolume: config.audio?.masterVolume ?? 1,
     },
-    rootTimeline: makeTimeline(allTracks, { name: entry.id }),
+    rootTimeline: makeTimeline(allTracks, { name: entry.id, duration: geometry.duration }),
   });
 }
 
-async function assembleTimelineFromRefs(
+export async function assembleTimelineFromRefs(
   project: ManifestProject,
   entry: { id: string; sceneRefs?: readonly string[]; fps?: number },
 ): Promise<Timeline> {
@@ -333,19 +337,8 @@ async function assembleTimelineFromRefs(
 // Audio resolution
 // ---------------------------------------------------------------------------
 
-export function resolveMediaFilePath(ref: string, rootDir: string, config: CinecodeConfig): string {
-  const mediaDir = resolve(rootDir, config.mediaDir ?? "media");
-  const inMedia = resolve(mediaDir, ref);
-  if (existsSync(inMedia)) return inMedia;
-  if (config.allowCoLocatedMedia) {
-    const sourceDir = resolve(rootDir, config.sourceDir ?? "src");
-    const inSource = resolve(sourceDir, ref);
-    if (existsSync(inSource)) return inSource;
-  }
-  const inRoot = resolve(rootDir, ref);
-  if (existsSync(inRoot)) return inRoot;
-  return inMedia;
-}
+import { resolveMediaFilePath } from "../media/paths.js";
+export { resolveMediaFilePath };
 
 export async function resolveAudioBuffer(
   project: ManifestProject,
@@ -412,7 +405,10 @@ async function evaluateAudio(
     return (await (raw as (ctx: unknown) => unknown)(context)) as AudioBuffer;
   }
   if (typeof raw === "object" && (raw as { kind?: string }).kind === "sound") {
-    return renderSoundDef(raw as { generate: (ctx: unknown, params: unknown) => void });
+    return renderSoundDef(
+      raw as { name?: string; duration?: number; generate: (ctx: SoundContext, params: unknown) => void },
+      context,
+    );
   }
   return null;
 }
@@ -426,28 +422,68 @@ function isAudioBuffer(value: unknown): value is AudioBuffer {
   );
 }
 
-function renderSoundDef(def: { generate: (ctx: unknown, params: unknown) => void }): AudioBuffer {
-  const sampleRate = 48000;
-  const channels = 2;
-  const duration = 1;
+function renderSoundDef(
+  def: { name?: string; duration?: number; generate: (ctx: SoundContext, params: unknown) => void },
+  context: {
+    sampleRate: number;
+    channels: 1 | 2;
+    duration: number;
+    gain: number;
+    seed: number;
+    id: string;
+  },
+): AudioBuffer {
+  const { sampleRate, channels, duration, gain, seed, id } = context;
+  if (!Number.isFinite(duration) || duration <= 0) {
+    throw createError(ErrorCode.CC5002, {
+      name: def.name ?? id,
+      reason: `duration must be a positive number, got ${duration}`,
+    });
+  }
+  if (def.duration !== undefined && Math.abs(def.duration - duration) > 0.001) {
+    throw createError(ErrorCode.CC5002, {
+      name: def.name ?? id,
+      reason: `sound definition declared duration ${def.duration}s cannot match requested duration ${duration}s`,
+    });
+  }
   const length = Math.round(sampleRate * duration);
   const data = new Float32Array(length * channels);
-  const context = {
+  const soundContext: SoundContext = {
     sampleRate,
+    channels,
+    duration,
+    gain,
+    seed,
+    id,
     startSample: 0,
     lengthSamples: length,
-    write: (sampleIndex: number, left: number, right: number): void => {
+    write: (sampleIndex: number, left: number, right?: number): void => {
       if (sampleIndex < 0 || sampleIndex >= length) return;
-      data[sampleIndex * channels] = left;
-      data[sampleIndex * channels + 1] = right;
+      if (channels === 1) {
+        data[sampleIndex] = left * gain;
+      } else {
+        data[sampleIndex * 2] = left * gain;
+        data[sampleIndex * 2 + 1] = (right ?? left) * gain;
+      }
     },
   };
-  def.generate(context, {});
+  try {
+    def.generate(soundContext, {});
+  } catch (error) {
+    throw createError(
+      ErrorCode.CC5002,
+      {
+        name: def.name ?? id,
+        reason: error instanceof Error ? error.message : String(error),
+      },
+      { cause: error },
+    );
+  }
   return { sampleRate, channels, length, data };
 }
 
 /** Every registered bed starts at 0 and spans the timeline; the report proves it. */
-async function assembleAudioTracks(
+export async function assembleAudioTracks(
   project: ManifestProject,
   audioRef: readonly string[] | undefined,
   duration: number,
@@ -460,6 +496,11 @@ async function assembleAudioTracks(
   for (const audioId of audioRef) {
     const entry = findEntry(manifest.audio, audioId, "audio");
     const gain = entry.gain ?? 1;
+    if (typeof gain !== "number" || !Number.isFinite(gain) || gain < 0 || gain > 4) {
+      throw createError(ErrorCode.CC1012, {
+        reason: `Audio entry "${audioId}" gain must be between 0 and 4, got ${gain}`,
+      });
+    }
     placements.push({ id: audioId, start: 0, duration, gain });
     if (entry.src && !entry.file) {
       clips.push({
@@ -493,24 +534,21 @@ export async function composeSceneComposition(
   const sceneEntry = findEntry(manifest.scenes, sceneId, "scene");
   const fps = sceneEntry.fps ?? config.video?.fps ?? 30;
   const scene = await resolveScene(sceneEntry, rootDir, fps, project.moduleCache);
-  const durationIssues = checkDeclaredDuration({
-    kind: "scene",
-    id: sceneEntry.id,
-    declared: scene.declaredDuration,
-    content: scene.contentDuration,
-    fps,
-    truncate: sceneEntry.truncate,
+  const geometry = resolveCompositionGeometry({
+    entry: sceneEntry,
+    config,
+    contentDuration: scene.contentDuration,
     manifestPath: project.entryPath,
+    kind: "scene",
   });
-  if (durationIssues.length > 0) throw durationIssues[0];
   return makeComposition({
     name: sceneEntry.id,
-    width: sceneEntry.width ?? config.video?.width ?? 1920,
-    height: sceneEntry.height ?? config.video?.height ?? 1080,
-    fps,
-    background: sceneEntry.background ?? config.video?.background ?? "#000000",
-    duration: scene.duration,
-    contentDuration: scene.contentDuration,
+    width: geometry.width,
+    height: geometry.height,
+    fps: geometry.fps,
+    background: geometry.background,
+    duration: geometry.duration,
+    contentDuration: geometry.contentDuration,
     audio: {
       sampleRate: config.audio?.sampleRate ?? 48000,
       channels: config.audio?.channels ?? 2,

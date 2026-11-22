@@ -42,12 +42,12 @@ export default defineConfig({
     preset: "slow",
     hardwareAcceleration: "off",
     concurrency: "auto",
-    chunkSize: 32,
+    chunkSize: 50,
   },
 
   images: {
     defaultFormat: "png",
-    quality: 92,
+    quality: 90,
     scaleFactor: 1,
   },
 
@@ -59,7 +59,7 @@ export default defineConfig({
 
   dev: {
     port: 3000,
-    host: "localhost",
+    host: "127.0.0.1",
     hmr: true,
     open: false,
   },

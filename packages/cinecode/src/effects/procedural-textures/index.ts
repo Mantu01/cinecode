@@ -1,4 +1,5 @@
 import type { Canvas } from "@napi-rs/canvas";
+import { createError, ErrorCode } from "../../errors/index.js";
 import { generateMarbleTexture, type MarbleTextureParams } from "./marble.js";
 import { generateWoodTexture, type WoodTextureParams } from "./wood.js";
 import { generateMetalTexture, type MetalTextureParams } from "./metal.js";
@@ -45,6 +46,6 @@ export function generateTexture(
     case "water":
       return generateWaterTexture(width, height, params as WaterTextureParams);
     default:
-      throw new Error(`CC6201: Unknown procedural texture type: ${type}`);
+      throw createError(ErrorCode.CC6201, { type });
   }
 }

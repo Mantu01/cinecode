@@ -15,7 +15,7 @@ import { createProjectResolver, reportResolution } from "./project-resolver.js";
 import { renderImageBuffer } from "../renderer/image.js";
 import { encodeWavBuffer } from "../audio/muxer.js";
 import { multiSelect, type SelectItem } from "./prompt-select.js";
-import { OUTPUT_SUBDIRS, ensureDir, resolveOutputPath, startCompositionRender } from "./shared.js";
+import { OUTPUT_SUBDIRS, ensureDir, resolveOutputPath } from "./shared.js";
 import { formatTime } from "../pipeline/progress.js";
 import { createError, ErrorCode } from "../errors/index.js";
 import { runReport } from "./run-report.js";
@@ -23,6 +23,8 @@ import { resolveRenderParameters } from "./precedence.js";
 import { assertRenderableFormat } from "./format-preflight.js";
 import { assertIdPathInside } from "../manifest/ids.js";
 import { resolveProjectRoots } from "../config/roots.js";
+import { outputPlanFor } from "../core/output-plan.js";
+import { orchestrateRender, type RenderTargetItem } from "./render.js";
 
 export type GenerateKind = "audio" | "image" | "scene" | "timeline" | "all";
 
@@ -74,7 +76,12 @@ async function selectTargets(
     let chosen = pool.entries;
     if (idFilter) {
       chosen = pool.entries.filter((entry) => idFilter.has(entry.id));
-    } else if (!options.all && !options.yes && process.stdin.isTTY) {
+    } else if (!options.all && !options.yes) {
+      if (!process.stdin.isTTY) {
+        throw createError(ErrorCode.CC0001, {
+          reason: "generate requires an explicit selector (--id, --all, or --yes) in non-interactive mode",
+        });
+      }
       const items: SelectItem<ManifestEntryBase>[] = pool.entries.map((entry) => ({
         value: entry,
         label: `[${entry.id}] ${describe(entry)}`,
@@ -94,11 +101,13 @@ async function generateImage(
   options: GenerateOptions,
 ): Promise<string> {
   const format = entry.format ?? project.config.images?.defaultFormat ?? "png";
+  const plan = outputPlanFor(format);
   const outDir = options.out
     ? resolve(project.rootDir, options.out)
     : join(resolveProjectRoots(project.rootDir, project.config).output, OUTPUT_SUBDIRS.images);
   await ensureDir(outDir);
-  const outputPath = await resolveOutputPath(join(outDir, `${entry.id}.${format}`), options.overwrite ?? false);
+  const overwrite = options.overwrite ?? project.config.render?.overwrite ?? project.config.overwrite ?? false;
+  const outputPath = await resolveOutputPath(join(outDir, `${entry.id}${plan.extension}`), overwrite);
   assertIdPathInside(outDir, outputPath, entry.id);
   if (options.dryRun) return outputPath;
 
@@ -125,94 +134,14 @@ async function generateAudio(
     ? resolve(project.rootDir, options.out)
     : join(resolveProjectRoots(project.rootDir, project.config).output, OUTPUT_SUBDIRS.audio);
   await ensureDir(outDir);
-  const outputPath = await resolveOutputPath(join(outDir, `${entry.id}.wav`), options.overwrite ?? false);
+  const overwrite = options.overwrite ?? project.config.render?.overwrite ?? project.config.overwrite ?? false;
+  const outputPath = await resolveOutputPath(join(outDir, `${entry.id}.wav`), overwrite);
   assertIdPathInside(outDir, outputPath, entry.id);
   if (options.dryRun) return outputPath;
 
   const buffer = await resolveAudioBuffer(project, entry.id);
   const wav = encodeWavBuffer(buffer);
   await writeFile(outputPath, wav);
-  return outputPath;
-}
-
-async function composeScene(
-  project: ManifestProject,
-  sceneEntry: SceneEntry,
-): Promise<Composition> {
-  return composeSceneComposition(project, sceneEntry.id);
-}
-
-async function generateVideoTarget(
-  project: ManifestProject,
-  target: { kind: "scene" | "timeline"; entry: ManifestEntryBase },
-  options: GenerateOptions,
-  explicit: ReadonlySet<string>,
-): Promise<string> {
-  const config = project.config;
-  const composition = target.kind === "scene"
-    ? await composeScene(project, target.entry as SceneEntry)
-    : await assembleTimelineComposition(project, target.entry.id);
-
-  const { parameters, preset } = resolveRenderParameters({
-    flags: {
-      out: options.out,
-      concurrency: options.concurrency,
-    },
-    selection: {
-      id: target.entry.id,
-      name: target.entry.name,
-      width: (target.entry as any).width,
-      height: (target.entry as any).height,
-      fps: (target.entry as any).fps,
-      format: (target.entry as any).format,
-      codec: (target.entry as any).codec,
-      quality: (target.entry as any).quality,
-      duration: (target.entry as any).duration ?? composition.duration,
-    },
-    project: {
-      root: project.rootDir,
-      config: project.config,
-      mode: "project",
-      selection: `${target.kind} ${target.entry.id}`,
-    },
-    explicit,
-  });
-  assertRenderableFormat({
-    command: "render",
-    format: parameters.format.value,
-    fromFrame: parameters.frameWindow.value.from,
-    toFrame: parameters.frameWindow.value.to,
-    preset: preset?.id,
-  });
-
-  const subdir = target.kind === "scene" ? OUTPUT_SUBDIRS.scenes : OUTPUT_SUBDIRS.videos;
-  const outDir = options.out
-    ? resolve(project.rootDir, options.out)
-    : join(resolveProjectRoots(project.rootDir, config).output, subdir);
-  await ensureDir(outDir);
-  const outputPath = await resolveOutputPath(join(outDir, `${target.entry.id}.${parameters.format.value}`), options.overwrite ?? false);
-  assertIdPathInside(outDir, outputPath, target.entry.id);
-
-  if (options.dryRun) return outputPath;
-
-  const job = startCompositionRender({
-    composition: {
-      ...composition,
-      width: parameters.width.value,
-      height: parameters.height.value,
-      fps: parameters.fps.value,
-    },
-    outputPath,
-    config,
-    projectRoot: project.rootDir,
-    seed: options.seed ?? 0,
-    concurrency: parameters.concurrency.value,
-    quality: parameters.quality.value,
-    silent: options.silent ?? false,
-    format: parameters.format.value,
-  });
-
-  await job.promise;
   return outputPath;
 }
 
@@ -227,25 +156,68 @@ export async function generateCommand(kind: GenerateKind, options: GenerateOptio
   if (targets.length === 0) {
     throw createError(ErrorCode.CC4004, { path: `generate ${kind}` }, { fixHint: "Select at least one id or register entries in main.ts." });
   }
+
+  if (process.stdin.isTTY && !options.silent) {
+    console.log(`\nTargets to generate (${targets.length}):`);
+    for (const t of targets) {
+      console.log(`  - [${t.kind}] ${t.entry.id} (${describe(t.entry)})`);
+    }
+  }
+
   if (!options.dryRun) runReport.expectArtifact(`generate ${kind}`);
 
   const startTime = Date.now();
   const results: Array<{ id: string; kind: string; path: string }> = [];
 
   for (const target of targets) {
-    process.stdout.write(`\n▶ ${target.kind}: ${target.entry.id}\n`);
-    let outputPath: string;
     if (target.kind === "image") {
-      outputPath = await generateImage(project, target.entry as ImageEntry, options);
+      process.stderr.write(`\n▶ image: ${target.entry.id}\n`);
+      const outputPath = await generateImage(project, target.entry as ImageEntry, options);
+      results.push({ id: target.entry.id, kind: target.kind, path: outputPath });
+      if (!options.dryRun) runReport.artifact({ kind: "image", path: resolve(outputPath), units: 1, unit: "file" });
+      if (!options.silent) console.log(`✓ image → ${outputPath}`);
     } else if (target.kind === "audio") {
-      outputPath = await generateAudio(project, target.entry as AudioEntry, options);
+      process.stderr.write(`\n▶ audio: ${target.entry.id}\n`);
+      const outputPath = await generateAudio(project, target.entry as AudioEntry, options);
+      const audioEntry = target.entry as AudioEntry;
+      const sampleRate = audioEntry.sampleRate ?? project.config.audio?.sampleRate ?? 48000;
+      const channels = audioEntry.channels ?? project.config.audio?.channels ?? 2;
+      runReport.result({ audio: { sampleRate, channels } });
+      results.push({ id: target.entry.id, kind: target.kind, path: outputPath });
+      if (!options.dryRun) runReport.artifact({ kind: "audio", path: resolve(outputPath), units: 1, unit: "file" });
+      if (!options.silent) console.log(`✓ audio → ${outputPath}`);
     } else {
-      outputPath = await generateVideoTarget(project, target as { kind: "scene" | "timeline"; entry: ManifestEntryBase }, options, resolution.context.explicit);
-    }
-    results.push({ id: target.entry.id, kind: target.kind, path: outputPath });
-    if (!options.dryRun) runReport.artifact({ kind: target.kind, path: resolve(outputPath), units: 1, unit: "file" });
-    if (!options.silent) {
-      console.log(`✓ ${target.kind} → ${outputPath}`);
+      process.stderr.write(`\n▶ ${target.kind}: ${target.entry.id}\n`);
+      const comp = target.kind === "scene"
+        ? await composeSceneComposition(project, target.entry.id)
+        : await assembleTimelineComposition(project, target.entry.id);
+      const targetItem: RenderTargetItem = {
+        id: target.entry.id,
+        name: target.entry.name,
+        kind: target.kind,
+        composition: comp,
+        entry: target.entry,
+        width: (target.entry as any).width,
+        height: (target.entry as any).height,
+        fps: (target.entry as any).fps,
+        format: (target.entry as any).format,
+        codec: (target.entry as any).codec,
+        quality: (target.entry as any).quality,
+        duration: (target.entry as any).duration ?? comp.duration,
+      };
+      await orchestrateRender(resolution, [targetItem], {
+        out: options.out,
+        concurrency: options.concurrency,
+        seed: options.seed,
+        overwrite: options.overwrite ?? config.render?.overwrite ?? config.overwrite ?? false,
+        dryRun: options.dryRun === true,
+        all: false,
+        preview: false,
+        fresh: false,
+        resume: false,
+        noCache: false,
+      });
+      results.push({ id: target.entry.id, kind: target.kind, path: target.entry.id });
     }
   }
   runReport.result({ generated: results });
@@ -255,24 +227,10 @@ export async function generateCommand(kind: GenerateKind, options: GenerateOptio
   }
 }
 
+import { findCommand, buildCommanderCommand } from "./command-registry.js";
+
 export function createGenerateCommand(): Command {
-  return new Command("generate")
-    .description("Generate images, audio, scenes, or timelines from main.ts")
-    .argument("[kind]", "audio | image | scene | timeline | all", "all")
-    .option("--id <id...>", "Only generate the given ids")
-    .option("--all", "Generate everything without prompting", false)
-    .option("-y, --yes", "Skip prompts and generate everything", false)
-    .option("--out <dir>", "Output directory override")
-    .option("--seed <number>", "Random seed", (v) => parseInt(v, 10))
-    .option("--concurrency <number|auto>", "Number of worker threads", (v) => (v === "auto" ? "auto" : parseInt(v, 10)))
-    .option("--overwrite", "Overwrite existing files", false)
-    .option("--silent", "Suppress progress output", false)
-    .option("--dry-run", "Resolve targets without writing", false)
-    .action(async (kind: string, options: GenerateOptions, command: Command) => {
-      const valid: GenerateKind[] = ["audio", "image", "scene", "timeline", "all"];
-      if (!valid.includes(kind as GenerateKind)) {
-        throw createError(ErrorCode.CC1014, { kind: "target", name: kind, available: valid.join(", ") });
-      }
-      await generateCommand(kind as GenerateKind, { ...command.optsWithGlobals(), ...options });
-    });
+  const spec = findCommand("generate");
+  if (!spec) throw new Error("Command 'generate' not found in registry");
+  return buildCommanderCommand(spec);
 }

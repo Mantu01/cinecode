@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { createScaffoldCommand } from "./scaffold.js";
 
 const scaffoldCmd = createScaffoldCommand();

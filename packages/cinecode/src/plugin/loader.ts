@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { createError, ErrorCode } from "../errors/codes.js";
 import { recordDegradation } from "../errors/degradations.js";
 import type { CinecodeConfig } from "../core/types/index.js";
-import type { CinecodePlugin, PluginKind } from "./types.js";
+import type { CinecodePlugin, PluginKind, PluginManifest } from "./types.js";
 import { PluginRegistry } from "./registry.js";
 
 export interface LoadPluginOptions {
@@ -133,12 +133,12 @@ function validatePlugin(plugin: unknown, source: string): CinecodePlugin {
     });
   }
 
-  const deprecation = checkPluginDeprecation(resolved.manifest as any);
+  const deprecation = checkPluginDeprecation(resolved.manifest as PluginManifest);
   if (deprecation.isDeprecated || deprecation.isIncompatible) {
     recordDegradation({
       code: "CC7001",
       what: "deprecated or incompatible plugin",
-      reason: formatDeprecationNotice(resolved.manifest as any, deprecation),
+      reason: formatDeprecationNotice(resolved.manifest as PluginManifest, deprecation),
       instead: "plugin loaded with deprecation notice",
     });
   }

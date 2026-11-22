@@ -9,7 +9,6 @@ import {
   secondsToFrame,
   frameToSeconds,
 } from "../../core/time/index.js";
-import { PreviewLoop } from "../../dev/previewLoop.js";
 import { resetDiagnostics, pendingDegradations } from "../../errors/degradations.js";
 
 function makeComposition(overrides: Partial<Composition>): Composition {
@@ -116,12 +115,11 @@ test("timebase agreement test table over all boundary and rate conditions", () =
     assert.equal(window.from, 0);
     assert.equal(window.to, entry.expectedFrames);
 
-    // 3. Preview loop totalFrames
-    const preview = new PreviewLoop(comp, () => {});
+    // 3. Composition total frames
     assert.equal(
-      preview.totalFrames(),
+      compositionTotalFrames(comp),
       entry.expectedFrames,
-      `[${entry.label}] PreviewLoop.totalFrames mismatch`,
+      `[${entry.label}] compositionTotalFrames mismatch`,
     );
 
     // 4. Conversion consistency

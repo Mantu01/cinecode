@@ -92,70 +92,77 @@ export async function benchmarkComposition(
   };
 }
 
+import { findCommand, buildCommanderCommand } from "./command-registry.js";
+
+export async function benchmarkCommand(file: string, options: Record<string, unknown> = {}): Promise<void> {
+  const merged = options as {
+    root?: string;
+    frames?: number;
+    runs?: number;
+    seed?: number;
+    compositionName?: string;
+    compareBaseline?: boolean;
+    failOnRegression?: boolean;
+    saveBaseline?: boolean;
+  };
+  const frames = merged.frames ?? 60;
+  const runs = merged.runs ?? 3;
+  const projectDir = merged.root ? path.resolve(merged.root) : process.cwd();
+  console.log(`Benchmarking '${file}' (${frames} frames, ${runs} runs)...`);
+  const stats = await benchmarkComposition(file, {
+    frames,
+    runs,
+    seed: merged.seed ?? 0,
+    composition: merged.compositionName,
+  });
+
+  console.log("\nBenchmark Results");
+  console.log("-----------------");
+  console.log(`Frames rendered: ${stats.frames}`);
+  console.log(`Avg frame time:  ${stats.averageMs.toFixed(1)} ms (${(1000 / (stats.averageMs || 1)).toFixed(1)} fps)`);
+  console.log(`Min / P95 / Max: ${stats.minMs.toFixed(1)} / ${stats.p95Ms.toFixed(1)} / ${stats.maxMs.toFixed(1)} ms`);
+  console.log(`Peak memory:     ${stats.peakMemoryMb.toFixed(0)} MB`);
+  console.log(`Workers:         ${stats.workers}`);
+  console.log(`Total duration:  ${(stats.totalMs / 1000).toFixed(2)}s`);
+
+  const history = loadBenchmarkHistory(projectDir);
+  const baseline = [...history].reverse().find((h) => h.file === file && (h.isBaseline || !merged.compareBaseline));
+
+  if (merged.compareBaseline) {
+    if (!baseline) {
+      throw createError(ErrorCode.CC9002, { reason: `no baseline found for ${file}` });
+    }
+    const timeDeltaPct = ((stats.averageMs - baseline.averageMs) / (baseline.averageMs || 1)) * 100;
+    const memDeltaPct = ((stats.peakMemoryMb - baseline.peakMemoryMb) / (baseline.peakMemoryMb || 1)) * 100;
+
+    console.log("\nBaseline Comparison:");
+    console.log(`  Frame Time: ${timeDeltaPct <= 0 ? pc.green(`${timeDeltaPct.toFixed(1)}%`) : pc.red(`+${timeDeltaPct.toFixed(1)}%`)} (baseline: ${baseline.averageMs.toFixed(1)} ms)`);
+    console.log(`  Memory RSS: ${memDeltaPct <= 0 ? pc.green(`${memDeltaPct.toFixed(1)}%`) : pc.red(`+${memDeltaPct.toFixed(1)}%`)} (baseline: ${baseline.peakMemoryMb.toFixed(0)} MB)`);
+
+    if (timeDeltaPct > 5.0 || memDeltaPct > 10.0) {
+      console.warn(pc.red(pc.bold("\n⚠ PERFORMANCE REGRESSION DETECTED!")));
+      if (merged.failOnRegression) {
+        throw createError(ErrorCode.CC9002, { reason: `frame time ${timeDeltaPct.toFixed(1)}%, memory ${memDeltaPct.toFixed(1)}% over baseline` });
+      }
+    } else {
+      console.log(pc.green("\n✔ No performance regressions detected."));
+    }
+  }
+
+  runReport.result({ frames: stats.frames, averageMs: stats.averageMs, peakMemoryMb: stats.peakMemoryMb });
+  saveBenchmarkRun({
+    ...stats,
+    file,
+    isBaseline: Boolean(merged.saveBaseline),
+  }, projectDir);
+
+  if (merged.saveBaseline) {
+    console.log(pc.green("✔ Saved run as new baseline record."));
+  }
+}
+
 export function createBenchmarkCommand(): Command {
-  return new Command("benchmark")
-    .description("Measure per-frame render time, peak memory and regression tracking")
-    .argument("<composition>", "Composition file")
-    .option("-c, --composition-name <name>", "Composition name")
-    .option("-n, --frames <number>", "Frames per run", (value) => parseInt(value, 10), 30)
-    .option("--runs <number>", "Number of runs", (value) => parseInt(value, 10), 3)
-    .option("--seed <number>", "Deterministic seed", (value) => parseInt(value, 10))
-    .option("--compare-baseline", "Compare results against historical baseline", false)
-    .option("--fail-on-regression", "Exit with error code 1 if performance regresses > 5%", false)
-    .option("--save-baseline", "Save this benchmark run as official baseline", false)
-    .action(async (file: string, options, command: Command) => {
-      const merged = { ...command.optsWithGlobals(), ...options };
-      const projectDir = merged.root ? path.resolve(merged.root) : process.cwd();
-      console.log(`Benchmarking '${file}' (${merged.frames} frames, ${merged.runs} runs)...`);
-      const stats = await benchmarkComposition(file, {
-        frames: merged.frames,
-        runs: merged.runs,
-        seed: merged.seed ?? 0,
-        composition: merged.compositionName,
-      });
-
-      console.log("\nBenchmark Results");
-      console.log("-----------------");
-      console.log(`Frames rendered: ${stats.frames}`);
-      console.log(`Avg frame time:  ${stats.averageMs.toFixed(1)} ms (${(1000 / (stats.averageMs || 1)).toFixed(1)} fps)`);
-      console.log(`Min / P95 / Max: ${stats.minMs.toFixed(1)} / ${stats.p95Ms.toFixed(1)} / ${stats.maxMs.toFixed(1)} ms`);
-      console.log(`Peak memory:     ${stats.peakMemoryMb.toFixed(0)} MB`);
-      console.log(`Workers:         ${stats.workers}`);
-      console.log(`Total duration:  ${(stats.totalMs / 1000).toFixed(2)}s`);
-
-      const history = loadBenchmarkHistory(projectDir);
-      const baseline = [...history].reverse().find((h) => h.file === file && (h.isBaseline || !merged.compareBaseline));
-
-      if (merged.compareBaseline) {
-        if (!baseline) {
-          throw createError(ErrorCode.CC9002, { reason: `no baseline found for ${file}` });
-        }
-        const timeDeltaPct = ((stats.averageMs - baseline.averageMs) / (baseline.averageMs || 1)) * 100;
-        const memDeltaPct = ((stats.peakMemoryMb - baseline.peakMemoryMb) / (baseline.peakMemoryMb || 1)) * 100;
-
-        console.log("\nBaseline Comparison:");
-        console.log(`  Frame Time: ${timeDeltaPct <= 0 ? pc.green(`${timeDeltaPct.toFixed(1)}%`) : pc.red(`+${timeDeltaPct.toFixed(1)}%`)} (baseline: ${baseline.averageMs.toFixed(1)} ms)`);
-        console.log(`  Memory RSS: ${memDeltaPct <= 0 ? pc.green(`${memDeltaPct.toFixed(1)}%`) : pc.red(`+${memDeltaPct.toFixed(1)}%`)} (baseline: ${baseline.peakMemoryMb.toFixed(0)} MB)`);
-
-        if (timeDeltaPct > 5.0 || memDeltaPct > 10.0) {
-          console.warn(pc.red(pc.bold("\n⚠ PERFORMANCE REGRESSION DETECTED!")));
-          if (merged.failOnRegression) {
-            throw createError(ErrorCode.CC9002, { reason: `frame time ${timeDeltaPct.toFixed(1)}%, memory ${memDeltaPct.toFixed(1)}% over baseline` });
-          }
-        } else {
-          console.log(pc.green("\n✔ No performance regressions detected."));
-        }
-      }
-
-      runReport.result({ frames: stats.frames, averageMs: stats.averageMs, peakMemoryMb: stats.peakMemoryMb });
-      saveBenchmarkRun({
-        ...stats,
-        file,
-        isBaseline: Boolean(merged.saveBaseline),
-      }, projectDir);
-
-      if (merged.saveBaseline) {
-        console.log(pc.green("✔ Saved run as new baseline record."));
-      }
-    });
+  const spec = findCommand("benchmark");
+  if (!spec) throw new Error("Command 'benchmark' not found in registry");
+  return buildCommanderCommand(spec);
 }

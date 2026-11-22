@@ -1,4 +1,5 @@
 import { freemem } from "node:os";
+import { createResourcePlan, type ResourcePlan } from "./resource-planner.js";
 
 export type MemoryStatus = "ok" | "warning" | "over-budget";
 
@@ -193,32 +194,23 @@ export interface TransportBudgetInput {
  * Derives the render byte budget from an explicit limit or from available
  * memory, then splits it between encoder-queued frames and in-flight chunks.
  */
-export function resolveTransportBudget(input: TransportBudgetInput): TransportBudget {
-  const frameBytes = estimateFrameBytes(input.width, input.height);
-  const concurrency = Math.max(1, input.concurrency);
-  const available = input.availableBytes ?? availableMemoryBytes();
-  const derived = Math.floor(available * AVAILABLE_MEMORY_SHARE);
-  const source: TransportBudget["source"] = input.maxBytes === undefined ? "available-memory" : "config";
-  const requested = input.maxBytes ?? Math.min(DEFAULT_RENDER_BUDGET_BYTES, derived);
-  // Always leave room for one frame per worker plus the encoder in flight.
-  const floor = frameBytes * (concurrency + 2);
-  const totalBytes = Math.max(MIN_RENDER_BUDGET_BYTES, floor, Math.floor(requested));
-  // Every worker may hold one chunk while the encoder drains the queue, so a
-  // chunk is capped by the share of the budget reserved for chunks in flight.
-  const chunkShare = Math.floor((totalBytes * 0.4) / concurrency);
-  const queueBytes = Math.max(frameBytes * 2, totalBytes - chunkShare * concurrency);
-  const chunkBytes = Math.min(
-    Math.max(estimateChunkBytes(1, input.width, input.height), chunkShare),
-    estimateChunkBytes(Math.max(1, input.chunkSize), input.width, input.height),
-  );
-  const maxQueuedFrames = Math.max(1, Math.floor(queueBytes / frameBytes));
+export function resolveTransportBudget(input: TransportBudgetInput): TransportBudget & { readonly plan: ResourcePlan } {
+  const plan = createResourcePlan({
+    width: input.width,
+    height: input.height,
+    concurrency: input.concurrency,
+    chunkSize: input.chunkSize,
+    memoryBudgetMb: input.maxBytes === undefined ? undefined : input.maxBytes / (1024 * 1024),
+    availableMemoryBytes: input.availableBytes,
+  });
   return {
-    totalBytes,
-    frameBytes,
-    chunkBytes,
-    maxQueuedFrames,
-    source,
-    description: `${formatBytes(totalBytes)} total (${formatBytes(queueBytes)} frames, ${formatBytes(chunkBytes)} chunks, ${maxQueuedFrames} frames max queued, ${source})`,
+    totalBytes: plan.totalBudget,
+    frameBytes: plan.frameBytes,
+    chunkBytes: plan.chunkSize * plan.frameBytes,
+    maxQueuedFrames: plan.queueDepth,
+    source: plan.source,
+    description: plan.summary,
+    plan,
   };
 }
 
@@ -228,7 +220,7 @@ function availableMemoryBytes(): number {
     try {
       return processMemory();
     } catch {
-      // fall through to the OS view
+      // Note: fall through to the OS view
     }
   }
   return freemem();

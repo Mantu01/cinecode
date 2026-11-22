@@ -1,44 +1,59 @@
 import { Command } from "commander";
-import { rm, readdir, stat } from "node:fs/promises";
-import { resolve } from "node:path";
+import { readdir, readFile, rm, stat } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { resolve, join } from "node:path";
+import pc from "picocolors";
+import prompts from "prompts";
 import { loadProjectContext } from "./project-context.js";
-import { formatCacheGcResult, pruneStaleEntries } from "../pipeline/cache-gc.js";
+import { pruneStaleEntries } from "../pipeline/cache-gc.js";
+import { runReport } from "./run-report.js";
+import { sweepSpools } from "./spool.js";
+import { createError, ErrorCode } from "../errors/index.js";
+import { CancellationSignal } from "./exit-codes.js";
+import type { PreflightContext } from "./preflight.js";
+import { findCommand, buildCommanderCommand } from "./command-registry.js";
 
-interface CleanOptions {
+export interface CleanOptions {
+  cache?: boolean;
   output?: boolean;
+  prune?: boolean;
   all?: boolean;
+  yes?: boolean;
   force?: boolean;
   dryRun?: boolean;
   config?: string;
   root?: string;
   pruneStaleDays?: number;
+  deleteOrphans?: boolean;
 }
 
-async function getDirectorySize(dir: string): Promise<{ files: number; size: number }> {
-  let files = 0;
-  let size = 0;
+export interface TargetFileInfo {
+  path: string;
+  size: number;
+}
+
+async function collectFilesRecursively(dir: string): Promise<TargetFileInfo[]> {
+  const result: TargetFileInfo[] = [];
   try {
     const entries = await readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
       const fullPath = resolve(dir, entry.name);
       if (entry.isDirectory()) {
-        const sub = await getDirectorySize(fullPath);
-        files += sub.files;
-        size += sub.size;
+        const nested = await collectFilesRecursively(fullPath);
+        result.push(...nested);
       } else {
         try {
           const s = await stat(fullPath);
-          files++;
-          size += s.size;
+          result.push({ path: fullPath, size: s.size });
         } catch {
-          void 0;
+          result.push({ path: fullPath, size: 0 });
         }
       }
     }
   } catch {
-    void 0;
+    // Note: Directory might not exist or not be readable
   }
-  return { files, size };
+  return result;
 }
 
 function formatSize(bytes: number): string {
@@ -53,86 +68,252 @@ function formatSize(bytes: number): string {
   return `${size.toFixed(1)} ${units[unitIndex]}`;
 }
 
-export async function cleanCommand(options: CleanOptions): Promise<void> {
-  const context = await loadProjectContext({ root: options.root, config: options.config });
-  const cacheDir = context.roots.cache;
-  const outputDir = context.roots.output;
+async function collectPrunableCacheEntries(cacheDir: string, projectRoot: string): Promise<TargetFileInfo[]> {
+  const prunable: TargetFileInfo[] = [];
+  const metaDir = join(cacheDir, "metadata");
+  if (!existsSync(metaDir)) return prunable;
 
-  if (options.pruneStaleDays !== undefined) {
-    const result = await pruneStaleEntries(cacheDir, options.pruneStaleDays, { dryRun: options.dryRun === true });
-    console.log(formatCacheGcResult(result));
-    return;
+  try {
+    const files = await readdir(metaDir);
+    for (const file of files) {
+      if (!file.endsWith(".json")) continue;
+      const metaPath = join(metaDir, file);
+      try {
+        const raw = await readFile(metaPath, "utf-8");
+        const parsed = JSON.parse(raw) as { sourcePath?: string };
+        const sourcePath = parsed?.sourcePath;
+
+        let isUnreferenced = false;
+        if (!sourcePath || !existsSync(sourcePath)) {
+          isUnreferenced = true;
+        }
+
+        if (isUnreferenced) {
+          const s = await stat(metaPath).catch(() => ({ size: 0 }));
+          prunable.push({ path: metaPath, size: s.size });
+
+          // Also check for corresponding frame cache file
+          const baseHash = file.slice(0, -5);
+          const frameDir = join(cacheDir, "frames");
+          if (existsSync(frameDir)) {
+            const frameFiles = await readdir(frameDir).catch(() => []);
+            for (const ff of frameFiles) {
+              if (ff.startsWith(baseHash)) {
+                const fp = join(frameDir, ff);
+                const fsStat = await stat(fp).catch(() => ({ size: 0 }));
+                prunable.push({ path: fp, size: fsStat.size });
+              }
+            }
+          }
+        }
+      } catch {
+        // Corrupt metadata entry is also prunable
+        const s = await stat(metaPath).catch(() => ({ size: 0 }));
+        prunable.push({ path: metaPath, size: s.size });
+      }
+    }
+  } catch {
+    // Note: Ignore read errors
+  }
+  return prunable;
+}
+
+export async function cleanCommand(options: CleanOptions = {}, context?: PreflightContext): Promise<void> {
+  const cleanCache = options.cache === true || options.all === true;
+  const cleanOutput = options.output === true || options.all === true;
+  const pruneCache = options.prune === true || options.pruneStaleDays !== undefined || options.deleteOrphans === true;
+
+  if (!cleanCache && !cleanOutput && !pruneCache) {
+    throw createError(
+      ErrorCode.CC0001,
+      { reason: "Nothing to clean. Specify at least one target: --cache, --output, --prune, or --all." },
+      { fixHint: "Run `cinecode clean --cache`, `cinecode clean --output`, `cinecode clean --prune`, or `cinecode clean --all`." },
+    );
   }
 
-  const cleanCache = !options.output || options.all;
-  const cleanOutput = options.output || options.all;
+  const ctx = context ?? (await loadProjectContext({ root: options.root, config: options.config, allowStandalone: true }));
+  const resolvedCacheDir = resolve(ctx.roots.cache);
+  const resolvedOutputDir = resolve(ctx.roots.output);
+  const projectRoot = resolve(ctx.root);
 
-  const targets: Array<{ name: string; path: string }> = [];
-  if (cleanCache) targets.push({ name: "cache", path: cacheDir });
-  if (cleanOutput) targets.push({ name: "output", path: outputDir });
+  // Spool sweep is safe and idempotent
+  const spools = sweepSpools(resolvedCacheDir);
 
-  if (targets.length === 0) {
-    console.log("Nothing to clean");
-    return;
+  const cacheTargets: TargetFileInfo[] = [];
+  const outputTargets: TargetFileInfo[] = [];
+  const pruneTargets: TargetFileInfo[] = [];
+
+  if (cleanCache) {
+    const files = await collectFilesRecursively(resolvedCacheDir);
+    cacheTargets.push(...files);
+  } else if (pruneCache) {
+    if (options.pruneStaleDays !== undefined) {
+      // Age-based prune
+      const gcRes = await pruneStaleEntries(resolvedCacheDir, options.pruneStaleDays, { dryRun: true });
+      if (gcRes.removedObjects > 0) {
+        pruneTargets.push({ path: join(resolvedCacheDir, "index"), size: gcRes.removedBytes });
+      }
+    }
+    const unref = await collectPrunableCacheEntries(resolvedCacheDir, projectRoot);
+    pruneTargets.push(...unref);
   }
 
-  const summary: Array<{ name: string; path: string; files: number; size: number }> = [];
-
-  for (const target of targets) {
-    const { files, size } = await getDirectorySize(target.path);
-    summary.push({ name: target.name, path: target.path, files, size });
+  if (cleanOutput) {
+    const files = await collectFilesRecursively(resolvedOutputDir);
+    outputTargets.push(...files);
   }
 
-  if (options.dryRun) {
-    console.log("Dry run - would delete:");
+  // Safety invariant: Ensure no targets are outside their respective roots
+  for (const t of [...cacheTargets, ...pruneTargets]) {
+    const resolved = resolve(t.path);
+    if (!resolved.startsWith(resolvedCacheDir)) {
+      throw createError(ErrorCode.CC1003, {
+        reason: `Safety violation: cache target ${t.path} is outside cache directory ${resolvedCacheDir}`,
+      });
+    }
+  }
+  for (const t of outputTargets) {
+    const resolved = resolve(t.path);
+    if (!resolved.startsWith(resolvedOutputDir)) {
+      throw createError(ErrorCode.CC1003, {
+        reason: `Safety violation: output target ${t.path} is outside output directory ${resolvedOutputDir}`,
+      });
+    }
+  }
+
+  const allTargets = [
+    ...cacheTargets,
+    ...outputTargets,
+    ...pruneTargets,
+  ];
+
+  const totalBytes = allTargets.reduce((sum, t) => sum + t.size, 0);
+
+  const summary = [
+    ...(cleanCache ? [{ name: "cache", path: resolvedCacheDir, files: cacheTargets.length, size: cacheTargets.reduce((s, t) => s + t.size, 0) }] : []),
+    ...(cleanOutput ? [{ name: "output", path: resolvedOutputDir, files: outputTargets.length, size: outputTargets.reduce((s, t) => s + t.size, 0) }] : []),
+    ...(pruneCache && !cleanCache ? [{ name: "prune", path: resolvedCacheDir, files: pruneTargets.length, size: pruneTargets.reduce((s, t) => s + t.size, 0) }] : []),
+  ];
+
+  if (options.dryRun === true) {
+    runReport.result({
+      dryRun: true,
+      summary,
+      targets: allTargets.map((t) => t.path),
+      deleted: [],
+      files: allTargets.length,
+      bytes: totalBytes,
+      spoolsSwept: spools.sweptCount,
+      spoolsBytes: spools.sweptBytes,
+    });
+    console.log(pc.bold("Dry run — would delete:"));
     for (const item of summary) {
       console.log(`  ${item.name}: ${item.files} files, ${formatSize(item.size)} at ${item.path}`);
+    }
+    if (allTargets.length > 0) {
+      console.log(pc.dim(`  Total: ${allTargets.length} files (${formatSize(totalBytes)})`));
     }
     return;
   }
 
-  if (!options.force) {
-    console.log("The following will be deleted:");
+  // Consent & Confirmation
+  const hasConsent = options.yes === true || options.force === true;
+  if (!hasConsent) {
+    if (!process.stdin.isTTY) {
+      throw createError(ErrorCode.CC1012, {
+        reason: "Destructive command 'clean' requires explicit consent via --yes or --force in non-interactive mode.",
+      });
+    }
+
+    console.log(pc.yellow("The following will be deleted:"));
     for (const item of summary) {
       console.log(`  ${item.name}: ${item.files} files, ${formatSize(item.size)} at ${item.path}`);
     }
     console.log("");
-    console.log("This action cannot be undone. Continue? (y/N)");
 
-    const answer = await new Promise<string>(resolvePromise => {
-      const stdin = process.stdin;
-      stdin.setEncoding("utf-8");
-      stdin.once("data", (data: Buffer) => {
-        resolvePromise(data.toString().trim().toLowerCase());
-      });
+    const { confirmed } = await prompts({
+      type: "confirm",
+      name: "confirmed",
+      message: "Are you sure you want to delete these files? (cannot be undone)",
+      initial: false,
     });
 
-    if (answer !== "y" && answer !== "yes") {
-      console.log("Cancelled");
-      return;
+    if (!confirmed) {
+      console.log(pc.dim("Clean operation cancelled by user."));
+      throw new CancellationSignal("Clean operation cancelled by user");
     }
   }
 
-  for (const target of targets) {
+  // Perform deletion
+  const deleted: string[] = [];
+
+  for (const t of cacheTargets) {
     try {
-      await rm(target.path, { recursive: true, force: true });
-      console.log(`Deleted ${target.name}: ${target.path}`);
-    } catch (e) {
-      console.error(`Failed to delete ${target.name} (${target.path}): ${e instanceof Error ? e.message : "Unknown error"}`);
+      await rm(t.path, { force: true });
+      deleted.push(t.path);
+    } catch {
+      // Note: Continue removing remaining targets
     }
+  }
+
+  for (const t of pruneTargets) {
+    try {
+      await rm(t.path, { force: true });
+      deleted.push(t.path);
+    } catch {
+      // Note: Continue removing remaining prune targets
+    }
+  }
+
+  for (const t of outputTargets) {
+    try {
+      await rm(t.path, { force: true });
+      deleted.push(t.path);
+    } catch {
+      // Note: Continue removing remaining output targets
+    }
+  }
+
+  const cacheDeleted = deleted.filter((p) => p.startsWith(resolvedCacheDir));
+  const outputDeleted = deleted.filter((p) => p.startsWith(resolvedOutputDir));
+
+  runReport.result({
+    deleted,
+    cache: {
+      files: cacheDeleted.length,
+      bytes: cacheTargets.reduce((s, t) => s + t.size, 0),
+      removedFiles: cacheDeleted,
+    },
+    output: {
+      files: outputDeleted.length,
+      bytes: outputTargets.reduce((s, t) => s + t.size, 0),
+      removedFiles: outputDeleted,
+    },
+    prune: {
+      files: pruneTargets.length,
+      bytes: pruneTargets.reduce((s, t) => s + t.size, 0),
+      removedFiles: pruneTargets.map((t) => t.path),
+    },
+    summary,
+    files: deleted.length,
+    bytes: totalBytes,
+    spoolsSwept: spools.sweptCount,
+    spoolsBytes: spools.sweptBytes,
+  });
+
+  if (cleanCache) {
+    console.log(pc.green(`✔ Removed ${cacheTargets.length} file(s) from cache (${formatSize(cacheTargets.reduce((s, t) => s + t.size, 0))})`));
+  }
+  if (pruneCache && !cleanCache) {
+    console.log(pc.green(`✔ Pruned ${pruneTargets.length} unreferenced cache entry(ies) (${formatSize(pruneTargets.reduce((s, t) => s + t.size, 0))})`));
+  }
+  if (cleanOutput) {
+    console.log(pc.green(`✔ Removed ${outputTargets.length} file(s) from output (${formatSize(outputTargets.reduce((s, t) => s + t.size, 0))})`));
   }
 }
 
 export function createCleanCommand(): Command {
-  const cmd = new Command("clean")
-    .description("Delete cache and/or output directories")
-    .option("--output", "Also empty output directory", false)
-    .option("--all", "Clean both cache and output", false)
-    .option("--force", "Skip confirmation prompt", false)
-    .option("--dry-run", "Print what would be deleted without deleting", false)
-    .option("--prune-stale-days <days>", "Prune cache entries unreferenced for N days instead of deleting everything", (value) => parseInt(value, 10))
-    .action(async (options: CleanOptions, command: Command) => {
-      await cleanCommand({ ...command.optsWithGlobals(), ...options });
-    });
-  return cmd;
+  const spec = findCommand("clean");
+  if (!spec) throw new Error("Command 'clean' not found in registry");
+  return buildCommanderCommand(spec);
 }

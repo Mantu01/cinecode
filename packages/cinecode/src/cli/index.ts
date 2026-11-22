@@ -5,6 +5,7 @@ export * from "./preview.js";
 export * from "./validate.js";
 export * from "./check.js";
 export * from "./doctor.js";
+export * from "./health-collector.js";
 export * from "./inspect.js";
 export * from "./clean.js";
 export * from "./media-download.js";
@@ -15,12 +16,11 @@ export * from "./prompt-select.js";
 export * from "./presets.js";
 export * from "./thumbnail.js";
 export * from "./multi-res.js";
-export { createEditCommand, editCommand, openFileInEditor } from "./edit.js";
+export { createMediaCommand, mediaCommand } from "./media.js";
 export { createSyncCommand, buildSyncReport } from "./sync.js";
 export { createCompareCommand, compareCompositions } from "./compare.js";
 export { createBenchmarkCommand, benchmarkComposition } from "./benchmark.js";
 export { createUpgradeCommand, checkForUpgrade } from "./upgrade.js";
-export { createTemplateCommand, scaffoldTemplate, findTemplate } from "./template.js";
 export { createHealthCommand, collectHealth } from "./health.js";
 export { createTtsCommand, ttsCommand, type TtsCliOptions } from "./tts.js";
 export { createPluginCommand } from "./plugin.js";
@@ -38,6 +38,16 @@ export { formatDiagnostic } from "./diagnostics.js";
 export { loadAliases, setAlias, removeAlias, expandCliArgs } from "./profiles.js";
 export type { SyncReport, SyncOptions } from "./sync.js";
 
+export {
+  Reporter,
+  serializeEnvelope,
+  validateCommandResult,
+  verifyArtifact,
+  type MachineEnvelope,
+  type ProgressEvent,
+  type ArtifactRecord,
+} from "./reporter.js";
+export { sweepSpools, type SpoolSweepResult } from "./spool.js";
 export type { ComparisonResult, FrameComparison } from "./compare.js";
 export type { BenchmarkStats } from "./benchmark.js";
 export type { UpgradeInfo } from "./upgrade.js";

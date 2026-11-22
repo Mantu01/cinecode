@@ -1,5 +1,6 @@
 import { createCanvas, createContext } from "./composite/engine.js";
 import type { Canvas, SKRSContext2D } from "@napi-rs/canvas";
+import { getGlobalCacheService, type GlobalCacheService } from "../pipeline/global-cache.js";
 
 /**
  * Canvas and RGBA buffer pooling keyed by resolution. Pooled canvases are
@@ -104,14 +105,18 @@ export class ByteBoundedCache<K, V> {
   private bytes = 0;
   private evictions = 0;
   private readonly onEvict: ((key: K, value: V) => void) | undefined;
+  private readonly globalService?: GlobalCacheService;
+  private isEvictingFromGlobal = false;
 
   constructor(
     private readonly name: string,
     private readonly maxBytes: number,
     private readonly sizeOf: (value: V) => number,
     onEvict?: (key: K, value: V) => void,
+    globalService?: GlobalCacheService,
   ) {
     this.onEvict = onEvict;
+    this.globalService = globalService ?? getGlobalCacheService();
     registerByteCache(this);
   }
 
@@ -128,6 +133,7 @@ export class ByteBoundedCache<K, V> {
     if (value !== undefined) {
       this.map.delete(key);
       this.map.set(key, value);
+      this.globalService?.get(this.name, String(key));
     }
     return value;
   }
@@ -143,7 +149,20 @@ export class ByteBoundedCache<K, V> {
       this.map.delete(key);
     }
     this.map.set(key, value);
-    this.bytes += this.sizeOf(value);
+    const size = this.sizeOf(value);
+    this.bytes += size;
+    this.globalService?.set(this.name, String(key), value, size, {
+      onEvict: () => {
+        if (!this.isEvictingFromGlobal) {
+          this.isEvictingFromGlobal = true;
+          try {
+            this.delete(key);
+          } finally {
+            this.isEvictingFromGlobal = false;
+          }
+        }
+      },
+    });
     this.evict();
   }
 
@@ -152,6 +171,9 @@ export class ByteBoundedCache<K, V> {
     if (value === undefined) return false;
     this.map.delete(key);
     this.bytes -= this.sizeOf(value);
+    if (!this.isEvictingFromGlobal) {
+      this.globalService?.delete(this.name, String(key));
+    }
     this.onEvict?.(key, value);
     return true;
   }
@@ -160,6 +182,7 @@ export class ByteBoundedCache<K, V> {
     for (const [key, value] of this.map) this.onEvict?.(key, value);
     this.map.clear();
     this.bytes = 0;
+    this.globalService?.clear(this.name);
   }
 
   keys(): IterableIterator<K> {
@@ -188,6 +211,7 @@ export class ByteBoundedCache<K, V> {
       this.map.delete(oldest);
       this.bytes -= value === undefined ? 0 : this.sizeOf(value);
       this.evictions += 1;
+      this.globalService?.delete(this.name, String(oldest));
       if (value !== undefined) this.onEvict?.(oldest, value);
     }
   }

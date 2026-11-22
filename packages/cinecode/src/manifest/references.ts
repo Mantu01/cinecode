@@ -20,10 +20,10 @@ export function buildReferenceGraph(manifest: MainManifest): ReferenceGraph {
   const timelines = new Set<string>();
   const overridden: Array<{ timeline: string; scene: string }> = [];
   for (const timeline of manifest.timelines ?? []) {
-    timelines.add(timeline.id);
-    for (const ref of timeline.audioRef ?? []) audio.add(ref);
+    timelines.add(timeline.id.toLowerCase());
+    for (const ref of timeline.audioRef ?? []) audio.add(ref.toLowerCase());
     for (const ref of timeline.sceneRefs ?? []) {
-      scenes.add(ref);
+      scenes.add(ref.toLowerCase());
       if (timeline.file !== undefined) overridden.push({ timeline: timeline.id, scene: ref });
     }
   }
@@ -38,7 +38,7 @@ export function referenceWarnings(manifest: MainManifest): CinecodeError[] {
 
   const report = (kind: string, id: string, referenced: boolean, target: string): void => {
     if (referenced) return;
-    const key = `${kind}:${id}`;
+    const key = `${kind}:${id.toLowerCase()}`;
     if (reported.has(key)) return;
     reported.add(key);
     warnings.push(
@@ -54,8 +54,8 @@ export function referenceWarnings(manifest: MainManifest): CinecodeError[] {
   };
 
   for (const entry of manifest.images ?? []) report("image", entry.id, false, "generate");
-  for (const entry of manifest.audio ?? []) report("audio", entry.id, graph.audio.has(entry.id), "generate");
-  for (const entry of manifest.scenes ?? []) report("scene", entry.id, graph.scenes.has(entry.id), "render");
+  for (const entry of manifest.audio ?? []) report("audio", entry.id, graph.audio.has(entry.id.toLowerCase()), "generate");
+  for (const entry of manifest.scenes ?? []) report("scene", entry.id, graph.scenes.has(entry.id.toLowerCase()), "render");
 
   for (const override of graph.overridden) {
     const key = `override:${override.timeline}:${override.scene}`;

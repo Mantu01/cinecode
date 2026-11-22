@@ -40,7 +40,7 @@ export interface VisualProps {
   readonly name?: string;
 }
 
-export type KeyframeMap = Readonly<Record<string, readonly (readonly [time: number, value: any, easing?: any])[]>>;
+export type KeyframeMap = Readonly<Record<string, readonly (readonly [time: number, value: unknown, easing?: unknown])[]>>;
 
 export type KeyframeProp = readonly [property: string, frames: readonly KeyframeTuple[]];
 

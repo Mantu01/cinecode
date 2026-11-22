@@ -1,51 +1,47 @@
 import { execFileSync } from "node:child_process";
+import { chmodSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { cpSync, readFileSync, writeFileSync } from "node:fs";
-import {
-  assertNoNewChanges,
-  assertPack,
-  assertTargets,
-  declarationEntriesOf,
-  fail,
-  gitStatus,
-  packFiles,
-  pruneDeclarations,
-  pruneTestOutput,
-  report,
-} from "../../../scripts/artifact.mjs";
-import { cleanBuildOutput } from "../../../scripts/clean.mjs";
+import { assertBuildOutput } from "../../../scripts/assert-output.mjs";
+import { compareTemplates, writeTemplates } from "./generate-templates.mjs";
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const pkg = path.resolve(here, "..");
-const dist = path.join(pkg, "dist");
-const repo = path.resolve(pkg, "..", "..");
+const pkgDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const distDir = path.join(pkgDir, "dist");
+const emitDir = path.join(distDir, "esm");
 const startedAt = Date.now();
-const before = gitStatus(repo);
 
-cleanBuildOutput(pkg);
+const manifest = JSON.parse(readFileSync(path.join(pkgDir, "package.json"), "utf8"));
+const binEntries = Object.values(manifest.bin ?? {}).map((entry) => path.resolve(pkgDir, entry));
 
-execFileSync(process.execPath, [path.join(here, "generate-templates.mjs")], { cwd: pkg, stdio: "inherit" });
+rmSync(distDir, { recursive: true, force: true });
 
-execFileSync(
-  process.execPath,
-  [path.resolve(pkg, "..", "..", "node_modules", "typescript", "bin", "tsc"), "-p", "tsconfig.build.json"],
-  { cwd: pkg, stdio: "inherit" },
+const tsc = createRequire(path.join(pkgDir, "package.json")).resolve("typescript/bin/tsc");
+execFileSync(process.execPath, [tsc, "-p", "tsconfig.build.json"], { cwd: pkgDir, stdio: "inherit" });
+
+let output;
+try {
+  output = assertBuildOutput({ packageDir: pkgDir, emitDir, binEntries });
+} catch (error) {
+  console.error(error.message);
+  process.exit(1);
+}
+
+const templatesDir = path.join(emitDir, "templates");
+writeTemplates(templatesDir);
+const drift = compareTemplates(templatesDir);
+if (drift.length > 0) {
+  console.error(
+    `template drift detected, checked-in templates must match templates/canonical:\n${drift.join("\n")}\nfix: edit templates/canonical or run pnpm --filter create-cinecode check:templates.`,
+  );
+  process.exit(1);
+}
+
+if (process.platform !== "win32") {
+  for (const entry of binEntries) chmodSync(entry, 0o755);
+}
+
+const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+console.log(
+  `build ok: ${output.scripts} scripts, ${output.declarations} declarations, ${output.bins} bin, ${output.files} files, 2 template variants in ${seconds}s`,
 );
-
-cpSync(path.join(pkg, "templates"), path.join(dist, "esm", "templates"), { recursive: true });
-
-const binEntry = path.join(dist, "esm", "cli.js");
-const binSource = readFileSync(binEntry, "utf8");
-if (!binSource.startsWith("#!")) writeFileSync(binEntry, `#!/usr/bin/env node\n${binSource}`, "utf8");
-if (!readFileSync(binEntry, "utf8").startsWith("#!/usr/bin/env node")) fail("cli entry is not executable as a script");
-
-const manifest = JSON.parse(readFileSync(path.join(pkg, "package.json"), "utf8"));
-pruneTestOutput(dist);
-pruneDeclarations(pkg, declarationEntriesOf(manifest));
-assertTargets(pkg, manifest);
-
-const pack = packFiles(pkg);
-assertPack(pkg, manifest, pack.files);
-assertNoNewChanges(repo, before, ["packages/create-cinecode/dist"]);
-report("build", startedAt, [dist], pack);

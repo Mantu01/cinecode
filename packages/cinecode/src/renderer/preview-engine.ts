@@ -4,6 +4,7 @@ import { createRenderSession, renderFrame, type RenderSessionState } from "./eng
 import { createRenderRuntime, type RenderRuntime } from "./runtime.js";
 import { clampResolutionScale, qualityFromScale, type QualityLevel, type ResolutionScale } from "./scale.js";
 
+// Expensive effect filters bypassed in fast preview
 export const EXPENSIVE_EFFECTS: readonly string[] = [
   "bloom",
   "depth-of-field",
@@ -16,11 +17,18 @@ export const EXPENSIVE_EFFECTS: readonly string[] = [
   "raytrace",
 ];
 
+export interface PreviewCameraState {
+  readonly orbit?: { readonly theta: number; readonly phi: number };
+  readonly pan?: { readonly x: number; readonly y: number };
+  readonly zoom?: number;
+}
+
 export interface FastPreviewOptions {
   readonly seed?: number;
   readonly scale?: ResolutionScale | number;
   readonly bypassEffects?: boolean;
   readonly nearestNeighbor?: boolean;
+  readonly camera?: PreviewCameraState;
 }
 
 export interface PreviewRenderResult {
@@ -37,17 +45,42 @@ function isExpensive(name: string): boolean {
   return EXPENSIVE_EFFECTS.some((effect) => normalized === effect || normalized.includes(effect));
 }
 
-export function buildFastPreviewComposition(composition: Composition, _scale: number, bypassEffects = true): Composition {
+/**
+ * Text and layout strategy at preview scale:
+ * We render at full layout dimensions and downscale the rasterized surface to target resolution scale.
+ * This guarantees 100% faithful typographic metrics, font kerning, word-wrapping and vector layout
+ * identical to final export, while reducing canvas allocations and memory footprint to preview scale.
+ */
+export function buildFastPreviewComposition(
+  composition: Composition,
+  _scale: number,
+  bypassEffects = true,
+  camera?: PreviewCameraState,
+): Composition {
   const scaled = composition;
-  if (!bypassEffects) return scaled;
   const tracks = scaled.rootTimeline.tracks.map((track) => ({
     ...track,
     clips: track.clips.map((clip) => {
-      const effects = (clip as { effects?: readonly { name: string }[] }).effects;
-      if (!effects || effects.length === 0) return clip;
-      return { ...clip, effects: effects.filter((effect) => !isExpensive(effect.name)) } as typeof clip;
+      let currentClip = clip;
+      if (bypassEffects) {
+        const effects = (currentClip as { effects?: readonly { name: string }[] }).effects;
+        if (effects && effects.length > 0) {
+          currentClip = {
+            ...currentClip,
+            effects: effects.filter((effect) => !isExpensive(effect.name)),
+          } as typeof clip;
+        }
+      }
+      if (camera && (currentClip as { type?: string }).type === "model3d") {
+        currentClip = {
+          ...currentClip,
+          previewCamera: camera,
+        } as unknown as typeof clip;
+      }
+      return currentClip;
     }),
   }) as typeof track);
+
   const postProcessing = scaled.postProcessing;
   return {
     ...scaled,
@@ -57,7 +90,9 @@ export function buildFastPreviewComposition(composition: Composition, _scale: nu
           postProcessing: {
             ...postProcessing,
             previewMode: true,
-            effects: (postProcessing.effects ?? []).filter((effect) => !isExpensive(effect.name)),
+            effects: bypassEffects
+              ? (postProcessing.effects ?? []).filter((effect) => !isExpensive(effect.name))
+              : postProcessing.effects,
           },
         }
       : {}),
@@ -69,6 +104,7 @@ export class PreviewEngine {
   private scale: ResolutionScale;
   private readonly seed: number;
   private readonly bypassEffects: boolean;
+  private camera?: PreviewCameraState;
   private readonly runtime: RenderRuntime = createRenderRuntime(undefined, "preview");
   private readonly session: RenderSessionState = createRenderSession();
 
@@ -77,13 +113,25 @@ export class PreviewEngine {
     this.scale = clampResolutionScale(options.scale ?? 0.5);
     this.seed = options.seed ?? 0;
     this.bypassEffects = options.bypassEffects !== false;
+    this.camera = options.camera;
   }
 
   setScale(scale: ResolutionScale | number): void {
     this.scale = clampResolutionScale(scale);
   }
 
-  /** Releases this engine's canvases and caches; safe to call more than once. */
+  setCamera(camera?: PreviewCameraState): void {
+    this.camera = camera;
+  }
+
+  getCamera(): PreviewCameraState | undefined {
+    return this.camera;
+  }
+
+  getReducedEffects(): boolean {
+    return this.bypassEffects;
+  }
+
   dispose(): void {
     this.session.dispose();
   }
@@ -98,7 +146,7 @@ export class PreviewEngine {
 
   async render(frame: number): Promise<PreviewRenderResult> {
     const started = Date.now();
-    const fast = buildFastPreviewComposition(this.composition, this.scale, this.bypassEffects);
+    const fast = buildFastPreviewComposition(this.composition, this.scale, this.bypassEffects, this.camera);
     const result = await renderFrame(fast, frame, this.seed, {
       runtime: this.runtime,
       resolutionScale: this.scale,

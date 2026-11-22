@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
+import { createError, ErrorCode } from "../errors/index.js";
 
 export interface CubeLut {
   readonly title?: string;
@@ -25,12 +26,14 @@ const KEYWORDS = new Set([
 function parseFloats(line: string, lineNumber: number, expected: number, source: string): number[] {
   const values = line.trim().split(/\s+/).map(Number);
   if (values.length !== expected) {
-    throw new Error(
-      `CC6001: Expected ${expected} values per line but found ${values.length} at line ${lineNumber} of ${source}`,
+    throw createError(
+      ErrorCode.CC6001,
+      { url: source },
+      { location: { file: source, line: lineNumber } },
     );
   }
   if (values.some((value) => !Number.isFinite(value))) {
-    throw new Error(`CC6001: Expected numeric values but found non-numeric token at line ${lineNumber} of ${source}`);
+    throw createError(ErrorCode.CC6001, { url: source }, { location: { file: source, line: lineNumber } });
   }
   return values;
 }
@@ -76,8 +79,10 @@ export function parseCubeLut(content: string, source = "<cube>"): CubeLut {
         const values = parseFloats(line.slice(keyword.length), lineNumber, 1, source);
         const size = Math.trunc(values[0]!);
         if (size < 2 || size > MAX_CUBE_LUT_SIZE) {
-          throw new Error(
-            `CC6002: ${keyword} must be between 2 and ${MAX_CUBE_LUT_SIZE} at line ${lineNumber} of ${source}`,
+          throw createError(
+            ErrorCode.CC6002,
+            { url: source, reason: `${keyword} must be between 2 and ${MAX_CUBE_LUT_SIZE}` },
+            { location: { file: source, line: lineNumber } },
           );
         }
         if (keyword === "LUT_1D_SIZE") oneDimensionalSize = size;
@@ -90,25 +95,27 @@ export function parseCubeLut(content: string, source = "<cube>"): CubeLut {
   }
 
   if (oneDimensionalSize !== null && threeDimensionalSize !== null) {
-    throw new Error(`CC6003: ${source} declares both LUT_1D_SIZE and LUT_3D_SIZE`);
+    throw createError(ErrorCode.CC6003, { url: source, expected: "one size", actual: "both" }, { location: { file: source } });
   }
   if (oneDimensionalSize === null && threeDimensionalSize === null) {
-    throw new Error(`CC6004: ${source} is missing LUT_1D_SIZE or LUT_3D_SIZE`);
+    throw createError(ErrorCode.CC6004, { source }, { location: { file: source } });
   }
   if (domainMax[0] <= domainMin[0] || domainMax[1] <= domainMin[1] || domainMax[2] <= domainMin[2]) {
-    throw new Error(`CC6005: DOMAIN_MAX must be greater than DOMAIN_MIN in ${source}`);
+    throw createError(ErrorCode.CC6005, { source }, { location: { file: source } });
   }
 
   const type: "1d" | "3d" = threeDimensionalSize !== null ? "3d" : "1d";
   const size = (threeDimensionalSize ?? oneDimensionalSize)!;
   const expectedEntries = type === "3d" ? size ** 3 : size;
   if (dataLines.length !== expectedEntries) {
-    throw new Error(
-      `CC6006: LUT size mismatch in ${source}: expected ${expectedEntries} entries, found ${dataLines.length}`,
+    throw createError(
+      ErrorCode.CC6006,
+      { source, expected: expectedEntries, actual: dataLines.length },
+      { location: { file: source } },
     );
   }
   if (dataLines.length === 0) {
-    throw new Error(`CC6007: ${source} contains no LUT data`);
+    throw createError(ErrorCode.CC6007, { source }, { location: { file: source } });
   }
 
   const data = new Float32Array(expectedEntries * 3);
