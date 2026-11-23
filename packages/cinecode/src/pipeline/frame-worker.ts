@@ -1,34 +1,38 @@
 import { parentPort } from "node:worker_threads";
-import { Canvas } from "@napi-rs/canvas";
 import type { Composition, FontEntry } from "../core/types/index.js";
 import {
-  renderFrame,
   primeVideoFramesForRange,
-  setDisableLocalVideoDecode,
-  videoFrameRefsFor,
-  hasVideoFrameCached,
-  storeRemoteVideoFrame,
   createRenderSession,
   clearRendererCaches,
 } from "../renderer/engine.js";
-import { createCacheClient } from "./cache-channel.js";
 import { registerProjectFonts } from "../renderer/text/fonts.js";
-import { createBuiltinRegistry } from "../extensions/bootstrap.js";
 import { setExtensions } from "../extensions/index.js";
-import { PluginRegistry } from "../plugin/registry.js";
-import { loadPlugin } from "../plugin/loader.js";
+import { installExtensionDescriptor, type ExtensionDescriptor } from "../plugin/descriptor.js";
 import { createRenderRuntime, type RenderRuntime } from "../renderer/runtime.js";
-import { frameFromPixels, frameTransfer } from "./frame-format.js";
+import { frameTransfer } from "./frame-format.js";
 import { createError, ErrorCode } from "../errors/index.js";
 import { setBinaryConfig } from "../binary/resolver.js";
+import { setInvocationState } from "../observability/invocation-context.js";
+import {
+  disableWorkerLocalDecode,
+  resetWorkerLocalDecode,
+  fetchRemoteFrames,
+} from "./worker-remote-frames.js";
+import {
+  type FrameErrorPolicy,
+  type FrameFailure,
+  DEFAULT_MAX_CONSECUTIVE_FAILURES,
+} from "./frame-policy.js";
+import { renderFrameBatch } from "./frame-batch.js";
 
-export type FrameErrorPolicy = "placeholder" | "repeat-previous" | "abort";
+export type { FrameErrorPolicy, FrameFailure };
 
 interface WorkerStartup {
   compositionJson: string;
   seed: number;
   cacheDir: string;
   errorPolicy?: FrameErrorPolicy;
+  maxConsecutiveFailures?: number;
   frameWidth?: number;
   frameHeight?: number;
   fonts?: readonly FontEntry[];
@@ -44,18 +48,12 @@ interface WorkerStartup {
     readonly ffmpegPath?: string;
     readonly ffprobePath?: string;
   };
+  extensions?: ExtensionDescriptor;
+  verbose?: boolean;
 }
 
 interface ChunkInput {
   frames: readonly number[];
-}
-
-export interface FrameFailure {
-  readonly frame: number;
-  readonly timecode: number;
-  readonly message: string;
-  readonly stack?: string;
-  readonly clip?: string;
 }
 
 interface WorkerOutput {
@@ -72,219 +70,32 @@ interface TransportFrame {
   readonly pixels: Uint8Array;
 }
 
-const MAX_CONSECUTIVE_FAILURES = 5;
-const MAX_FAILURE_RATIO = 0.02;
-
-/** One read out of the canvas; straight RGBA with its own transferable buffer. */
-function frameToBuffer(canvas: Canvas): Buffer {
-  const imageData = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
-  return frameFromPixels(imageData.data);
-}
-
-function placeholderBuffer(width: number, height: number, message: string): Buffer {
-  const canvas = new Canvas(width, height);
-  const ctx = canvas.getContext("2d");
-  ctx.fillStyle = "#101418";
-  ctx.fillRect(0, 0, width, height);
-  ctx.fillStyle = "rgba(255, 64, 64, 0.18)";
-  ctx.fillRect(0, 0, width, height);
-  const fontSize = Math.max(12, Math.min(48, Math.round(width / 24)));
-  ctx.font = `${fontSize}px sans-serif`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillStyle = "rgba(255, 255, 255, 0.82)";
-  ctx.fillText("FRAME RENDER ERROR", width / 2, height / 2 - fontSize);
-  ctx.font = `${Math.max(10, Math.round(fontSize * 0.5))}px sans-serif`;
-  ctx.fillStyle = "rgba(255, 220, 220, 0.7)";
-  const trimmed = message.length > 96 ? `${message.slice(0, 93)}...` : message;
-  ctx.fillText(trimmed, width / 2, height / 2 + fontSize * 0.8);
-  return frameToBuffer(canvas);
-}
-
-function extractClipReference(message: string): string | undefined {
-  const match = message.match(/clip\s+"([^"]+)"/i);
-  return match?.[1];
-}
-
-function isCircuitBroken(
-  failures: number,
-  consecutiveFailures: number,
-  totalFrames: number,
-): boolean {
-  if (consecutiveFailures > MAX_CONSECUTIVE_FAILURES) return true;
-  if (totalFrames === 0) return false;
-  return failures / totalFrames > MAX_FAILURE_RATIO;
-}
-
-let ready: Promise<void> | null = null;
-function disableWorkerLocalDecode(): Promise<void> {
-  if (!ready) {
-    ready = (async () => {
-      setDisableLocalVideoDecode(true);
-    })();
-  }
-  return ready;
-}
-
-async function fetchRemoteFrames(
-  composition: Composition,
-  frames: readonly number[],
-): Promise<number> {
-  const cacheClient = parentPort ? createCacheClient(parentPort) : null;
-  if (!cacheClient) return 0;
-  const refs = await videoFrameRefsFor(composition, frames);
-  const misses = refs.filter((ref) => !hasVideoFrameCached(ref.src, ref.sourceFrame));
-  const hits = refs.length - misses.length;
-  if (misses.length === 0) return hits;
-
-  const keys = misses.map((ref) => `video:${ref.src}@${ref.sourceFrame}`);
-  const responses = await cacheClient.requestBatch(keys);
-  for (let i = 0; i < misses.length; i++) {
-    const ref = misses[i]!;
-    const response = responses[i];
-    if (!response || !response.hit || !response.data) {
-      if (response?.error) {
-        throw createError(ErrorCode.CC4001, { frame: ref.sourceFrame, source: ref.src, reason: response.error });
-      }
-      continue;
-    }
-    if (response.width !== undefined && response.height !== undefined) {
-      storeRemoteVideoFrame(
-        ref.src,
-        {
-          buffer: response.data,
-          width: response.width,
-          height: response.height,
-          format: (response.format as "rgba" | "rgb24") ?? "rgba",
-        },
-        ref.sourceFrame,
-      );
-    } else {
-      try {
-        const payload = JSON.parse(response.data.toString("utf8")) as {
-          buffer: string;
-          width: number;
-          height: number;
-          format: "rgba" | "rgb24";
-        };
-        storeRemoteVideoFrame(
-          ref.src,
-          {
-            buffer: Buffer.from(payload.buffer, "base64"),
-            width: payload.width,
-            height: payload.height,
-            format: payload.format,
-          },
-          ref.sourceFrame,
-        );
-      } catch {
-        // Note: source frame decode error handled during render stage
-      }
-    }
-  }
-  return hits;
-}
 
 async function processFrames(
   composition: Composition,
   seed: number,
   frames: readonly number[],
   policy: FrameErrorPolicy,
+  maxConsecutiveFailures: number,
   frameWidth: number,
   frameHeight: number,
   runtime: RenderRuntime,
 ): Promise<WorkerOutput> {
-  const results: { index: number; buffer: Buffer }[] = [];
-  const failures: FrameFailure[] = [];
   const session = workerSession ?? createRenderSession();
-  let consecutiveFailures = 0;
-  let previousBuffer: Buffer | null = null;
-
   await primeVideoFramesForRange(composition, frames);
-  const cacheHits = await fetchRemoteFrames(composition, frames);
-
-  for (const frame of frames) {
-    try {
-      const result = await renderFrame(composition, frame, seed, { runtime, session });
-      const buffer = frameToBuffer(result.canvas);
-      results.push({ index: frame, buffer });
-      previousBuffer = buffer;
-      consecutiveFailures = 0;
-    } catch (error) {
-      session.lastFrameSurface = null;
-      const failure: FrameFailure = {
-        frame,
-        timecode: frame / Math.max(1, composition.fps),
-        message: error instanceof Error ? error.message : "Unknown error",
-        stack: error instanceof Error ? error.stack : undefined,
-        clip: error instanceof Error ? extractClipReference(error.message) : undefined,
-      };
-      failures.push(failure);
-      consecutiveFailures += 1;
-      if (process.env.CINECODE_VERBOSE === "1") {
-        process.stderr.write(
-          JSON.stringify({
-            level: "error",
-            stage: "frame-render",
-            frame,
-            timecodeSeconds: failure.timecode,
-            clip: failure.clip,
-            message: failure.message,
-          }) + "\n",
-        );
-      }
-
-      if (policy === "abort") {
-        return {
-          frames: results,
-          failures,
-          aborted: true,
-          error: failure.message,
-          diagnostics: formatDiagnostics(failures, frames.length),
-        };
-      }
-
-      if (isCircuitBroken(failures.length, consecutiveFailures, frames.length)) {
-        return {
-          frames: results,
-          failures,
-          aborted: true,
-          error: `[CC4003] circuit breaker tripped after ${failures.length} failed frame(s): ${failure.message}`,
-          diagnostics: formatDiagnostics(failures, frames.length),
-        };
-      }
-
-      if (policy === "repeat-previous" && previousBuffer) {
-        results.push({ index: frame, buffer: previousBuffer });
-        continue;
-      }
-
-      results.push({
-        index: frame,
-        buffer: placeholderBuffer(frameWidth, frameHeight, failure.message),
-      });
-    }
-  }
-
-  return {
-    frames: results,
-    failures,
-    cacheHits,
-    ...(failures.length > 0 ? { diagnostics: formatDiagnostics(failures, frames.length) } : {}),
-  };
-}
-
-function formatDiagnostics(failures: readonly FrameFailure[], total: number): string {
-  const head = failures
-    .slice(0, 8)
-    .map(
-      (failure) => `frame ${failure.frame} (${failure.timecode.toFixed(3)}s): ${failure.message}`,
-    );
-  return [
-    `failed frames: ${failures.length}/${total}`,
-    ...head,
-    ...(failures.length > head.length ? [`... ${failures.length - head.length} more`] : []),
-  ].join("\n");
+  const cacheHits = await fetchRemoteFrames(parentPort, composition, frames);
+  const output = await renderFrameBatch({
+    composition,
+    seed,
+    frames,
+    policy,
+    maxConsecutiveFailures,
+    frameWidth,
+    frameHeight,
+    runtime,
+    session,
+  });
+  return { ...output, cacheHits };
 }
 
 if (!parentPort) {
@@ -315,6 +126,7 @@ interface WorkerState {
   readonly seed: number;
   readonly cacheDir: string;
   readonly policy: FrameErrorPolicy;
+  readonly maxConsecutiveFailures: number;
   readonly frameWidth: number;
   readonly frameHeight: number;
   readonly runtime: RenderRuntime;
@@ -326,6 +138,7 @@ let workerSession: import("../renderer/engine.js").RenderSession | null = null;
 
 async function initialize(startup: WorkerStartup): Promise<void> {
   const started = Date.now();
+  if (startup.verbose !== undefined) setInvocationState({ verbose: startup.verbose });
   if (startup.binaries) {
     setBinaryConfig({
       ffmpegPath: startup.binaries.ffmpegPath,
@@ -358,56 +171,26 @@ async function initialize(startup: WorkerStartup): Promise<void> {
       { location: { file: font.path }, fixHint: "Fix the font entry path or register a family available on this machine." },
     );
   }
-  // Per-job state never leaks across jobs when a worker is reused.
   if (workerSession) {
     workerSession.dispose();
     workerSession = null;
   }
   workerSession = createRenderSession();
   clearRendererCaches();
-  ready = null;
+  resetWorkerLocalDecode();
 
-  const workerRegistry = createBuiltinRegistry();
+  const workerRegistry = await installExtensionDescriptor(
+    startup.extensions ?? { version: "1", plugins: [], effects: [], transitions: [] },
+    startup.projectRoot,
+  );
   setExtensions(workerRegistry);
-  if (startup.plugins && startup.plugins.length > 0) {
-    const workerPluginRegistry = new PluginRegistry();
-    for (const p of startup.plugins) {
-      if (p.source) {
-        try {
-          const plugin = await loadPlugin(p.source, {
-            options: p.options as Record<string, unknown>,
-            registry: workerPluginRegistry,
-            rootDir: startup.projectRoot,
-          });
-          if (plugin.effects) {
-            for (const effect of plugin.effects) {
-              workerRegistry.slot("effect").register(effect.name, effect);
-              workerRegistry.slot("effect").register(`${plugin.manifest.name}/${effect.name}`, effect);
-              workerRegistry.slot("effect").register(`${plugin.manifest.name}:${effect.name}`, effect);
-            }
-          }
-          if (plugin.transitions) {
-            for (const transition of plugin.transitions) {
-              workerRegistry.slot("transition").register(transition.name, transition);
-              workerRegistry.slot("transition").register(`${plugin.manifest.name}/${transition.name}`, transition);
-              workerRegistry.slot("transition").register(`${plugin.manifest.name}:${transition.name}`, transition);
-            }
-          }
-        } catch (err) {
-          if (process.env.CINECODE_VERBOSE === "1") {
-            process.stderr.write(`[frame-worker] failed to load plugin ${p.name}: ${String(err)}\n`);
-          }
-        }
-      }
-    }
-    await workerPluginRegistry.init(workerRegistry);
-  }
 
   state = {
     composition,
     seed: startup.seed,
     cacheDir: startup.cacheDir,
     policy: startup.errorPolicy ?? "placeholder",
+    maxConsecutiveFailures: startup.maxConsecutiveFailures ?? DEFAULT_MAX_CONSECUTIVE_FAILURES,
     frameWidth: startup.frameWidth ?? composition.width,
     frameHeight: startup.frameHeight ?? composition.height,
     runtime: createRenderRuntime(workerRegistry, "worker"),
@@ -442,7 +225,7 @@ parentPort.on("message", (msg: WorkerMessage) => {
       workerSession = null;
     }
     clearRendererCaches();
-    ready = null;
+    resetWorkerLocalDecode();
     state = null;
     parentPort!.postMessage({ type: "reset-complete" });
     return;
@@ -453,7 +236,7 @@ parentPort.on("message", (msg: WorkerMessage) => {
       workerSession = null;
     }
     clearRendererCaches();
-    ready = null;
+    resetWorkerLocalDecode();
     state = null;
     process.exit(0);
   }
@@ -477,6 +260,7 @@ parentPort.on("message", (msg: WorkerMessage) => {
         current.seed,
         chunkFrames,
         current.policy,
+        current.maxConsecutiveFailures,
         current.frameWidth,
         current.frameHeight,
         current.runtime,
@@ -487,7 +271,7 @@ parentPort.on("message", (msg: WorkerMessage) => {
       const transfer: ArrayBuffer[] = [];
       const moved = new Set<ArrayBuffer>();
       for (const frame of output.frames) {
-        // repeat-previous reuses one buffer; a moved buffer cannot be sent twice
+        // Note: repeat-previous reuses one buffer; duplicate buffers must be cloned
         const buffer = moved.has(frame.buffer.buffer as ArrayBuffer) ? Buffer.from(frame.buffer) : frame.buffer;
         const sent = frameTransfer(buffer);
         moved.add(sent.transfer);

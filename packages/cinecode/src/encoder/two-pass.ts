@@ -8,6 +8,7 @@ import { buildVideoEncoderArgs, type EncoderOptions, type EncoderResult } from "
 export interface FrameSink {
   addFrame(buffer: Buffer): Promise<void>;
   finish(): Promise<EncoderResult>;
+  cancel?(): Promise<void>;
 }
 
 export class RawFrameSink implements FrameSink {
@@ -71,7 +72,7 @@ export interface TwoPassOptions extends Omit<EncoderOptions, "pass" | "passLogFi
   readonly onPass?: (pass: 1 | 2) => void;
 }
 
-function estimateBitrateKbps(width: number, height: number, fps: number, crf: number): number {
+export function estimateBitrateKbps(width: number, height: number, fps: number, crf: number): number {
   const pixelsPerSecond = width * height * fps;
   const qualityFactor = Math.max(0.02, 0.12 - crf * 0.002);
   return Math.max(400, Math.round((pixelsPerSecond * qualityFactor) / 1000));

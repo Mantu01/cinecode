@@ -38,7 +38,10 @@ export function parseTimeInput(input: string, fps: number): TimeParseResult {
   if (text.includes(":")) {
     const parts = text.split(":");
     if (parts.length < 2 || parts.length > 4) return fail(input, "a timecode has two to four colon-separated parts");
-    if (!parts.every((part) => /^\d+$/.test(part))) return fail(input, "timecode parts must be whole numbers");
+    const validParts = parts.length === 4
+      ? parts.every((part) => /^\d+$/.test(part))
+      : parts.slice(0, -1).every((p) => /^\d+$/.test(p)) && /^\d+(?:\.\d+)?$/.test(parts[parts.length - 1]!);
+    if (!validParts) return fail(input, "timecode parts must be whole numbers");
     const numbers = parts.map(Number);
     const frames = parts.length === 4 ? numbers.pop()! : undefined;
     const [hours, minutes, seconds] = parts.length === 4 ? numbers : parts.length === 3 ? numbers : [0, ...numbers];
@@ -47,7 +50,7 @@ export function parseTimeInput(input: string, fps: number): TimeParseResult {
     const wholeSeconds = hours! * 3600 + minutes! * 60 + seconds!;
     return {
       ok: true,
-      time: { frame: wholeSeconds * fps + (frames ?? 0), seconds: wholeSeconds + (frames ?? 0) / fps },
+      time: { frame: Math.round(wholeSeconds * fps + (frames ?? 0)), seconds: wholeSeconds + (frames ?? 0) / fps },
     };
   }
 

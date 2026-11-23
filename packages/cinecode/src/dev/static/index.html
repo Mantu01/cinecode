@@ -9,20 +9,24 @@
 <body>
 <header id="app-header">
   <div class="logo"><b>CINECODE</b> <span id="mode-label">preview</span></div>
-  <div id="status"><span id="dot"></span><span id="statusText">connecting…</span></div>
+  <div id="status">
+    <span id="dot"></span>
+    <span id="statusText">connecting…</span>
+    <button id="retry" type="button" hidden>Retry</button>
+  </div>
 </header>
 <main id="app-main">
-  <aside id="list" aria-label="Project Assets"></aside>
-  <section class="preview" id="preview" aria-label="Preview Viewport">
+  <aside id="list" aria-label="Project assets"></aside>
+  <section id="stage" aria-label="Preview viewport">
     <div id="empty-state" class="empty">Select an asset</div>
+    <img id="frame" alt="" hidden />
     <div id="view-controls">
       <button id="fitView" type="button" title="Fit">Fit</button>
       <button id="resetView" type="button" title="Reset (R)">Reset</button>
     </div>
-    <div id="view-help">Drag: pan &nbsp;|&nbsp; Wheel: zoom &nbsp;|&nbsp; R: reset &nbsp;|&nbsp; F: fit</div>
+    <div id="view-help">Wheel: zoom &nbsp;|&nbsp; Drag: orbit 3D &nbsp;|&nbsp; R: reset</div>
   </section>
 </main>
-<div id="overlay" role="alert" style="display:none;"></div>
 <script src="/assets/viewer.js" nonce="{{NONCE}}" type="module"></script>
 </body>
 </html>

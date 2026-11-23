@@ -47,6 +47,57 @@ export const DEFAULT_COLOR_MANAGEMENT = {
 export const DEFAULT_CHUNK_SIZE = 50;
 export const DEFAULT_MEMORY_BUDGET = "1GB";
 
+export function parseMemoryBudgetMb(value: unknown): number {
+  if (typeof value === "number") {
+    if (Number.isNaN(value) || !Number.isFinite(value) || value <= 0) {
+      throw new Error(`Invalid memory budget: ${value}`);
+    }
+    return value > 100000 ? Math.round(value / (1024 * 1024)) : Math.round(value);
+  }
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`Invalid memory budget: ${String(value)}`);
+  }
+  const str = value.trim().toUpperCase();
+  const match = /^(\d+(?:\.\d+)?)\s*(B|KB|K|MB|M|GB|G|TB|T|GIB|MIB|KIB)?$/.exec(str);
+  if (!match) {
+    throw new Error(`Invalid memory budget: ${value}`);
+  }
+  const amount = Number(match[1]);
+  const unit = match[2] ?? "MB";
+  let bytes: number;
+  switch (unit) {
+    case "B":
+      bytes = amount;
+      break;
+    case "KB":
+    case "K":
+    case "KIB":
+      bytes = amount * 1024;
+      break;
+    case "MB":
+    case "M":
+    case "MIB":
+      bytes = amount * 1024 * 1024;
+      break;
+    case "GB":
+    case "G":
+    case "GIB":
+      bytes = amount * 1024 * 1024 * 1024;
+      break;
+    case "TB":
+    case "T":
+      bytes = amount * 1024 * 1024 * 1024 * 1024;
+      break;
+    default:
+      bytes = amount * 1024 * 1024;
+  }
+  const mb = Math.round(bytes / (1024 * 1024));
+  if (mb < 16) {
+    throw new Error(`Memory budget ${value} is below minimum 16MB`);
+  }
+  return mb;
+}
+
 /**
  * Adaptive chunk size rule:
  * Scales with composition length and worker pool size,
@@ -71,6 +122,11 @@ export const DEFAULT_RENDER = {
   chunkSize: DEFAULT_CHUNK_SIZE,
   memoryBudgetMb: 1024,
   colorManagement: DEFAULT_COLOR_MANAGEMENT,
+  overwrite: false,
+  alpha: false,
+  twoPass: false,
+  noEffects: false,
+  strictFonts: false,
 } as const;
 
 export const DEFAULT_BINARIES = {

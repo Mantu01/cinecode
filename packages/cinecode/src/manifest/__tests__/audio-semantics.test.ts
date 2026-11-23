@@ -8,9 +8,9 @@ import { normalizeConfig } from "../../config/schema.js";
 import { validateManifestDocument } from "../validation.js";
 import { validateManifestShape } from "../../config/zod-schema.js";
 import { assembleTimelineComposition, loadManifestProject } from "../index.js";
-import { generateCommand } from "../../cli/generate.js";
-import { renderCommand } from "../../cli/render.js";
-import { runReport } from "../../cli/run-report.js";
+import { generateCommand } from "../../cli/commands/generate.js";
+import { renderCommand } from "../../cli/commands/render.js";
+import { runReport } from "../../cli/output/run-report.js";
 
 const CONFIG = { schemaVersion: 2, project: { entry: "./main.ts" }, video: { width: 32, height: 32, fps: 30 } };
 const config = normalizeConfig(CONFIG);

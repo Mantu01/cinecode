@@ -7,13 +7,13 @@ All Cinecode errors use coded identifiers (`CCxxxx`), actionable remediation hin
 | Code | Exit Code | Message Template | Remediation / Fix Hint |
 | --- | --- | --- | --- |
 | `CC0001` | `2` | Invalid command usage: {reason} | Run `cinecode help <command>` for the accepted arguments and flags. |
-| `CC1001` | `3` | Configuration missing required key: sourceDir | Add the missing required field to your config. Run `cinecode doctor` to see all validation errors at once. |
+| `CC1001` | `3` | Configuration missing required key: {key} | Add the missing required field to your config. Run `cinecode doctor` to see all validation errors at once. |
 | `CC1002` | `3` | Unknown configuration key: {key}. {suggestion} | Check your config keys against the schema: `cinecode validate --schema`. |
 | `CC1003` | `3` | Invalid path for {key}: {path}. {reason} | Resolution must be even numbers and match a known preset. Use `1920x1080`, `1280x720`, `3840x2160`, or specify exact `width` and `height` values. |
 | `CC1004` | `3` | Unsupported schema version: {version}. Expected: {expected} | Upgrade your config: add `schemaVersion: 2` and move fields into `project/`, `video/`, `render/` blocks. See migration guide. |
 | `CC1005` | `3` | Configuration could not be loaded: {path}. {reason} | Check the resolved config path and that the file parses. Run `cinecode doctor` with the same `--config` to see the loader diagnostic. |
 | `CC1006` | `3` | Configuration could not be parsed: {path}. {reason} | Fix the JSON/TypeScript syntax at the reported location, then rerun the command. |
-| `CC1007` | `3` | Unsupported configuration format: {path}. Expected .ts, .js, .mjs, .cjs, .mts, .cts or .json | Rename the config to `cinecode.config.ts` or `cinecode.config.json`, or pass a supported file with `--config`. |
+| `CC1007` | `3` | Unsupported configuration format: {path}. Expected .ts, .js, .mjs, .cjs, .mts, .cts or .json | Rename the config to one of: cinecode.config.ts, .js, .mjs, .cjs, .mts, .cts, cinecode.json, or pass a supported file with `--config`. |
 | `CC1008` | `3` | Unsupported output format: {format}. Supported: {supported} | Use one of the listed formats. Run `cinecode presets` for platform-specific container choices. |
 | `CC1009` | `3` | Project entry file not found: {path} | Create the entry file or point `project.entry` at the existing composition module. |
 | `CC1010` | `3` | Invalid project manifest: {path}. {reason} | Fix the manifest module so it exports the declared entries. Run `cinecode check` for the full report. |
@@ -40,8 +40,8 @@ All Cinecode errors use coded identifiers (`CCxxxx`), actionable remediation hin
 | `CC3001` | `3` | Overlapping clips detected on track {track}: {clip1} and {clip2} | Clips on the same track cannot overlap. Adjust their start times or move one to a different track layer. |
 | `CC3002` | `3` | Invalid duration for clip {clip}: {duration}. Duration must be positive | Clip duration must be positive. Set an explicit `duration` or use a non-empty media source. |
 | `CC3003` | `3` | Clip {clip} extends outside composition bounds | Trim the clip to fit within the composition duration, or extend the composition with a longer timeline. |
-| `CC3004` | `3` | Keyframes for {property} are not sorted by time | Sort keyframes by `atFrames` ascending. Use `sortKeyframes(keyframes)` from `cinecode/core/keyframes` or run `cinecode check --sort-keyframes`. |
-| `CC3005` | `3` | Non-deterministic API detected in {context}: {function} | Replace `Math.random()` with seeded random: `import { random } from "cinecode/core/random"; const rng = random(seed);` |
+| `CC3004` | `3` | Keyframes for {property} are not sorted by time | Sort keyframes by `atFrames` ascending. Use `sortKeyframes(keyframes)` from 'cinecode' or run `cinecode check --sort-keyframes`. |
+| `CC3005` | `3` | Non-deterministic API detected in {context}: {function} | Replace `Math.random()` with seeded random: `import { random } from "cinecode"; const rng = random(seed);` |
 | `CC3006` | `3` | Font {family} is missing glyphs for characters: {missing} | Install the font system-wide, embed it via `fontLoading: { strategy: "embed" }`, or use a fallback font with `fontFamilyFallback`. |
 | `CC3007` | `3` | Unknown {kind} "{id}". Registered: {available} | Use one of the registered ids, or register the missing entry in `main.ts`. |
 | `CC3008` | `3` | Module "{path}" does not export {expected} | Export the expected value (default export, `defineTimeline`, `defineScene`, `defineImage` or `defineAudio`). |
@@ -56,6 +56,9 @@ All Cinecode errors use coded identifiers (`CCxxxx`), actionable remediation hin
 | `CC4007` | `1` | Render cache entry unreadable: {path}. {reason} | Clear the render cache with `cinecode clean --cache`; frames are recomputed on the next run. |
 | `CC4008` | `1` | Output write failed: {path}. {reason} | Check that the output directory exists and is writable, then rerun with --overwrite. |
 | `CC4009` | `1` | Render failed for {count} output variant(s): {reason} | Read each variant error above, fix the first cause, and rerun with a single `--variant` to isolate it. |
+| `CC4010` | `1` | Frame {frame} failed to render: {reason} | Check clip composition and draw calls for the reported frame, or rerun with --verbose. |
+| `CC4011` | `1` | Render chunk {chunk} failed: {reason} | Inspect worker logs or retry with smaller chunk size using --chunk-size. |
+| `CC4012` | `1` | Path is ignored: {path} | The path matches a .cinecodeignore rule; remove the rule or choose a different path. |
 | `CC5001` | `1` | Audio track '{name}' could not be mixed: {reason} | Check that the audio file format is supported and the sample rate matches the composition ({fps}fps → 48000Hz). Add `--audio-codec aac` if needed. |
 | `CC5002` | `1` | Audio synthesis failed for sound '{name}': {reason} | Verify the sound definition is valid — oscillators, envelope, and filter params must be within acceptable ranges. |
 | `CC5101` | `1` | Sample rate must be positive for K-weighting: {sampleRate} | Specify standard audio sample rate (44100 or 48000 Hz). |
@@ -76,14 +79,16 @@ All Cinecode errors use coded identifiers (`CCxxxx`), actionable remediation hin
 | `CC6006` | `4` | LUT size mismatch in '{source}': expected {expected} entries, found {actual} | Verify data lines in .cube file match declared 1D or 3D cube size. |
 | `CC6007` | `4` | LUT file '{source}' contains no data | Provide a complete non-empty .cube LUT file. |
 | `CC6008` | `4` | Operation requires a 3D LUT, but '{path}' is a 1D LUT | Supply a 3D cube LUT or use 1D application function. |
+| `CC6009` | `4` | Publish failed for target '{target}': {reason} | Verify destination path, permissions, or publish registry credentials and retry. |
 | `CC6101` | `4` | Overlay application failed: {reason} | Verify overlay dimensions and blend mode settings. |
 | `CC6201` | `4` | Unknown procedural texture type: {type} | Use a supported procedural texture type (noise, gradient, grid). |
 | `CC6301` | `4` | Unknown typography preset: {preset} | Use a registered typography preset or configure font explicitly. |
-| `CC7001` | `4` | Node.js version {version} is not supported. Minimum required: 20 | Upgrade Node.js to version 20 or later: `nvm install 20` then `nvm use 20`. |
+| `CC7001` | `78` | Node.js version {version} is not supported. Minimum required: 22.18.0 | Upgrade Node.js to version 22.18.0 or later: `nvm install 22.18.0` then `nvm use 22.18.0`. |
 | `CC7002` | `4` | Encoder unavailable: {reason} | Ensure ffmpeg is installed and in PATH. Run `cinecode doctor` to diagnose. |
 | `CC7003` | `4` | Folder not writable: {path} | Create the output directory manually or run with elevated permissions: `mkdir -p <path>` |
 | `CC7004` | `4` | Environment health check failed: {reason} | Resolve each reported issue, then rerun `cinecode health`; use `cinecode doctor` for remediation hints. |
 | `CC7005` | `4` | Memory allocation or byte budget error: {reason} | Increase memory budget with --memory-budget or reduce worker concurrency. |
+| `CC7006` | `4` | Worker concurrency recommendation: {reason} | Tune worker concurrency with --concurrency or rely on auto-detected worker count. |
 | `CC7100` | `4` | Render memory budget: {details} | Informational diagnostic; no action required. |
 | `CC7101` | `4` | Frame transport: {details} | Informational diagnostic; no action required. |
 | `CC7102` | `4` | Renderer caches: {details} | Informational diagnostic; no action required. |
@@ -98,5 +103,6 @@ All Cinecode errors use coded identifiers (`CCxxxx`), actionable remediation hin
 | `CC8003` | `3` | Plugin hook '{hook}' threw in {plugin}: {reason}. Other plugins continued. | Inspect the plugin code for the thrown error. Other plugins will continue loading. |
 | `CC8004` | `3` | Plugin dependency not satisfied: {plugin} requires {dependency} ({requirement}). {found} | Install the missing dependency matching the required version range. |
 | `CC8005` | `3` | Plugin operation failed: {plugin}. {reason} | Check the package name, package manager availability and network access, then retry the plugin command. |
+| `CC8006` | `3` | Plugin warning or degradation: {reason} | Check plugin configuration or update plugin to a compatible version. |
 | `CC9001` | `1` | Unexpected failure: {reason} | Rerun with --verbose to print the stack trace, then report the failure with the code and path shown above. |
 | `CC9002` | `1` | Threshold exceeded: {reason} | Compare the reported metric with the baseline, fix the regression, or rerun without the fail-on-threshold flag. |

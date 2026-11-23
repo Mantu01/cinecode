@@ -6,7 +6,10 @@ export const CONFIG_FILENAMES = [
   "cinecode.config.ts",
   "cinecode.config.js",
   "cinecode.config.mjs",
-  "cinecode.config.json",
+  "cinecode.config.cjs",
+  "cinecode.config.mts",
+  "cinecode.config.cts",
+  "cinecode.json",
 ] as const;
 
 /** Discovery never crosses a directory carrying one of these markers. */
@@ -58,23 +61,15 @@ export function findConfigUpward(startDir: string): string | null {
   return findConfigUpwardDetailed(startDir).configPath;
 }
 
-/** Explicit root, explicit config, then bounded upward search. */
+/** Explicit config, explicit root, then bounded upward search. */
 export function resolveProjectLocation(options: ProjectLocationOptions = {}): ProjectLocation {
   const cwd = resolve(options.cwd ?? process.cwd());
 
-  if (options.root) {
-    const root = resolve(cwd, options.root);
-    if (!existsSync(root)) {
-      throw createError(ErrorCode.CC1001, { path: root, reason: `Project root directory does not exist: ${root}` });
-    }
-    const configPath = options.config ? resolve(root, options.config) : configIn(root) ?? resolve(root, CONFIG_FILENAMES[0]);
-    return { root, configPath, source: "root-flag" };
-  }
-
+  // 1. Explicit config path wins or combines with explicit root
   if (options.config) {
     const configPath = isAbsolute(options.config) ? options.config : resolve(cwd, options.config);
     if (!existsSync(configPath)) {
-      throw createError(ErrorCode.CC1001, { path: configPath, reason: `Config file does not exist: ${configPath}` });
+      throw createError(ErrorCode.CC1005, { path: configPath, reason: `Config file does not exist: ${configPath}` });
     }
     const lower = configPath.toLowerCase();
     if (lower.endsWith(".cinecode.ts") || lower.endsWith(".composition.ts")) {
@@ -83,9 +78,49 @@ export function resolveProjectLocation(options: ProjectLocationOptions = {}): Pr
         reason: `Specified path '${options.config}' is a composition, not a config file. Use a cinecode.config.ts file.`,
       });
     }
-    return { root: dirname(configPath), configPath, source: "config-flag" };
+
+    const derivedRoot = dirname(configPath);
+    if (options.root) {
+      const root = resolve(cwd, options.root);
+      if (!existsSync(root)) {
+        throw createError(ErrorCode.CC1005, { path: root, reason: `Project root directory does not exist: ${root}` });
+      }
+      if (root !== derivedRoot) {
+        throw createError(
+          ErrorCode.CC0001,
+          {
+            reason: `Conflicting --root and --config options: root '${root}' does not match config directory '${derivedRoot}'`,
+          },
+          { fixHint: "Ensure --config is located in --root, or specify only one of --root and --config." },
+        );
+      }
+      return { root, configPath, source: "config-flag" };
+    }
+
+    return { root: derivedRoot, configPath, source: "config-flag" };
   }
 
+  // 2. Explicit root requires a canonical config inside it
+  if (options.root) {
+    const root = resolve(cwd, options.root);
+    if (!existsSync(root)) {
+      throw createError(ErrorCode.CC1005, { path: root, reason: `Project root directory does not exist: ${root}` });
+    }
+    const configPath = configIn(root);
+    if (!configPath) {
+      throw createError(
+        ErrorCode.CC1005,
+        {
+          path: root,
+          reason: `No cinecode configuration found in ${root}. Looked for: ${CONFIG_FILENAMES.join(", ")}`,
+        },
+        { location: { file: root } },
+      );
+    }
+    return { root, configPath, source: "root-flag" };
+  }
+
+  // 3. Upward bounded walk from cwd stopping before crossing package.json or .git
   const { configPath, searched } = findConfigUpwardDetailed(cwd);
   if (!configPath) {
     throw createError(
@@ -96,7 +131,7 @@ export function resolveProjectLocation(options: ProjectLocationOptions = {}): Pr
       },
       {
         location: { file: cwd },
-        fixHint: `Pass --root <dir> or --config <path>, or create cinecode.config.ts. Discovery stops at ${PROJECT_MARKERS.join(" or ")} and never searches parent projects.`,
+        fixHint: `Pass --root <dir> or --config <path>, or create ${CONFIG_FILENAMES[0]}. Discovery stops at ${PROJECT_MARKERS.join(" or ")} and never searches parent projects.`,
       },
     );
   }

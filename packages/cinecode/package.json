@@ -39,6 +39,21 @@
       "import": "./dist/esm/cli/main.js"
     },
     "./core": { "types": "./dist/esm/core/index.d.ts", "import": "./dist/esm/core/index.js" },
+    "./core/random": { "types": "./dist/esm/core/random/index.d.ts", "import": "./dist/esm/core/random/index.js" },
+    "./core/keyframes": { "types": "./dist/esm/core/keyframes/index.d.ts", "import": "./dist/esm/core/keyframes/index.js" },
+    "./random": { "types": "./dist/esm/core/random/index.d.ts", "import": "./dist/esm/core/random/index.js" },
+    "./keyframes": { "types": "./dist/esm/core/keyframes/index.d.ts", "import": "./dist/esm/core/keyframes/index.js" },
+    "./config": { "types": "./dist/esm/config/index.d.ts", "import": "./dist/esm/config/index.js" },
+    "./renderer": { "types": "./dist/esm/renderer/index.d.ts", "import": "./dist/esm/renderer/index.js" },
+    "./encoder": { "types": "./dist/esm/encoder/index.d.ts", "import": "./dist/esm/encoder/index.js" },
+    "./media": { "types": "./dist/esm/media/index.d.ts", "import": "./dist/esm/media/index.js" },
+    "./noise": { "types": "./dist/esm/noise/index.d.ts", "import": "./dist/esm/noise/index.js" },
+    "./gradients": { "types": "./dist/esm/gradients/index.d.ts", "import": "./dist/esm/gradients/index.js" },
+    "./warp": { "types": "./dist/esm/warp/index.d.ts", "import": "./dist/esm/warp/index.js" },
+    "./stickers": { "types": "./dist/esm/stickers/index.d.ts", "import": "./dist/esm/stickers/index.js" },
+    "./api": { "types": "./dist/esm/api/index.d.ts", "import": "./dist/esm/api/index.js" },
+    "./errors": { "types": "./dist/esm/errors/index.d.ts", "import": "./dist/esm/errors/index.js" },
+    "./manifest": { "types": "./dist/esm/manifest/index.d.ts", "import": "./dist/esm/manifest/index.js" },
     "./effects": { "types": "./dist/esm/effects/index.d.ts", "import": "./dist/esm/effects/index.js" },
     "./transitions": { "types": "./dist/esm/transitions/index.d.ts", "import": "./dist/esm/transitions/index.js" },
     "./audio": { "types": "./dist/esm/audio/index.d.ts", "import": "./dist/esm/audio/index.js" },
@@ -61,7 +76,6 @@
   "bin": {
     "cinecode": "./dist/esm/cli/main.js"
   },
-  "overrides": {},
   "publishConfig": {
     "access": "public",
     "provenance": true
@@ -90,7 +104,7 @@
     "pdf-lib": "^1.17.1",
     "picocolors": "^1.1.1",
     "prompts": "^2.4.2",
-    "svg-parser": "2.1.0",
+    "svg-parser": "^2.1.0",
     "svgo": "^4.1.0",
     "zod": "^4.6.7"
   },

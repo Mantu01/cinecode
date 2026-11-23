@@ -7,14 +7,12 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "dev": "cinecode dev --config ./cinecode.config.{{CONFIG_EXT}}",
-    "preview": "cinecode preview --config ./cinecode.config.{{CONFIG_EXT}}",
-    "render": "cinecode render --config ./cinecode.config.{{CONFIG_EXT}}",
-    "render:all": "cinecode render --all --config ./cinecode.config.{{CONFIG_EXT}}",
-    "still": "cinecode still --config ./cinecode.config.{{CONFIG_EXT}} --timeline main --frame 0",
-    "validate": "cinecode validate --config ./cinecode.config.{{CONFIG_EXT}}",
-    "clean": "cinecode clean --config ./cinecode.config.{{CONFIG_EXT}}",
-    "typecheck": "node --check main.js"
+    "dev": "cinecode dev",
+    "preview": "cinecode preview",
+    "render": "cinecode render",
+    "still": "cinecode still",
+    "validate": "cinecode validate",
+    "typecheck": "node --check main.js && node --check src/scenes/intro.js && node --check src/timelines/main.js && node --check src/components/title-card.js"
   },
   "dependencies": {
     "cinecode": "{{CINECODE_DEP}}"

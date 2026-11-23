@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createProjectResolver, describeResolution } from "../project-resolver.js";
+import { createProjectResolver, describeResolution } from "../resolve/project-resolver.js";
 import { ErrorCode } from "../../errors/index.js";
 
 const TIMELINE = "export default { tracks: [] };\n";

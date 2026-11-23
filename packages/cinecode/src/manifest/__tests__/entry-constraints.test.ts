@@ -47,13 +47,14 @@ test("an audio entry with both file and src names both keys", async () => {
   assert.match(result.errors[0]!.message, /audio "bed" declares both "file" and "src"/);
 });
 
-test("a timeline with file and sceneRefs is rejected naming both keys", async () => {
+test("a timeline with file and sceneRefs is rejected with CC3010", async () => {
   const root = project({ "t.ts": "export default { tracks: [] };\n" });
   const result = await validate(root, {
     timelines: [{ id: "main", file: "./t.ts", sceneRefs: ["intro"] }],
     scenes: [{ id: "intro", file: "./t.ts" }],
   });
-  assert.match(result.errors[0]!.message, /timeline "main" declares both "file" and "sceneRefs"/);
+  assert.equal(result.errors[0]!.code, ErrorCode.CC3010);
+  assert.match(result.errors[0]!.message, /Timeline "main" references scene "intro"/);
 });
 
 test("a timeline with no source is rejected", async () => {

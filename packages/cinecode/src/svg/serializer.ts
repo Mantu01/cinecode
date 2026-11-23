@@ -11,6 +11,21 @@ export interface SvgSerializerOptions {
   optimize?: boolean;
 }
 
+interface SvgClip {
+  readonly type?: string;
+  readonly text?: string;
+  readonly start?: number;
+  readonly duration?: number;
+  readonly fontSize?: number;
+  readonly color?: string;
+  readonly x?: number;
+  readonly y?: number;
+  readonly shape?: string;
+  readonly radius?: number;
+  readonly w?: number;
+  readonly h?: number;
+}
+
 export interface UnsupportedSvgClip {
   readonly id: string;
   readonly type: string;
@@ -53,11 +68,10 @@ export function serializeFrameToSvg(
   const fps = comp.fps || 30;
   const time = frame / fps;
 
-  const rawClips = comp.rootTimeline?.tracks
-    ? comp.rootTimeline.tracks.flatMap((t) => t.clips)
-    : ((comp as unknown as { clips?: Array<{ type?: string; text?: string; start?: number; duration?: number }> }).clips ?? []);
-  for (const c of rawClips) {
-    const clip = c as { type?: string; text?: string; start?: number; duration?: number };
+  const rawClips: readonly SvgClip[] = comp.rootTimeline?.tracks
+    ? comp.rootTimeline.tracks.flatMap((t) => t.clips as readonly SvgClip[])
+    : ((comp as unknown as { clips?: readonly SvgClip[] }).clips ?? []);
+  for (const clip of rawClips) {
     const start = Number(clip.start ?? 0);
     const dur = Number(clip.duration ?? 5);
     if (time < start || time > start + dur) continue;

@@ -1,4 +1,4 @@
-import type { Point } from "./shapes/primitives.js";
+import type { Point } from "./shapes/index.js";
 
 /**
  * Procedural geometry helpers. These are parameterized functions that return

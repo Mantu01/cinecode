@@ -1,4 +1,6 @@
 import type { EncoderPreset, RenderFormat, VideoCodec } from "../core/types/config.js";
+import type { AudioMuxCodec } from "../core/output-plan.js";
+import { outputExtensionFor, outputPlanFor } from "../core/output-plan.js";
 import { validateCodecContainer } from "./index.js";
 
 export type PlatformPresetId =
@@ -18,7 +20,8 @@ export type PlatformPresetId =
   | "web-gif"
   | "web-webp";
 
-export type PlatformAudioCodec = "aac" | "pcm_s16le" | "pcm_s24le" | "none";
+/** Audio codec a preset writes; "none" means the preset produces no audio. */
+export type PlatformAudioCodec = AudioMuxCodec | "none";
 
 export interface PlatformAudioSettings {
   readonly codec: PlatformAudioCodec;

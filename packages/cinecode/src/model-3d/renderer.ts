@@ -1,3 +1,4 @@
+// Size exception (>400 lines): self-contained 3d software rasterizer and mesh pipeline per quality-standards §2.
 import { createCanvas } from "@napi-rs/canvas";
 import type { Canvas } from "@napi-rs/canvas";
 import type { GLTFAPI } from "./gltf-parser.js";

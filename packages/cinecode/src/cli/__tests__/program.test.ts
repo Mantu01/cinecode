@@ -7,9 +7,9 @@ import { join } from "node:path";
 import { test, mock } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createProgram, runCli } from "../program.js";
-import { EXIT_CODES, EXIT_CODE_RULES, exitCodeForError } from "../exit-codes.js";
+import { EXIT_CODES, EXIT_CODE_RULES, exitCodeForError } from "../shared/exit-codes.js";
 import { ErrorCode } from "../../errors/codes.js";
-import { loadAliases, loadLocalAliases, resolveAliases } from "../profiles.js";
+import { loadAliases, loadLocalAliases, resolveAliases } from "../parse/profiles.js";
 
 const require = createRequire(import.meta.url);
 const cjsFs = require("node:fs") as { existsSync: (path: string) => boolean };
@@ -124,23 +124,26 @@ test("the exit-code table maps every documented failure", () => {
   );
   assert.equal(exitCodeForError("CC1001"), EXIT_CODES.validation);
   assert.equal(exitCodeForError("CC3001"), EXIT_CODES.validation);
-  assert.equal(exitCodeForError("CC7001"), EXIT_CODES.environment);
+  assert.equal(exitCodeForError("CC7001"), EXIT_CODES.unsupportedRuntime);
+  assert.equal(exitCodeForError("CC7003"), EXIT_CODES.environment);
   assert.equal(exitCodeForError("CC6002"), EXIT_CODES.environment);
   assert.equal(exitCodeForError("CC4003"), EXIT_CODES.cancelled);
   assert.equal(exitCodeForError("CC4002"), EXIT_CODES.runtime);
 });
 
-test("the exit-code table maps every documented failure", () => {
+test("the exit-code table maps unknown code to runtime fallback", () => {
   assert.deepEqual(
     { ...EXIT_CODES },
     { success: 0, runtime: 1, usage: 2, validation: 3, environment: 4, unsupportedRuntime: 78, cancelled: 130 },
   );
   assert.equal(exitCodeForError("CC1001"), EXIT_CODES.validation);
   assert.equal(exitCodeForError("CC3001"), EXIT_CODES.validation);
-  assert.equal(exitCodeForError("CC7001"), EXIT_CODES.environment);
+  assert.equal(exitCodeForError("CC7001"), EXIT_CODES.unsupportedRuntime);
+  assert.equal(exitCodeForError("CC7003"), EXIT_CODES.environment);
   assert.equal(exitCodeForError("CC6002"), EXIT_CODES.environment);
   assert.equal(exitCodeForError("CC4003"), EXIT_CODES.cancelled);
   assert.equal(exitCodeForError("CC4002"), EXIT_CODES.runtime);
+  assert.equal(exitCodeForError("UNKNOWN_CODE"), EXIT_CODES.runtime);
 });
 
 test("aliases are opt-in and fail loudly when they resolve to nothing", async () => {

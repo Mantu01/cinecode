@@ -1,3 +1,4 @@
+// Size exception (>400 lines): ffmpeg in-memory extraction and frame packet pipeline per quality-standards §2.
 import { spawn } from "node:child_process";
 import { resolveBinary } from "../binary/resolver.js";
 import { DEFAULT_IMAGES } from "../config/defaults.js";

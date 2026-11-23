@@ -15,6 +15,7 @@ export interface ResourcePlan {
   readonly frameBytes: number;
   readonly workerCount: number;
   readonly chunkSize: number;
+  readonly inProcess: boolean;
   readonly queueDepth: number;
   readonly previewShare: number;
   readonly partitions: CachePartitionSizes;
@@ -25,6 +26,7 @@ export interface ResourcePlan {
 export interface ResourcePlanInput {
   readonly width: number;
   readonly height: number;
+  readonly frameCount?: number;
   readonly concurrency?: number | "auto";
   readonly chunkSize?: number;
   readonly memoryBudgetMb?: number;
@@ -32,8 +34,19 @@ export interface ResourcePlanInput {
   readonly cpuCount?: number;
 }
 
-const DEFAULT_MEMORY_BUDGET_CAP = 2 * 1024 * 1024 * 1024; // 2 GB cap
-const MIN_MEMORY_BUDGET = 64 * 1024 * 1024; // 64 MB floor
+const DEFAULT_MEMORY_BUDGET_CAP = 2 * 1024 * 1024 * 1024;
+const MIN_MEMORY_BUDGET = 64 * 1024 * 1024;
+export const MIN_FRAMES_PER_CHUNK = 8;
+export const IN_PROCESS_FRAME_LIMIT = 8;
+export const MIN_CHUNK_SIZE = 1;
+export const MAX_CHUNK_SIZE = 100;
+
+export function availableCores(fallback = 4): number {
+  if (typeof os.availableParallelism === "function") {
+    return Math.max(1, os.availableParallelism());
+  }
+  return Math.max(1, os.cpus()?.length || fallback);
+}
 
 function getAvailableMemory(): number {
   const pMem = (process as { availableMemory?: () => number }).availableMemory;
@@ -82,27 +95,39 @@ export function createResourcePlan(input: ResourcePlanInput): ResourcePlan {
     );
   }
 
-  // Size workers by memory first, then by CPU
-  const cpus =
-    input.cpuCount ??
-    (typeof os.availableParallelism === "function" ? os.availableParallelism() : (os.cpus()?.length || 4));
-  const maxWorkersByMemory = Math.max(1, Math.floor((totalBudget * 0.5) / (frameBytes * 2)));
-
-  let workerCount: number;
-  if (typeof input.concurrency === "number" && input.concurrency > 0) {
-    workerCount = Math.min(input.concurrency, maxWorkersByMemory);
-  } else {
-    workerCount = Math.min(cpus, maxWorkersByMemory);
+  const frameCount = input.frameCount !== undefined ? Math.max(0, Math.floor(input.frameCount)) : undefined;
+  const cpus = Math.max(1, input.cpuCount ?? availableCores());
+  const explicitConcurrency = typeof input.concurrency === "number" ? input.concurrency : null;
+  if (explicitConcurrency !== null && (explicitConcurrency < 1 || explicitConcurrency > cpus * 2)) {
+    throw createError(ErrorCode.CC1012, {
+      reason: `concurrency ${explicitConcurrency} is outside the supported range 1..${cpus * 2} (cores * 2)`,
+    });
   }
-  workerCount = Math.max(1, workerCount);
+
+  const inProcess = frameCount !== undefined && frameCount > 0 && frameCount <= IN_PROCESS_FRAME_LIMIT;
+  const maxWorkersByMemory = Math.max(1, Math.floor((totalBudget * 0.5) / (frameBytes * 2)));
+  const requestedWorkers = explicitConcurrency ?? cpus;
+  const workersByFrames =
+    frameCount !== undefined && frameCount > 0
+      ? Math.ceil(frameCount / MIN_FRAMES_PER_CHUNK)
+      : cpus;
+
+  const workerCount = inProcess
+    ? 0
+    : Math.max(1, Math.min(requestedWorkers, cpus, workersByFrames, maxWorkersByMemory));
 
   // Chunk size: workerCount * chunkSize * frameBytes should fit within ~25% of budget
-  const maxChunkFrames = Math.max(1, Math.floor((totalBudget * 0.25) / (frameBytes * workerCount)));
+  const maxChunkFrames = Math.max(1, Math.floor((totalBudget * 0.25) / (frameBytes * Math.max(1, workerCount))));
+  const configuredChunkSize = typeof input.chunkSize === "number" && input.chunkSize > 0 ? input.chunkSize : MAX_CHUNK_SIZE;
   let chunkSize: number;
-  if (typeof input.chunkSize === "number" && input.chunkSize > 0) {
-    chunkSize = Math.max(1, Math.min(input.chunkSize, maxChunkFrames));
+  if (inProcess) {
+    chunkSize = Math.max(1, Math.min(configuredChunkSize, frameCount ?? 1));
+  } else if (frameCount !== undefined && frameCount > 0) {
+    const perWorker = Math.ceil(frameCount / workerCount);
+    const upper = Math.max(1, Math.min(MAX_CHUNK_SIZE, frameCount, maxChunkFrames));
+    chunkSize = Math.min(upper, Math.max(MIN_CHUNK_SIZE, Math.min(configuredChunkSize, perWorker)));
   } else {
-    chunkSize = Math.max(1, Math.min(30, maxChunkFrames));
+    chunkSize = Math.max(1, Math.min(configuredChunkSize, maxChunkFrames));
   }
 
   // Encoder queue depth
@@ -122,7 +147,8 @@ export function createResourcePlan(input: ResourcePlanInput): ResourcePlan {
     text: Math.floor(cacheBudget * 0.1),
   };
 
-  const summary = `${formatBytes(totalBudget)} total (${formatBytes(frameBytes)}/frame, ${workerCount} workers, chunk ${chunkSize}, queue ${queueDepth}, ${source})`;
+  const pool = inProcess ? "in-process" : `${workerCount} workers`;
+  const summary = `${formatBytes(totalBudget)} total (${formatBytes(frameBytes)}/frame, ${pool}, chunk ${chunkSize}, queue ${queueDepth}, ${source})`;
 
   return {
     totalBudget,
@@ -130,6 +156,7 @@ export function createResourcePlan(input: ResourcePlanInput): ResourcePlan {
     frameBytes,
     workerCount,
     chunkSize,
+    inProcess,
     queueDepth,
     previewShare,
     partitions,

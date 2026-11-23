@@ -60,7 +60,7 @@ export {
   type CinecodeIgnoreOptions,
   type IgnoreRule,
 } from "./ignore.js";
-export { defineConfig } from "./scaffold.js";
+export { defineConfig } from "../core/define/definitions.js";
 export {
   ConfigMigrationEngine,
   type MigrationResult,

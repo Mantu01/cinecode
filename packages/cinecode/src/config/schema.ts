@@ -1,3 +1,4 @@
+// Size exception (>400 lines): one canonical load/normalize path is the single source of truth for config shape.
 import { existsSync, readFileSync } from "node:fs";
 import { resolve, extname, isAbsolute, dirname } from "node:path";
 import type {
@@ -23,6 +24,7 @@ import {
   assertNoConflictingAliases,
 } from "./validator.js";
 import { rootOfConfig, validateProjectRoots } from "./roots.js";
+import { CONFIG_FILENAMES } from "./project.js";
 import { migrateV1ToV2Transform } from "./migration/engine.js";
 
 export interface LoadConfigOptions {
@@ -30,6 +32,7 @@ export interface LoadConfigOptions {
   readonly fresh?: boolean;
   /** Project root the four roots resolve against; defaults to the config folder. */
   readonly root?: string;
+  readonly allowErrors?: boolean;
 }
 
 import {
@@ -42,6 +45,7 @@ import {
   DEFAULT_COLOR_MANAGEMENT,
   DEFAULT_CHUNK_SIZE,
   calculateAdaptiveChunkSize,
+  parseMemoryBudgetMb,
   DEFAULTS,
 } from "./defaults.js";
 
@@ -58,32 +62,52 @@ export {
   DEFAULTS,
 };
 
-export const DEFAULT_CONFIG: CinecodeConfig = {
-  schemaVersion: SCHEMA_VERSION,
-  project: DEFAULT_PROJECT,
-  video: DEFAULT_VIDEO,
-  images: DEFAULT_IMAGES,
-  dev: DEFAULT_DEV,
-  sourceDir: DEFAULT_PROJECT.sourceDir,
-  mediaDir: DEFAULT_PROJECT.mediaDir,
-  outputDir: DEFAULT_PROJECT.outputDir,
-  cacheDir: DEFAULT_PROJECT.cacheDir,
-  cloudMedia: [],
-  render: DEFAULT_RENDER,
-  audio: DEFAULT_AUDIO,
-  fonts: [],
-  concurrency: "auto",
-  overwrite: false,
-  gitignore: true,
-  plugins: [],
-  pluginPrecedence: [],
-  autoDiscoverPlugins: true,
-  ignorePatterns: [],
-};
+export function deepFreeze<T>(obj: T): Readonly<T> {
+  if (obj === null || typeof obj !== "object" || Object.isFrozen(obj)) {
+    return obj;
+  }
+  Object.freeze(obj);
+  for (const value of Object.values(obj as Record<string, unknown>)) {
+    if (value !== null && typeof value === "object") {
+      deepFreeze(value);
+    }
+  }
+  return obj;
+}
+
+export function createDefaultConfig(): CinecodeConfig {
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    project: { ...DEFAULT_PROJECT },
+    video: { ...DEFAULT_VIDEO },
+    images: { ...DEFAULT_IMAGES },
+    dev: { ...DEFAULT_DEV },
+    sourceDir: DEFAULT_PROJECT.sourceDir,
+    mediaDir: DEFAULT_PROJECT.mediaDir,
+    outputDir: DEFAULT_PROJECT.outputDir,
+    cacheDir: DEFAULT_PROJECT.cacheDir,
+    cloudMedia: [],
+    render: {
+      ...DEFAULT_RENDER,
+      colorManagement: { ...DEFAULT_COLOR_MANAGEMENT },
+    },
+    audio: { ...DEFAULT_AUDIO },
+    fonts: [],
+    concurrency: "auto",
+    overwrite: false,
+    gitignore: true,
+    plugins: [],
+    pluginPrecedence: [],
+    autoDiscoverPlugins: true,
+    ignorePatterns: [],
+  };
+}
 
 export function getDefaultConfig(): CinecodeConfig {
-  return DEFAULT_CONFIG;
+  return deepFreeze(createDefaultConfig());
 }
+
+export const DEFAULT_CONFIG: CinecodeConfig = getDefaultConfig();
 
 export interface ConfigFieldTrace {
   readonly path: string;
@@ -142,7 +166,8 @@ export function explicitPathsOf(raw: unknown): ReadonlySet<string> {
 function collectExplicitPaths(value: unknown, prefix = ""): string[] {
   if (value === null || typeof value !== "object") return prefix ? [prefix] : [];
   if (Array.isArray(value)) {
-    return value.flatMap((entry, index) => collectExplicitPaths(entry, `${prefix}[${index}]`));
+    const items = value.flatMap((entry, index) => collectExplicitPaths(entry, `${prefix}[${index}]`));
+    return prefix ? [prefix, ...items] : items;
   }
   return Object.entries(value as Record<string, unknown>).flatMap(([key, child]) =>
     collectExplicitPaths(child, prefix ? `${prefix}.${key}` : key),
@@ -210,19 +235,23 @@ export async function loadConfigDocument(
     const withEnv = substituteEnvVarsDeep(rawConfig);
     const { merged, chain } = await resolveConfigInheritance(resolvedPath, withEnv, options.root);
 
-    assertNoConflictingAliases(merged, resolvedPath);
-    assertAuthoringSchema(merged, resolvedPath);
+    if (!options.allowErrors) {
+      assertNoConflictingAliases(merged, resolvedPath);
+      assertAuthoringSchema(merged, resolvedPath);
+    }
 
     const config = normalizeConfig(merged);
-    const normalized = validateNormalizedConfig(config, resolvedPath);
-    if (normalized.errors.length > 0) throw normalized.errors[0];
+    if (!options.allowErrors) {
+      const normalized = validateNormalizedConfig(config, resolvedPath);
+      if (normalized.errors.length > 0) throw normalized.errors[0];
 
-    const rootErrors = validateProjectRoots(options.root ?? rootOfConfig(resolvedPath), config, {
-      configPath: resolvedPath,
-    });
-    if (rootErrors.length > 0) {
-      (rootErrors[0] as { issues?: readonly unknown[] }).issues = rootErrors;
-      throw rootErrors[0];
+      const rootErrors = validateProjectRoots(options.root ?? rootOfConfig(resolvedPath), config, {
+        configPath: resolvedPath,
+      });
+      if (rootErrors.length > 0) {
+        (rootErrors[0] as { issues?: readonly unknown[] }).issues = rootErrors;
+        throw rootErrors[0];
+      }
     }
 
     const { setBinaryConfig } = await import("../binary/resolver.js");
@@ -235,14 +264,8 @@ export async function loadConfigDocument(
     const explicit = explicitPathsOf(merged);
     const trace = buildResolutionTrace(config, explicit, chain, resolvedPath);
 
-    // Freeze validated configuration so downstream code cannot mutate it
-    Object.freeze(config.project);
-    Object.freeze(config.video);
-    Object.freeze(config.images);
-    Object.freeze(config.dev);
-    Object.freeze(config.render);
-    Object.freeze(config.audio);
-    Object.freeze(config);
+    // Deep-freeze validated configuration so downstream code cannot mutate it
+    deepFreeze(config);
 
     return { config, explicit, trace };
   } catch (e) {
@@ -342,7 +365,6 @@ export function normalizeConfig(raw: Record<string, unknown>): CinecodeConfig {
   const background =
     rawVideo.background ??
     (raw.background as string | undefined) ??
-    (rawRender as { background?: string }).background ??
     DEFAULT_VIDEO.background;
   const duration =
     rawVideo.defaultDuration ??
@@ -358,6 +380,12 @@ export function normalizeConfig(raw: Record<string, unknown>): CinecodeConfig {
     background,
   };
 
+  const rawMemoryBudget = (rawRender as { memoryBudget?: unknown }).memoryBudget;
+  const memoryBudgetMb =
+    rawRender.memoryBudgetMb ??
+    (rawMemoryBudget !== undefined ? parseMemoryBudgetMb(rawMemoryBudget) : undefined) ??
+    DEFAULT_RENDER.memoryBudgetMb;
+
   const render: RenderConfig = {
     fps,
     resolution: `${width}x${height}`,
@@ -367,14 +395,25 @@ export function normalizeConfig(raw: Record<string, unknown>): CinecodeConfig {
     crf: rawRender.crf,
     preset: rawRender.preset ?? DEFAULT_RENDER.preset!,
     hardwareAcceleration: rawRender.hardwareAcceleration ?? DEFAULT_RENDER.hardwareAcceleration!,
-    concurrency: rawRender.concurrency ?? (raw.concurrency as number | "auto" | undefined),
+    concurrency: rawRender.concurrency ?? (raw.concurrency as number | "auto" | undefined) ?? DEFAULT_RENDER.concurrency,
     chunkSize: rawRender.chunkSize ?? DEFAULT_RENDER.chunkSize,
-    ...(rawRender.memoryBudgetMb !== undefined ? { memoryBudgetMb: rawRender.memoryBudgetMb } : {}),
-    alpha: rawRender.alpha,
-    twoPass: rawRender.twoPass,
+    memoryBudgetMb,
+    memoryBudget: (rawRender as { memoryBudget?: unknown }).memoryBudget as string | number | undefined,
+    overwrite: rawRender.overwrite ?? (raw.overwrite as boolean | undefined) ?? false,
+    alpha: rawRender.alpha ?? false,
+    twoPass: rawRender.twoPass ?? false,
     platformPreset: rawRender.platformPreset,
     bitrate: rawRender.bitrate,
     colorManagement: rawRender.colorManagement,
+    audioCodec: rawRender.audioCodec,
+    audioBitrate: rawRender.audioBitrate,
+    gifQuality: rawRender.gifQuality,
+    gifDither: rawRender.gifDither,
+    gifMaxFrames: rawRender.gifMaxFrames,
+    seed: rawRender.seed,
+    effects: rawRender.effects,
+    noEffects: rawRender.noEffects ?? false,
+    strictFonts: rawRender.strictFonts ?? false,
   };
 
   const config: CinecodeConfig = {
@@ -434,12 +473,11 @@ export function resolveConfigPath(configPath: string | undefined, cwd = process.
   return isAbsolute(configPath ?? "") ? configPath! : resolve(cwd, configPath ?? "cinecode.config.js");
 }
 
-/** Convenience: locate `cinecode.config.{ts,js,mjs,json}` in a directory. */
+/** Convenience: locate any canonical cinecode config in a directory. */
 export function findConfigFile(dir = process.cwd()): string {
-  const candidates = ["cinecode.config.ts", "cinecode.config.js", "cinecode.config.mjs", "cinecode.config.json"];
-  for (const candidate of candidates) {
+  for (const candidate of CONFIG_FILENAMES) {
     const full = resolve(dir, candidate);
     if (existsSync(full)) return full;
   }
-  return resolve(dir, "cinecode.config.js");
+  return resolve(dir, CONFIG_FILENAMES[0]);
 }

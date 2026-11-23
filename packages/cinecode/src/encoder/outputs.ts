@@ -1,3 +1,4 @@
+// Size exception (>400 lines): comprehensive output format and muxer mappings per quality-standards §2.
 import { spawn } from "node:child_process";
 import { resolveBinary } from "../binary/resolver.js";
 import { recordProcessSpawn } from "../media/instrumentation.js";
@@ -8,6 +9,7 @@ import { dirname, join } from "node:path";
 import { Canvas, loadImage } from "@napi-rs/canvas";
 import { buildHdrColorArgs, type HdrMetadata } from "./index.js";
 import { createError, ErrorCode } from "../errors/index.js";
+import type { GifDitherMode } from "../core/output-plan.js";
 
 /**
  * Output-side media operations: format conversion, stitching, splitting,
@@ -340,7 +342,7 @@ export interface AnimatedGifOptions {
   /** Palette quality 1–8 (higher = more colors, larger file). */
   readonly quality?: number;
   /** Dithering algorithm: floyd-steinberg, sierra-2, atkinson, or none. */
-  readonly dither?: "floyd-steinberg" | "sierra-2" | "atkinson" | "none";
+  readonly dither?: GifDitherMode;
   /** Number of loop iterations; 0 = infinite. */
   readonly loops?: number;
   readonly maxFrames?: number;

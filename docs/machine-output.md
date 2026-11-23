@@ -74,32 +74,32 @@ Schema version: `1` (`MACHINE_SCHEMA_VERSION` in the CLI package).
 | Command | Result Shape Type | Declared Properties |
 | --- | --- | --- |
 | `cinecode dev` | `object` | port, host, url, pid |
-| `cinecode preview` | `object` | port, url, pid |
-| `cinecode render` | `object` | rendered, budget, audioPlacements, presets, chunkSize, hardwareAcceleration, explain, dryRun |
+| `cinecode preview` | `object` | port, host, url, pid |
+| `cinecode render` | `object` | rendered, budget, audioPlacements, audio, presets, chunkSize, hardwareAcceleration, explain, dryRun, variants |
 | `cinecode still` | `object` | composition, frame, output, format, explain |
-| `cinecode generate` | `object` | generated, kind, count |
+| `cinecode generate` | `object` | generated, kind, count, audio, chunkSize, hardwareAcceleration, audioPlacements, presets, budget, rendered |
 | `cinecode validate` | `object` | valid, mode, stoppedAtGate, notes, contract, categories, errors, warnings, manifest, config, references |
-| `cinecode clean` | `object` | deleted, cleaned, cache, output, files, bytes, summary, dryRun, spoolsSwept, spoolsBytes |
-| `cinecode init` | `object` | created, directory, path, dryRun, template, name |
-| `cinecode doctor` | `object` | passed, checks, system |
-| `cinecode inspect` | `object` | composition, tracks, manifest, compositions, timelines, scenes, assets, explain, references, resolution |
+| `cinecode clean` | `object` | deleted, cleaned, cache, output, prune, files, bytes, summary, dryRun, spoolsSwept, spoolsBytes |
+| `cinecode init` | `object` | created, directory, path, dryRun, template, name, files, configValid, manifestValid, entryInsideProject, sourceDirExists, mediaDirExists, gitignoreExists, gitWarning, verificationErrors |
+| `cinecode doctor` | `object` | passed, healthy, isProject, sections, checks, notes, system, ffmpeg, node, workers, diskSpace, gpu, issues, fix |
+| `cinecode inspect` | `object` | composition, tracks, manifest, compositions, timelines, scenes, assets, explain, references, resolution, fps, duration, totalFrames, background, validation, clips, deep, format, graph, determinism |
 | `cinecode media` | `object` | media, total, missing, unused, downloaded, skipped, failed, files |
-| `cinecode plugin` | `object` | plugins, action, target |
+| `cinecode plugin` | `object` | plugins, action, target, files |
 | `cinecode formats` | `object` | output, input, helpers, planned, formats |
 | `cinecode presets` | `object` | presets, preset, name, width, height, fps |
-| `cinecode thumbnail` | `object` | thumbnail, frame, files, candidates, score |
+| `cinecode thumbnail` | `object` | thumbnail, frame, frames, files, candidates, score, dryRun |
 | `cinecode export-svg` | `object` | files, composition, frames, frame, output |
-| `cinecode story` | `object` | bundle, composition, html, frames, slides |
+| `cinecode story` | `object` | bundle, composition, generated, html, frames, slides |
 | `cinecode tts` | `object` | voices, language, provider, generated |
-| `cinecode compare` | `object` | similarity, diff, metrics, images, identical |
-| `cinecode diff` | `object` | changes, differences, equal, files, patch |
-| `cinecode audit` | `object` | licenses, status, scannedDependencies, scannedAssets, vulnerabilities, issues |
-| `cinecode benchmark` | `object` | fps, frameTimeMs, frames, averageMs, peakMemoryMb, workers, totalMs, minMs, p95Ms, maxMs, comparison |
-| `cinecode migrate` | `object` | migrated, output |
-| `cinecode check-ignore` | `object` | ignored, included, paths |
-| `cinecode alias` | `object` | aliases, name, expansion, action |
+| `cinecode compare` | `object` | similarity, diff, metrics, images, identical, frames, averageDifference, maxDifference, worstFrames |
+| `cinecode diff` | `object` | diff, changes, differences, equal, files, patch, compositionA, compositionB, durationA, durationB, summary, fileA, fileB |
+| `cinecode audit` | `object` | licenses, status, scannedRoots, scannedDependencies, scannedAssets, vulnerabilities, issues, timestamp, summary |
+| `cinecode benchmark` | `object` | fps, frameTimeMs, frames, averageMs, peakMemoryMb, workers, totalMs, minMs, p95Ms, maxMs, comparison, dryRun |
+| `cinecode migrate` | `object` | migrated, output, originalVersion, targetVersion, dryRun, modified, diff, newContent |
+| `cinecode check-ignore` | `object` | ignored, included, paths, hasIgnored |
+| `cinecode alias` | `object` | aliases, enabled, name, expansion, action, removed, migrated |
 | `cinecode publish` | `object` | published, destination, success, target, message, url |
-| `cinecode upgrade` | `object` | current, latest, currentVersion, latestVersion, upToDate, changelogUrl, breakingChanges |
+| `cinecode upgrade` | `object` | current, latest, currentVersion, requiresConfirm, latestVersion, hasUpgrade, upToDate, checkFailed, upgradeCommand, networkTarget, changelogUrl, breakingChanges |
 | `cinecode help` | `object` | help, commands, command, usage, options |
 | `cinecode version` | `object` | version, framework, node |
 | `cinecode licence` | `object` | license, text, dependencies |

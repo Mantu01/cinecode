@@ -3,8 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
-import { createProjectResolver } from "../project-resolver.js";
-import { downloadFileAtomic } from "../media-download.js";
+import { createProjectResolver } from "../resolve/project-resolver.js";
+import { downloadFileAtomic } from "../pipeline/media-download.js";
 import { ensureGitignoreEntries } from "../../config/gitignore.js";
 import { ErrorCode } from "../../errors/index.js";
 

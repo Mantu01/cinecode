@@ -1,4 +1,7 @@
-import pc from "picocolors";
+import { createColors } from "picocolors";
+import { colorEnabled, isVerbose } from "./invocation-context.js";
+
+const pc = createColors(colorEnabled());
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 export type LogFormat = "text" | "json";
@@ -34,7 +37,7 @@ export class StructuredLogger {
   private traceId?: string;
 
   constructor(options: LoggerOptions = {}) {
-    const verbose = process.env.CINECODE_VERBOSE === "1" || process.env.CINECODE_LOG_LEVEL === "debug";
+    const verbose = isVerbose();
     this.level = options.level ?? (process.env.CINECODE_LOG_LEVEL as LogLevel) ?? (verbose ? "debug" : "info");
     this.format = options.format ?? (process.env.CINECODE_LOG_FORMAT as LogFormat) ?? "text";
     this.service = options.service ?? "cinecode";

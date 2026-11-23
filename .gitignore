@@ -28,7 +28,8 @@ build
 dist
 dist-test
 packages/cinecode/src/version.generated.ts
-
+.fixtures
+graphify-out
 
 # Debug
 npm-debug.log*

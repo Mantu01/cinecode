@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PluginRegistry } from "../registry.js";
-import { createWorkerManager } from "../../pipeline/workers.js";
+import { createWorkerManager, createChunkIdentity } from "../../pipeline/workers.js";
 import type { Composition } from "../../core/types/index.js";
 
 function createMockComposition(name: string, width = 16, height = 16): Composition {
@@ -72,7 +72,7 @@ describe("Phase 31: Plugin lifecycle and capabilities", () => {
     });
 
     try {
-      const results = await manager.processChunks([{ startFrame: 0, endFrame: 0, frames: [0] }]);
+      const results = await manager.processChunks([{ identity: createChunkIdentity(0, 0, 0, 1), startFrame: 0, endFrame: 0, frames: [0] }]);
       assert.equal(results.length, 1);
       assert.equal(results[0]!.frames.length, 1);
       const buf = results[0]!.frames[0]!.buffer;

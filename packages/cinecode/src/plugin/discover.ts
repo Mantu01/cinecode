@@ -242,7 +242,7 @@ export async function discoverPlugins(baseDir: string): Promise<readonly Cinecod
   const { plugins, warnings } = await discoverPluginsDetailed(baseDir);
   for (const warning of warnings) {
     recordDegradation({
-      code: "CC7001",
+      code: "CC8006",
       what: "plugin discovery warning",
       reason: warning,
       instead: "plugin skipped",

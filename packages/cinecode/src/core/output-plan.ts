@@ -1,5 +1,5 @@
+// Size exception (>400 lines): canonical output resolution, codec and mux planning per quality-standards §2.
 import type { VideoCodec } from "./types/config.js";
-import type { AudioMuxCodec, MuxContainer } from "../audio/muxer.js";
 import { createError, ErrorCode } from "../errors/codes.js";
 
 /** Every output format the framework can produce. The only format enum. */
@@ -27,6 +27,20 @@ export const INPUT_ONLY_FORMATS = ["wav", "mp3", "flac", "aac", "ogg", "opus", "
 /** How frames reach the writer: live pipe, animation, sequence, still or document. */
 export type OutputStrategy = "stream" | "animation" | "sequence" | "still" | "document";
 
+/** GIF dithering algorithms, in CLI order. */
+export const GIF_DITHER_MODES = ["floyd-steinberg", "sierra-2", "atkinson", "none"] as const;
+
+export type GifDitherMode = (typeof GIF_DITHER_MODES)[number];
+
+/** The one codec that carries an alpha channel for an alpha format. */
+export const ALPHA_CODECS: Readonly<Partial<Record<RenderFormat, VideoCodec>>> = {
+  "webm-alpha": "vp9",
+  "prores-alpha": "prores",
+};
+
+/** Codec used when a format lists codecs but names no default. */
+export const DEFAULT_VIDEO_CODEC: VideoCodec = "h264";
+
 export type OutputContainer =
   | "mp4"
   | "webm"
@@ -36,6 +50,37 @@ export type OutputContainer =
   | "apng"
   | "gif"
   | "pdf";
+
+/** Audio mux codec universe: exactly the union of every format's audio codec list. */
+export const ALL_AUDIO_CODECS = [
+  "aac",
+  "ac3",
+  "eac3",
+  "flac",
+  "opus",
+  "pcm_s24le",
+] as const satisfies readonly string[];
+
+export type AudioMuxCodec = (typeof ALL_AUDIO_CODECS)[number];
+
+/** ffmpeg pixel format used when a format's plan names none. */
+export const DEFAULT_PIX_FMT: Readonly<Record<VideoCodec, string>> = {
+  h264: "yuv420p",
+  h265: "yuv420p",
+  av1: "yuv420p",
+  vp9: "yuv420p",
+  prores: "yuv422p10le",
+  ffv1: "yuv444p10le",
+  utvideo: "yuv422p",
+};
+
+/** Pixel format for a codec, preferring the codec's canonical layout. */
+export function codecPixFmt(codec: VideoCodec): string {
+  return DEFAULT_PIX_FMT[codec];
+}
+
+/** Muxer container a format's audio stream is written into. */
+export type MuxContainer = "mp4" | "webm" | "mov" | "matroska" | "avi";
 
 export interface OutputAudioPlan {
   readonly codecs: readonly AudioMuxCodec[];
@@ -256,6 +301,36 @@ export const OUTPUT_PLANS: Readonly<Record<RenderFormat, OutputPlan>> = {
 export const ALPHA_FORMATS = OUTPUT_FORMATS.filter((format) => OUTPUT_PLANS[format].alpha);
 export const STILL_FORMATS: readonly RenderFormat[] = ["png", "jpg", "webp"];
 export const STREAM_FORMATS = OUTPUT_FORMATS.filter((format) => OUTPUT_PLANS[format].strategy === "stream");
+
+/** Video codec universe: exactly the union of every format's codec list in OUTPUT_PLANS. */
+export const ALL_VIDEO_CODECS = [
+  "h264",
+  "h265",
+  "av1",
+  "vp9",
+  "prores",
+  "ffv1",
+  "utvideo",
+] as const satisfies readonly string[];
+
+/** One validation helper for format capabilities, derived from OUTPUT_PLANS. */
+export interface FormatCapability {
+  readonly codecAllowed: (codec: VideoCodec) => boolean;
+  readonly alpha: boolean;
+  readonly audio: boolean;
+  readonly stream: boolean;
+}
+
+/** Answers codec, alpha, audio, stream questions for a format from the canonical table. */
+export function formatCapability(format: RenderFormat | undefined): FormatCapability {
+  const plan = outputPlanFor(format);
+  return {
+    codecAllowed: (codec: VideoCodec): boolean => plan.codecs.includes(codec),
+    alpha: plan.alpha,
+    audio: plan.audio !== undefined,
+    stream: plan.strategy === "stream",
+  };
+}
 
 export function outputPlanFor(format: RenderFormat | undefined): OutputPlan {
   const resolved = format ?? "mp4";

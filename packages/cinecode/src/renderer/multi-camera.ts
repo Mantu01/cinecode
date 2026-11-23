@@ -7,6 +7,8 @@ import {
   type MultiCameraFrameState,
 } from "../core/clips/multi-camera.js";
 
+import { evictOldestWithDispose } from "./pool.js";
+
 export interface MultiCameraRenderOptions {
   readonly frame: number;
   readonly fps: number;
@@ -25,11 +27,24 @@ export interface MultiCameraPreviewOptions extends MultiCameraRenderOptions {
   readonly maxCameras?: number;
 }
 
+const MULTI_CAMERA_MODEL_CACHE_MAX = 8;
 const modelCache = new Map<string, import("../model-3d/renderer.js").Model3dRenderer>();
+
+export function clearMultiCameraCache(): void {
+  for (const renderer of modelCache.values()) {
+    try {
+      renderer.dispose();
+    } catch {
+      // Note: best-effort disposal
+    }
+  }
+  modelCache.clear();
+}
 
 async function getRenderer(src: string): Promise<import("../model-3d/renderer.js").Model3dRenderer> {
   const cached = modelCache.get(src);
   if (cached) return cached;
+  evictOldestWithDispose(modelCache, MULTI_CAMERA_MODEL_CACHE_MAX);
   const { Model3dRenderer } = await import("../model-3d/renderer.js");
   const renderer = new Model3dRenderer();
   await renderer.loadModel(src);

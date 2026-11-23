@@ -16,6 +16,23 @@ import { selectLanguage } from "./prompt.js";
 import type { Language } from "./prompt.js";
 
 export const FRAMEWORK_RANGE = "^1.0.0";
+const TEMPLATES_DIR = resolve(__dirname, "templates");
+
+export function availableTemplates(): string[] {
+  return readdirSync(TEMPLATES_DIR, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+}
+
+/** Same rule as the CLI: lowercase, separators become hyphens, invalid runs removed. */
+export function slugifyPackageName(value: string): string {
+  const slug = value.trim().toLowerCase().replace(/[\s_]+/g, "-").replace(/[^a-z0-9]+/g, "-").replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "");
+  if (!/^[a-z0-9][a-z0-9-]{0,213}$/.test(slug)) {
+    throw new Error(`Invalid project name "${value}": expected lowercase letters, digits, and single hyphens.`);
+  }
+  return slug;
+}
 
 export const CREATE_CINECODE_VERSION = JSON.parse(
   readFileSync(resolve(__dirname, "../../package.json"), "utf8"),
@@ -24,6 +41,8 @@ export const CREATE_CINECODE_VERSION = JSON.parse(
 export interface ScaffoldOptions {
   readonly targetDir: string;
   readonly language: Language;
+  readonly name?: string;
+  readonly template?: string;
   readonly fps: number;
   readonly resolution: string;
   readonly noGit: boolean;
@@ -42,7 +61,6 @@ export interface FilePlan {
 
 export interface ScaffoldPlan {
   readonly files: readonly FilePlan[];
-  readonly folders: readonly string[];
   readonly gitignoreEntries: readonly string[];
   readonly gitInit: boolean;
 }
@@ -51,11 +69,16 @@ function renderTemplate(template: string, vars: Record<string, string>): string 
   return template.replace(/\{\{(\w+)\}\}/g, (_, key: string) => vars[key] ?? "");
 }
 
-function getTemplateDir(language: Language): string {
-  return resolve(__dirname, "templates", language);
+function resolveTemplateDir(template: string | undefined, language: Language): string {
+  const name = template ?? language;
+  const dir = resolve(TEMPLATES_DIR, name);
+  if (!existsSync(dir)) {
+    throw new Error(`Unknown template "${name}". Available: ${availableTemplates().join(", ")}`);
+  }
+  return dir;
 }
 
-function listTemplateFiles(language: Language): string[] {
+function listTemplateFiles(templateDir: string): string[] {
   const files: string[] = [];
 
   function walk(dir: string, prefix: string): void {
@@ -72,7 +95,7 @@ function listTemplateFiles(language: Language): string[] {
     }
   }
 
-  walk(getTemplateDir(language), "");
+  walk(templateDir, "");
   return files;
 }
 
@@ -89,6 +112,7 @@ function generateScaffoldPlan(options: ScaffoldOptions): ScaffoldPlan {
   const isTypeScript = language === "typescript";
   const [width, height] = resolution.split("x").map(Number);
   const dep = resolveCinecodeDep(localLink);
+  const templateDir = resolveTemplateDir(options.template, language);
 
   const vars = {
     FPS: String(fps),
@@ -99,12 +123,13 @@ function generateScaffoldPlan(options: ScaffoldOptions): ScaffoldPlan {
     CONFIG_EXT: isTypeScript ? "ts" : "js",
     LANGUAGE: language,
     CINECODE_DEP: dep,
-    PROJECT_NAME: basename(targetDir),
+    PROJECT_NAME: slugifyPackageName(options.name ?? basename(targetDir)),
+    TYPECHECK_SCRIPT: "tsc --noEmit",
   };
 
   const files: FilePlan[] = [];
-  for (const relPath of listTemplateFiles(language)) {
-    const content = readFileSync(resolve(getTemplateDir(language), relPath), "utf-8");
+  for (const relPath of listTemplateFiles(templateDir)) {
+    const content = readFileSync(resolve(templateDir, relPath), "utf-8");
     const rendered = content.includes("{{") ? renderTemplate(content, vars) : content;
     files.push({ path: resolve(targetDir, relPath), content: rendered });
   }
@@ -113,13 +138,11 @@ function generateScaffoldPlan(options: ScaffoldOptions): ScaffoldPlan {
     files.push({ path: resolve(targetDir, "output/.gitkeep"), content: "" });
   }
 
-  const folders: string[] = [];
-
   const gitignoreEntries = ["output", ".cinecode/cache"];
 
   const gitInit = !noGit && !existsSync(resolve(targetDir, ".git"));
 
-  return { files, folders, gitignoreEntries, gitInit };
+  return { files, gitignoreEntries, gitInit };
 }
 
 const CONFIG_NAMES = [
@@ -186,11 +209,6 @@ async function checkTargetDir(targetDir: string, force: boolean): Promise<string
 async function executePlan(plan: ScaffoldPlan, options: ScaffoldOptions): Promise<void> {
   const { targetDir, verbose } = options;
 
-  for (const folder of plan.folders) {
-    if (verbose) console.log(`mkdir ${relative(process.cwd(), folder)}`);
-    mkdirSync(folder, { recursive: true });
-  }
-
   for (const file of plan.files) {
     const relPath = relative(process.cwd(), file.path);
     if (verbose) console.log(`write ${relPath}`);
@@ -201,7 +219,11 @@ async function executePlan(plan: ScaffoldPlan, options: ScaffoldOptions): Promis
   if (plan.gitInit) {
     if (verbose) console.log("git init");
     const { execSync } = await import("node:child_process");
-    execSync("git init", { cwd: targetDir, stdio: "pipe" });
+    try {
+      execSync("git init", { cwd: targetDir, stdio: "pipe" });
+    } catch {
+      console.error("Warning: git is not available; skipping repository initialization.");
+    }
   }
 
   if (plan.gitignoreEntries.length > 0) {
@@ -257,12 +279,11 @@ async function installDependencies(
     if (result.stdout && !verbose) {
       console.log(result.stdout);
     }
-    throw new Error(`Dependency installation failed running '${fullCmd}' with exit code ${result.status ?? "unknown"}`);
+    throw new Error(
+      `Dependency installation failed running '${fullCmd}' with exit code ${result.status ?? "unknown"}. ` +
+        `Project files are intact. Retry with: cd ${targetDir} && ${fullCmd}`,
+    );
   }
-}
-
-async function runDoctor(verbose: boolean): Promise<void> {
-  if (verbose) console.log("doctor check skipped (run 'cinecode doctor' manually)");
 }
 
 function printNextSteps(targetDir: string, pm: PackageManager): void {
@@ -308,13 +329,6 @@ async function verifyScaffold(targetDir: string, language: Language, verbose: bo
   if (!deps?.cinecode) {
     throw new Error(`Scaffold verification failed: package.json does not declare cinecode dependency`);
   }
-  const scripts = pkg.scripts as Record<string, string> | undefined;
-  for (const script of ["dev", "preview", "render", "render:all", "still", "validate", "clean", "typecheck"]) {
-    if (!scripts?.[script]) {
-      throw new Error(`Scaffold verification failed: package.json missing required script "${script}"`);
-    }
-  }
-
   if (!existsSync(manifestPath)) {
     throw new Error(`Scaffold verification failed: manifest file missing at ${manifestPath}`);
   }
@@ -322,12 +336,19 @@ async function verifyScaffold(targetDir: string, language: Language, verbose: bo
   if (!manifestContent.includes("defineMain")) {
     throw new Error(`Scaffold verification failed: manifest at ${manifestPath} does not export defineMain`);
   }
-  if (!manifestContent.includes("intro") || !manifestContent.includes("main")) {
-    throw new Error(`Scaffold verification failed: manifest does not declare expected intro scene or main timeline`);
+
+  const entryMatch = /entry:\s*"([^"]+)"/.exec(configContent);
+  if (entryMatch) {
+    const entryPath = resolve(targetDir, entryMatch[1]!);
+    if (relative(targetDir, entryPath).startsWith("..")) {
+      throw new Error(`Scaffold verification failed: manifest entry escapes the project: ${entryPath}`);
+    }
   }
 
   const expectedSourceFiles = [
     `src/scenes/intro.${ext}`,
+    `src/timelines/main.${ext}`,
+    `src/components/title-card.${ext}`,
     "media/README.md",
     "output/.gitkeep",
     ".gitignore",
@@ -340,7 +361,10 @@ async function verifyScaffold(targetDir: string, language: Language, verbose: bo
   }
 
   if (verbose) {
-    console.log("Scaffold post-verification passed: config, manifest, timelines, and source files verified.");
+    for (const rel of ["config", "manifest", "package.json", "entry", ...expectedSourceFiles]) {
+      console.log(`  verified ${rel}`);
+    }
+    console.log("Scaffold post-verification passed: config, manifest, and project contract verified.");
   }
 }
 
@@ -360,9 +384,6 @@ export async function scaffoldCommand(options: ScaffoldOptions): Promise<void> {
   if (dryRun) {
     console.log("Dry run - would create:");
     console.log("");
-    for (const folder of plan.folders) {
-      console.log(`  mkdir ${relative(process.cwd(), folder)}/`);
-    }
     for (const file of plan.files) {
       console.log(`  write ${relative(process.cwd(), file.path)}`);
     }
@@ -388,7 +409,6 @@ export async function scaffoldCommand(options: ScaffoldOptions): Promise<void> {
   }
 
   await installDependencies(targetDir, pm, verbose);
-  await runDoctor(verbose);
   printNextSteps(targetDir, pm);
 }
 
@@ -399,8 +419,10 @@ export function createScaffoldCommand(): Command {
     .argument("<directory>", "Target directory")
     .option("--ts", "Use TypeScript (skips the language prompt)", false)
     .option("--js", "Use JavaScript (skips the language prompt)", false)
+    .option("-n, --name <name>", "Project package name (slugified)")
+    .option("-t, --template <name>", `Template directory (${availableTemplates().join(", ")})`)
     .option("--fps <number>", "Frames per second", "30")
-    .option("--resolution <preset|WxH>", "Resolution preset or WxH", "1920x1080")
+    .option("--resolution <WxH>", "Resolution geometry, e.g. 1920x1080", "1920x1080")
     .option("--no-git", "Skip git initialization")
     .option("--local-link", "Use local workspace dependency for development", false)
     .option("--skip-install", "Skip dependency installation", false)
@@ -413,6 +435,8 @@ export function createScaffoldCommand(): Command {
         opts: {
           ts?: boolean;
           js?: boolean;
+          name?: string;
+          template?: string;
           fps?: string;
           resolution?: string;
           git?: boolean;
@@ -434,14 +458,42 @@ export function createScaffoldCommand(): Command {
         if (opts.ts) language = "typescript";
         if (opts.js) language = "javascript";
 
+        if (opts.template !== undefined) {
+          if (!availableTemplates().includes(opts.template)) {
+            console.error(`Unknown template "${opts.template}". Available: ${availableTemplates().join(", ")}`);
+            process.exitCode = 2;
+            return;
+          }
+          if (opts.template === "javascript" && opts.ts) {
+            console.error("Conflicting flags: --ts and template \"javascript\" cannot be used together.");
+            process.exitCode = 2;
+            return;
+          }
+          if (opts.template !== "javascript" && opts.js) {
+            console.error(`Conflicting flags: --js and template "${opts.template}" cannot be used together.`);
+            process.exitCode = 2;
+            return;
+          }
+          language = opts.template === "javascript" ? "javascript" : "typescript";
+        }
+
         if (!language) {
           language = await selectLanguage();
         }
 
+        let projectName: string | undefined;
+        try {
+          projectName = opts.name !== undefined ? slugifyPackageName(opts.name) : undefined;
+        } catch (err) {
+          console.error((err as Error).message);
+          process.exitCode = 2;
+          return;
+        }
+
         const fpsInput = opts.fps ?? "30";
         const fps = parseInt(fpsInput, 10);
-        if (isNaN(fps) || fps < 1 || fps > 120) {
-          console.error("FPS must be a number between 1 and 120");
+        if (isNaN(fps) || fps < 1 || fps > 240) {
+          console.error("FPS must be a number between 1 and 240");
           process.exit(1);
         }
 
@@ -457,6 +509,8 @@ export function createScaffoldCommand(): Command {
         await scaffoldCommand({
           targetDir,
           language,
+          name: projectName,
+          template: opts.template,
           fps,
           resolution,
           noGit: opts.git === false,

@@ -45,12 +45,6 @@ export default defineConfig({
     chunkSize: 50,
   },
 
-  images: {
-    defaultFormat: "png",
-    quality: 90,
-    scaleFactor: 1,
-  },
-
   audio: {
     sampleRate: 48000,
     channels: 2,

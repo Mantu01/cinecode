@@ -52,7 +52,7 @@ Start the dev server with HMR
 - **Category:** `product`
 - **Kind:** `read`
 - **Surface Contract:** Reads: `[cinecode.config.ts, source timelines and assets]`, Writes: `[.cinecode/cache, .cinecode/spool]`
-- **Requires Project:** `yes` (Selector: `optional`)
+- **Requires Project:** `yes` (Selector: `none`)
 
 #### Options
 
@@ -62,6 +62,7 @@ Start the dev server with HMR
 | `--host <host>` | `string` | `"127.0.0.1"` | Host to bind | — |
 | `--open` | `boolean` | `false` | Open the preview in the browser | — |
 | `--no-hmr` | `boolean` | `false` | Disable the HMR socket push | — |
+| `--allow-network` | `boolean` | `false` | Allow binding beyond loopback (warns) | — |
 
 #### Examples
 
@@ -76,7 +77,7 @@ Start the read-only preview server and open viewer
 - **Category:** `product`
 - **Kind:** `read`
 - **Surface Contract:** Reads: `[cinecode.config.ts, source timelines and assets]`, Writes: `[.cinecode/cache]`
-- **Requires Project:** `yes` (Selector: `optional`)
+- **Requires Project:** `yes` (Selector: `selection`)
 
 #### Options
 
@@ -85,6 +86,7 @@ Start the read-only preview server and open viewer
 | `-p, --port <number>` | `number` | `3000` | Port to listen on | [1..65535] |
 | `--host <host>` | `string` | `"127.0.0.1"` | Host to bind | — |
 | `--open` | `boolean` | `false` | Open the preview in the browser | — |
+| `--allow-network` | `boolean` | `false` | Allow binding beyond loopback (warns) | — |
 | `-T, --timeline <id>` | `string` | — | Timeline id from main.ts | — |
 | `-s, --scene <id>` | `string` | — | Scene id from main.ts | — |
 
@@ -117,35 +119,35 @@ Render timelines or a composition to a video
 | `-o, --out <path>` | `path` | — | Output file path | — |
 | `--from <time>` | `string` | — | Start time | — |
 | `--to <time>` | `string` | — | End time (clamped with degradation CC4001 if exceeding duration) | — |
-| `--format <format>` | `enum` | — | Output container format: mp4, mov, webm, gif, prores, wav, mp3 | `mp4`, `mov`, `webm`, `gif`, `prores`, `wav`, `mp3` |
-| `--codec <codec>` | `enum` | — | Video codec: h264, h265, prores, vp9, av1, raw | `h264`, `h265`, `prores`, `vp9`, `av1`, `raw` |
-| `-q, --quality <level>` | `enum` | — | Output quality level | `draft`, `preview`, `medium`, `final`, `lossless`, `low`, `high` |
+| `--format <format>` | `enum` | — | Output container format: mp4, webm, prores, mkv, avi, gif, apng, png, jpg, webp, pdf, webm-alpha, prores-alpha | `mp4`, `webm`, `prores`, `mkv`, `avi`, `gif`, `apng`, `png`, `jpg`, `webp`, `pdf`, `webm-alpha`, `prores-alpha` |
+| `--codec <codec>` | `enum` | — | Video codec: h264, h265, av1, vp9, prores, ffv1, utvideo | `h264`, `h265`, `av1`, `vp9`, `prores`, `ffv1`, `utvideo` |
+| `-q, --quality <level>` | `enum` | — | Output quality level: draft, preview, medium, final, lossless, low, high | `draft`, `preview`, `medium`, `final`, `lossless`, `low`, `high` |
 | `--crf <n>` | `number` | — | Constant Rate Factor (0-51) | [0..51] |
 | `--preset <name>` | `string` | — | Platform preset (youtube-1080p, youtube-4k, youtube-shorts, tiktok, instagram-reels, instagram-feed-square, instagram-feed-portrait, instagram-post, linkedin, twitter, vimeo-pro, broadcast-sdi, archival-master, web-gif, web-webp) | — |
 | `--fps <n>` | `number` | — | Override composition framerate | [1..240] |
 | `--resolution <WIDTHxHEIGHT>` | `string` | — | Override resolution | — |
 | `--resolutions <list>` | `string` | — | Comma-separated resolutions to render | — |
 | `--variants <list>` | `string` | — | Comma-separated variants to render | — |
-| `--concurrency <n|auto>` | `string` | `"auto"` | Worker thread concurrency | — |
+| `--concurrency <n|auto>` | `string` | — | Worker thread concurrency | — |
 | `--chunk-size <frames>` | `number` | — | Frames per worker chunk | [1..10000] |
-| `--hardware-acceleration <mode>` | `enum` | — | Encoder backend: auto, nvenc, videotoolbox, vaapi, none | `auto`, `nvenc`, `videotoolbox`, `vaapi`, `none` |
+| `--hardware-acceleration <mode>` | `enum` | — | Encoder backend: auto, nvenc, videotoolbox, qsv, off | `auto`, `nvenc`, `videotoolbox`, `qsv`, `off` |
 | `-r, --range <range>` | `string` | — | Frame range to render (e.g. 0-100) | — |
 | `--dry-run` | `boolean` | `false` | Print render plan without rendering | — |
 | `--fresh` | `boolean` | `false` | Ignore caches and render every frame anew | — |
 | `--resume` | `boolean` | `false` | Resume from the last durable render checkpoint | — |
 | `--no-cache` | `boolean` | `false` | Do not read or write the frame cache | — |
-| `--overwrite` | `boolean` | `false` | Overwrite output file if it exists | — |
+| `--overwrite` | `boolean` | — | Overwrite output file if it exists | — |
 | `--allow-invalid` | `boolean` | `false` | Render even when timeline validation reports fatal issues | — |
-| `--strict` | `boolean` | `false` | Fail when text glyphs fall back to another font family | — |
+| `--strict` | `boolean` | — | Fail when text glyphs fall back to another font family | — |
 | `--seed <number>` | `number` | — | Random seed | [0..+∞] |
-| `--memory-budget <bytes>` | `string` | `"1GB"` | Max memory for chunk buffers (e.g. 2GB, 512MB) | — |
-| `--no-effects` | `boolean` | `false` | Disable all effects (fastest render) | — |
+| `--memory-budget <bytes>` | `string` | — | Max memory for chunk buffers (e.g. 2GB, 512MB) | — |
+| `--no-effects` | `boolean` | — | Disable all effects (fastest render) | — |
 | `--effects <list>` | `string` | — | Comma-separated list of effects to apply | — |
-| `--alpha` | `boolean` | `false` | Render with alpha channel (transparent background) | — |
-| `--two-pass` | `boolean` | `false` | Enable two-pass video encoding | — |
+| `--alpha` | `boolean` | — | Render with alpha channel (transparent background) | — |
+| `--two-pass` | `boolean` | — | Enable two-pass video encoding | — |
 | `--bitrate <rate>` | `string` | — | Video bitrate target (e.g. 5000k) | — |
 | `--with-audio` | `boolean` | `false` | Keep an audio stream even when the mix is silent | — |
-| `--audio-codec <codec>` | `enum` | — | Audio codec: aac, opus, ac3, eac3, flac, pcm_s24le | `aac`, `opus`, `ac3`, `eac3`, `flac`, `pcm_s24le` |
+| `--audio-codec <codec>` | `enum` | — | Audio codec: aac, ac3, eac3, flac, opus, pcm_s24le | `aac`, `ac3`, `eac3`, `flac`, `opus`, `pcm_s24le` |
 | `--audio-bitrate <kbps>` | `number` | — | Audio bitrate in kbps for lossy codecs | [8..1024] |
 | `--color-management <space>` | `enum` | — | Color management mode: srgb or linear | `srgb`, `linear` |
 | `--lut <path>` | `path` | — | Path to a .cube LUT file for color grading | — |
@@ -153,6 +155,7 @@ Render timelines or a composition to a video
 | `--gif-dither <mode>` | `enum` | — | GIF dithering | `floyd-steinberg`, `sierra-2`, `atkinson`, `none` |
 | `--gif-max-frames <n>` | `number` | — | Maximum frames in GIF output | [1..+∞] |
 | `--list-presets` | `boolean` | `false` | List available platform presets | — |
+| `--frame-error-policy <policy>` | `enum` | — | Frame render error handling policy: placeholder, repeat-previous, abort | `placeholder`, `repeat-previous`, `abort` |
 | `--explain` | `boolean` | `false` | Print resolved parameters and their origins without rendering | — |
 
 #### Examples
@@ -182,10 +185,11 @@ Render a single frame to PNG or JPEG
 | `-f, --frame <number>` | `number` | — | Frame number | [0..+∞] |
 | `--time <time>` | `string` | — | Time (00:00:01.000) | — |
 | `-o, --out <path>` | `path` | — | Output file path | — |
-| `--format <format>` | `enum` | — | Output format: png, jpg, jpeg, webp | `png`, `jpg`, `jpeg`, `webp` |
+| `--format <format>` | `enum` | — | Output format: png, jpg, webp | `png`, `jpg`, `webp` |
 | `--resolution <WIDTHxHEIGHT>` | `string` | — | Override resolution | — |
 | `--seed <number>` | `number` | — | Random seed | [0..+∞] |
 | `--dry-run` | `boolean` | `false` | Print render plan without rendering | — |
+| `--frame-error-policy <policy>` | `enum` | — | Frame render error handling policy: placeholder, repeat-previous, abort | `placeholder`, `repeat-previous`, `abort` |
 | `--explain` | `boolean` | `false` | Print resolved parameters and their origins without rendering | — |
 
 #### Examples
@@ -255,7 +259,6 @@ Delete cache and output directories
 - **Kind:** `destructive`
 - **Surface Contract:** Reads: `[.cinecode/cache, .cinecode/spool]`, Writes: `[.cinecode/cache, .cinecode/spool]`
 - **Requires Project:** `yes` (Selector: `none`)
-- **Aliases:** `sync`
 
 #### Options
 
@@ -294,8 +297,8 @@ Scaffold a new Cinecode project
 | `-t, --template <name>` | `string` | — | Project template name | — |
 | `-n, --name <name>` | `string` | — | Project name | — |
 | `-y, --yes` | `boolean` | `false` | Skip interactive questionnaire and use defaults | — |
-| `--ts` | `boolean` | `true` | Use TypeScript | — |
-| `--js` | `boolean` | `false` | Use JavaScript | — |
+| `--ts` | `boolean` | — | Use TypeScript | — |
+| `--js` | `boolean` | — | Use JavaScript | — |
 | `--fps <number>` | `number` | `30` | Frames per second | [1..240] |
 | `--resolution <preset|WxH>` | `string` | `"1920x1080"` | Resolution preset or WxH | — |
 | `--no-git` | `boolean` | `false` | Skip git initialization | — |
@@ -340,7 +343,7 @@ Print the resolved timeline for a composition
 - **Category:** `product`
 - **Kind:** `read`
 - **Surface Contract:** Reads: `[cinecode.config.ts, source composition]`, Writes: `[none]`
-- **Requires Project:** `yes` (Selector: `optional`)
+- **Requires Project:** `yes` (Selector: `selection`)
 
 #### Options
 
@@ -355,6 +358,8 @@ Print the resolved timeline for a composition
 | `--deep` | `boolean` | `false` | Generate deep dependency graph across audio, visual, and effects | — |
 | `--format <format>` | `enum` | — | Graph output format: dot, mermaid, ascii | `dot`, `mermaid`, `ascii` |
 | `--depth <number>` | `number` | `3` | Max clip nesting depth to display | [1..100] |
+| `--artifact <path>` | `path` | — | Report digest of artifact for determinism check | — |
+| `--compare-digest <hash>` | `string` | — | Compare artifact digest against expected SHA-256 | — |
 
 #### Examples
 
@@ -397,7 +402,7 @@ Manage installed plugins
 - **Category:** `resource`
 - **Kind:** `read`
 - **Surface Contract:** Reads: `[cinecode.config.ts, package.json, plugin manifests]`, Writes: `[plugin files (scaffold)]`
-- **Requires Project:** `no`
+- **Requires Project:** `no` (Selector: `none`)
 
 #### Options
 
@@ -406,6 +411,7 @@ Manage installed plugins
 | `--type <type>` | `enum` | `"effect"` | Plugin template type: effect, transition, audio-effect, clip-type | `effect`, `transition`, `audio-effect`, `clip-type` |
 | `--desc <description>` | `string` | `""` | Plugin description | — |
 | `-a, --author <author>` | `string` | `""` | Author name | — |
+| `--force` | `boolean` | `false` | Overwrite an existing plugin directory | — |
 
 #### Examples
 
@@ -472,8 +478,9 @@ Write poster images from the best frame
 | `-o, --output-dir <dir>` | `path` | — | Output directory | — |
 | `-n, --count <number>` | `number` | `3` | Number of candidates to list | [1..100] |
 | `-f, --frame <number>` | `number` | — | Force a specific frame | [0..+∞] |
-| `--format <png|jpg|webp>` | `enum` | `"png"` | Image format: png, jpg, webp | `png`, `jpg`, `webp` |
+| `--format <format>` | `enum` | `"png"` | Image format: png, jpg, webp | `png`, `jpg`, `webp` |
 | `--seed <number>` | `number` | — | Random seed | [0..+∞] |
+| `--dry-run` | `boolean` | `false` | Plan thumbnails without writing | — |
 
 #### Examples
 
@@ -488,7 +495,7 @@ Export frames as vector SVG graphics
 - **Category:** `resource`
 - **Kind:** `write`
 - **Surface Contract:** Reads: `[source composition, cinecode.config.ts]`, Writes: `[output svg file]`
-- **Requires Project:** `yes` (Selector: `optional`)
+- **Requires Project:** `yes` (Selector: `selection`)
 
 #### Options
 
@@ -537,7 +544,7 @@ Text-to-speech voice utilities
 - **Category:** `resource`
 - **Kind:** `read`
 - **Surface Contract:** Reads: `[text input, cinecode.config.ts, tts models]`, Writes: `[output audio file]`
-- **Requires Project:** `no`
+- **Requires Project:** `no` (Selector: `none`)
 
 #### Options
 
@@ -561,7 +568,7 @@ Pixel-diff two compositions
 - **Category:** `resource`
 - **Kind:** `read`
 - **Surface Contract:** Reads: `[source compositions, cinecode.config.ts]`, Writes: `[diff image file (optional)]`
-- **Requires Project:** `no`
+- **Requires Project:** `yes` (Selector: `none`)
 
 #### Options
 
@@ -572,6 +579,8 @@ Pixel-diff two compositions
 | `--diff <path>` | `path` | — | Write a side-by-side diff image of the worst frame | — |
 | `--composition-a <name>` | `string` | — | Composition name in first file | — |
 | `--composition-b <name>` | `string` | — | Composition name in second file | — |
+| `--fail-on-difference` | `boolean` | `false` | Exit non-zero when any pixel differs | — |
+| `--concurrency <number>` | `number` | `4` | Render workers | [1..64] |
 
 #### Examples
 
@@ -586,7 +595,7 @@ Semantic diff between compositions or revisions
 - **Category:** `resource`
 - **Kind:** `read`
 - **Surface Contract:** Reads: `[source composition files, git revisions]`, Writes: `[none]`
-- **Requires Project:** `no`
+- **Requires Project:** `yes` (Selector: `none`)
 
 #### Options
 
@@ -642,6 +651,8 @@ Measure frame time, memory and worker capacity
 | `--compare-baseline` | `boolean` | `false` | Compare results against historical baseline | — |
 | `--fail-on-regression` | `boolean` | `false` | Exit with error code 1 if performance regresses > 5% | — |
 | `--save-baseline` | `boolean` | `false` | Save this benchmark run as official baseline | — |
+| `--dry-run` | `boolean` | `false` | Measure without writing baseline history | — |
+| `--concurrency <number>` | `number` | `4` | Render workers | [1..64] |
 
 #### Examples
 
@@ -700,8 +711,8 @@ Manage shorthand CLI command aliases
 
 - **Category:** `maintenance`
 - **Kind:** `read`
-- **Surface Contract:** Reads: `[.cinecode/profiles.json, cinecode.config.ts]`, Writes: `[.cinecode/profiles.json]`
-- **Requires Project:** `no`
+- **Surface Contract:** Reads: `[cinecode.json, cinecode.config.ts]`, Writes: `[cinecode.json]`
+- **Requires Project:** `yes` (Selector: `none`)
 
 #### Options
 
@@ -722,14 +733,15 @@ Publish a rendered output to a destination
 - **Category:** `maintenance`
 - **Kind:** `write`
 - **Surface Contract:** Reads: `[rendered output file]`, Writes: `[destination directory]`
-- **Requires Project:** `no`
+- **Requires Project:** `yes` (Selector: `none`)
 
 #### Options
 
 | Flag | Type | Default | Description | Bounds / Choices |
 | --- | --- | --- | --- | --- |
 | `-d, --dest <dir>` | `path` | — | Local destination directory | — |
-| `--tag <tag>` | `string` | — | Tag or release identifier | — |
+| `--tag <tag>` | `string` | — | Tag subdirectory under the destination | — |
+| `--allow-outside` | `boolean` | `false` | Allow a destination outside the project root | — |
 
 #### Examples
 
@@ -742,8 +754,8 @@ cinecode publish ./output/videos/intro.mp4
 Compare the installed version with npm
 
 - **Category:** `maintenance`
-- **Kind:** `network`
-- **Surface Contract:** Reads: `[package.json, npm registry]`, Writes: `[package.json, node_modules]`
+- **Kind:** `read`
+- **Surface Contract:** Reads: `[package.json, npm registry with --confirm]`, Writes: `[none]`
 - **Requires Project:** `no`
 
 #### Options

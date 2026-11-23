@@ -149,6 +149,16 @@ export interface MixReport {
   readonly allocation: MixAllocation;
 }
 
+export type AudioBlockConsumer = (block: Float32Array, frames: number) => Promise<void>;
+
+export interface AudioStreamSource {
+  readonly sampleRate: number;
+  readonly channels: number;
+  readonly duration: number;
+  readonly totalFrames: number;
+  streamBlocks(consumer: AudioBlockConsumer, signal?: AbortSignal): Promise<{ peak: number; limited: boolean }>;
+}
+
 export interface MixResult {
   readonly buffer: AudioBuffer;
   readonly peakLevel: number;
@@ -156,4 +166,5 @@ export interface MixResult {
   readonly limiterDuration: number;
   readonly limiterPeak: number;
   readonly report: MixReport;
+  readonly streamSource?: AudioStreamSource;
 }

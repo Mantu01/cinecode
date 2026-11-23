@@ -1,378 +1,267 @@
-// Cinecode viewer client: strict element creation and textContent only
+// Cinecode read-only viewer: textContent only, no transport controls
 const listEl = document.getElementById("list");
-const previewEl = document.getElementById("preview");
+const stageEl = document.getElementById("stage");
+const frameEl = document.getElementById("frame");
 const emptyEl = document.getElementById("empty-state");
 const dotEl = document.getElementById("dot");
 const statusTextEl = document.getElementById("statusText");
-const overlayEl = document.getElementById("overlay");
-const fitViewBtn = document.getElementById("fitView");
-const resetViewBtn = document.getElementById("resetView");
+const retryBtn = document.getElementById("retry");
+const fitBtn = document.getElementById("fitView");
+const resetBtn = document.getElementById("resetView");
+
+const MAX_RECONNECT = 8;
+const MIN_ZOOM = 0.1;
+const MAX_ZOOM = 10;
 
 let nodes = [];
-let selectedNode = null;
-let currentFrame = 0;
-const staleNodes = new Set();
+let selected = null;
+let socket = null;
+let reconnectAttempts = 0;
+let retryTimer = null;
+let latestRequest = 0;
+let latestGeneration = -1;
+let pendingFrame = null;
+let objectUrl = null;
+let zoom = 1;
+let dragging = false;
+let dragStart = { x: 0, y: 0 };
+let dragMoved = false;
+let orbit = { theta: 0, phi: 0 };
+let state = { connection: "connecting", kind: "-", frame: 0, scale: null, cached: false };
 
-let zoomLevel = 1;
-let panX = 0;
-let panY = 0;
-let isDragging = false;
-let startX = 0;
-let startY = 0;
-let currentImg = null;
-
-function applyTransform() {
-  if (currentImg) {
-    currentImg.style.transform = `translate(${panX}px, ${panY}px) scale(${zoomLevel})`;
-  }
+function renderStatus() {
+  const parts = [
+    state.connection,
+    `kind ${state.kind}`,
+    `frame ${state.frame}`,
+    `zoom ${zoom.toFixed(2)}x`,
+    state.scale === null ? "scale -" : `scale ${state.scale}x`,
+    state.cached ? "cached" : "live",
+  ];
+  statusTextEl.textContent = parts.join(" · ");
+  dotEl.className = state.connection === "connected" ? "on" : state.connection.startsWith("reconnecting") ? "" : "err";
 }
 
-function resetTransform() {
-  zoomLevel = 1;
-  panX = 0;
-  panY = 0;
-  applyTransform();
+function applyZoom(next) {
+  zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, next));
+  frameEl.style.transform = `scale(${zoom})`;
+  renderStatus();
 }
 
-function fitTransform() {
-  resetTransform();
-}
-
-function clearPreview() {
-  currentImg = null;
-  const scrubEl = document.getElementById("scrub");
-  if (scrubEl) scrubEl.remove();
-
-  const toRemove = [];
-  for (const child of previewEl.children) {
-    if (child.id !== "empty-state" && child.id !== "view-controls" && child.id !== "view-help") {
-      toRemove.push(child);
-    }
-  }
-  for (const el of toRemove) el.remove();
-  if (emptyEl) emptyEl.style.display = "none";
-}
-
-function renderNode(node, frame = 0) {
-  clearPreview();
-  if (!node) {
-    if (emptyEl) emptyEl.style.display = "block";
+function fitView() {
+  if (!frameEl.naturalWidth || !frameEl.naturalHeight) {
+    applyZoom(1);
     return;
   }
-
-  if (node.kind === "audio") {
-    const audio = document.createElement("audio");
-    audio.controls = true;
-    audio.autoplay = false;
-    audio.src = `/preview/${encodeURIComponent(node.id)}?v=${Date.now()}`;
-    previewEl.appendChild(audio);
-    return;
-  }
-
-  const img = document.createElement("img");
-  img.alt = node.name;
-  img.src = `/preview/${encodeURIComponent(node.id)}?frame=${frame}&v=${Date.now()}`;
-  currentImg = img;
-  applyTransform();
-
-  img.addEventListener("wheel", (e) => {
-    e.preventDefault();
-    const rect = img.getBoundingClientRect();
-    const cursorX = e.clientX - rect.left - rect.width / 2;
-    const cursorY = e.clientY - rect.top - rect.height / 2;
-    const worldX = (cursorX - panX) / zoomLevel;
-    const worldY = (cursorY - panY) / zoomLevel;
-    const factor = e.deltaY < 0 ? 1.1 : 0.9;
-    const nextZoom = Math.max(0.1, Math.min(10, zoomLevel * factor));
-    panX = cursorX - worldX * nextZoom;
-    panY = cursorY - worldY * nextZoom;
-    zoomLevel = nextZoom;
-    applyTransform();
-  }, { passive: false });
-
-  img.addEventListener("mousedown", (e) => {
-    if (e.button !== 0) return;
-    isDragging = true;
-    startX = e.clientX - panX;
-    startY = e.clientY - panY;
-  });
-
-  previewEl.appendChild(img);
-
-  if (node.kind === "scene" || node.kind === "timeline") {
-    renderScrubber(node, frame);
-  }
+  const box = stageEl.getBoundingClientRect();
+  applyZoom(Math.min(box.width / frameEl.naturalWidth, box.height / frameEl.naturalHeight, 1));
 }
 
-function renderScrubber(node, initialFrame) {
-  const bar = document.createElement("div");
-  bar.id = "scrub";
-
-  const label = document.createElement("span");
-  label.textContent = `frame ${initialFrame}`;
-
-  const range = document.createElement("input");
-  range.type = "range";
-  range.min = "0";
-  range.max = "0";
-  range.value = String(initialFrame);
-
-  const num = document.createElement("input");
-  num.type = "number";
-  num.min = "0";
-  num.max = "0";
-  num.value = String(initialFrame);
-
-  fetch(`/frames/${encodeURIComponent(node.id)}`)
-    .then((r) => r.json())
-    .then((info) => {
-      if (!info || typeof info.frames !== "number") return;
-      const maxF = Math.max(0, info.frames - 1);
-      range.max = String(maxF);
-      num.max = String(maxF);
-      label.textContent = `frame ${initialFrame} / ${info.frames}`;
-    })
-    .catch(() => void 0);
-
-  const onFrameChange = (val) => {
-    const frame = Number.parseInt(val, 10);
-    const safeFrame = Number.isFinite(frame) ? Math.max(0, frame) : 0;
-    currentFrame = safeFrame;
-    range.value = String(safeFrame);
-    num.value = String(safeFrame);
-    label.textContent = `frame ${safeFrame}`;
-    if (currentImg) {
-      currentImg.src = `/preview/${encodeURIComponent(node.id)}?frame=${safeFrame}&v=${Date.now()}`;
-    }
-  };
-
-  range.addEventListener("input", () => onFrameChange(range.value));
-  num.addEventListener("change", () => onFrameChange(num.value));
-
-  bar.appendChild(label);
-  bar.appendChild(range);
-  bar.appendChild(num);
-  previewEl.appendChild(bar);
-}
-
-function updateOverlay(issues) {
-  while (overlayEl.firstChild) overlayEl.removeChild(overlayEl.firstChild);
-  if (!issues || issues.length === 0) {
-    overlayEl.style.display = "none";
-    return;
-  }
-  overlayEl.style.display = "block";
-
-  const head = document.createElement("div");
-  head.className = "ov-head";
-  head.textContent = `Check: ${issues.length} issue(s)`;
-  overlayEl.appendChild(head);
-
-  for (const item of issues) {
-    const itemEl = document.createElement("div");
-    itemEl.className = item.severity === "warning" ? "ov-item warning" : "ov-item";
-
-    const codeEl = document.createElement("span");
-    codeEl.className = "ov-code";
-    codeEl.textContent = `[${item.code || "CC"}]`;
-    itemEl.appendChild(codeEl);
-
-    const msgEl = document.createElement("div");
-    msgEl.className = "ov-message";
-    msgEl.textContent = item.message || String(item);
-    itemEl.appendChild(msgEl);
-
-    if (item.file) {
-      const fileEl = document.createElement("div");
-      fileEl.className = "ov-file";
-      fileEl.textContent = item.line ? `${item.file}:${item.line}` : item.file;
-      itemEl.appendChild(fileEl);
-    }
-
-    if (item.fixHint) {
-      const fixEl = document.createElement("div");
-      fixEl.className = "ov-fix";
-      fixEl.textContent = `Fix: ${item.fixHint}`;
-      itemEl.appendChild(fixEl);
-    }
-
-    overlayEl.appendChild(itemEl);
-  }
+function resetView() {
+  orbit = { theta: 0, phi: 0 };
+  applyZoom(1);
 }
 
 function selectNode(node) {
-  selectedNode = node;
-  currentFrame = 0;
-  staleNodes.delete(node.id);
-
-  for (const el of listEl.querySelectorAll(".node")) {
-    const isActive = el.getAttribute("data-id") === node.id;
-    el.classList.toggle("active", isActive);
-    if (isActive) el.classList.remove("stale");
+  selected = node;
+  latestRequest += 1;
+  latestGeneration = -1;
+  pendingFrame = null;
+  state.kind = node.kind;
+  state.frame = 0;
+  state.scale = null;
+  state.cached = false;
+  for (const el of listEl.children) {
+    el.classList.toggle("active", el.getAttribute("data-id") === node.id);
   }
-
-  renderNode(node, 0);
+  resetView();
+  frameEl.hidden = true;
+  emptyEl.style.display = "block";
+  sendMessage({ type: "select", node: node.id });
+  renderStatus();
 }
 
 function buildNodeList() {
   while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
-
   for (const node of nodes) {
     const el = document.createElement("div");
     el.className = "node";
     el.setAttribute("data-id", node.id);
-
     const kindEl = document.createElement("span");
     kindEl.className = "kind";
     kindEl.textContent = node.kind;
-
     const nameEl = document.createElement("span");
     nameEl.textContent = node.name;
-
-    const dirtyEl = document.createElement("span");
-    dirtyEl.className = "dirty";
-
     el.appendChild(kindEl);
     el.appendChild(nameEl);
-    el.appendChild(dirtyEl);
-
     el.addEventListener("click", () => selectNode(node));
     listEl.appendChild(el);
   }
+  if (nodes.length > 0 && !selected) selectNode(nodes[0]);
+}
 
-  if (nodes.length > 0 && !selectedNode) {
-    selectNode(nodes[0]);
+function setFrame(blob) {
+  if (objectUrl) URL.revokeObjectURL(objectUrl);
+  objectUrl = URL.createObjectURL(blob);
+  frameEl.src = objectUrl;
+  frameEl.hidden = false;
+  emptyEl.style.display = "none";
+}
+
+function handleBinary(buffer) {
+  const view = new DataView(buffer);
+  if (view.byteLength < 20) return;
+  if (view.getUint8(0) !== 0x43 || view.getUint8(1) !== 0x43 || view.getUint8(2) !== 0x46 || view.getUint8(3) !== 0x52) return;
+  const message = pendingFrame;
+  if (!message || !selected || message.node !== selected.id) return;
+  if (message.generation < latestGeneration) return;
+  const format = view.getUint8(16);
+  const blob = new Blob([new Uint8Array(buffer, 20)], { type: format === 2 ? "image/jpeg" : "image/png" });
+  setFrame(blob);
+  state.frame = view.getUint32(4);
+  state.scale = message.scale;
+  state.cached = message.cached === true;
+  renderStatus();
+}
+
+function handleJson(message) {
+  if (message.type === "welcome") {
+    nodes = Array.isArray(message.nodes) ? message.nodes : [];
+    selected = null;
+    buildNodeList();
+  } else if (message.type === "frame") {
+    if (!selected || message.node !== selected.id || message.generation < latestGeneration) return;
+    latestGeneration = message.generation;
+    pendingFrame = message;
+  } else if (message.type === "preview:unavailable") {
+    if (!selected || message.node !== selected.id) return;
+    frameEl.hidden = true;
+    emptyEl.style.display = "block";
+    emptyEl.textContent = message.reason;
+    state.frame = 0;
+    renderStatus();
+  } else if (message.type === "status") {
+    state.scale = message.scale;
+    renderStatus();
+  } else if (message.type === "error") {
+    state.connection = `error ${message.code ?? ""}`;
+    statusTextEl.textContent = message.message;
+    dotEl.className = "err";
+  } else if (message.type === "validation") {
+    const report = message.report || {};
+    if (report.ok === false) {
+      emptyEl.textContent = `Check failed: ${(report.errors || []).length} error(s)`;
+      if (frameEl.hidden) emptyEl.style.display = "block";
+    }
   }
 }
 
-function initListeners() {
-  if (fitViewBtn) fitViewBtn.addEventListener("click", fitTransform);
-  if (resetViewBtn) resetViewBtn.addEventListener("click", resetTransform);
-
-  window.addEventListener("dblclick", () => resetTransform());
-
-  window.addEventListener("mousemove", (e) => {
-    if (!isDragging) return;
-    panX = e.clientX - startX;
-    panY = e.clientY - startY;
-    applyTransform();
-  });
-
-  window.addEventListener("mouseup", () => {
-    isDragging = false;
-  });
-
-  window.addEventListener("keydown", (e) => {
-    if (e.key.toLowerCase() === "r") resetTransform();
-    if (e.key.toLowerCase() === "f") fitTransform();
-    if (e.key === "1") {
-      zoomLevel = 1;
-      panX = 0;
-      panY = 0;
-      applyTransform();
-    }
-  });
+function scheduleReconnect() {
+  if (reconnectAttempts >= MAX_RECONNECT) {
+    state.connection = "disconnected";
+    retryBtn.hidden = false;
+    statusTextEl.textContent = `disconnected after ${MAX_RECONNECT} attempts`;
+    dotEl.className = "err";
+    return;
+  }
+  const delay = Math.min(30000, 500 * Math.pow(2, reconnectAttempts));
+  reconnectAttempts += 1;
+  state.connection = `reconnecting in ${Math.round(delay / 1000)}s`;
+  retryBtn.hidden = true;
+  renderStatus();
+  retryTimer = setTimeout(connect, delay);
 }
 
-function connectWs() {
-  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const wsUrl = `${proto}//${window.location.host}/ws`;
-  const ws = new WebSocket(wsUrl);
+function connect() {
+  if (retryTimer) clearTimeout(retryTimer);
+  retryTimer = null;
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
   ws.binaryType = "arraybuffer";
+  socket = ws;
 
   ws.addEventListener("open", () => {
-    dotEl.className = "on";
-    statusTextEl.textContent = "connected";
+    reconnectAttempts = 0;
+    state.connection = "connected";
+    renderStatus();
   });
-
   ws.addEventListener("close", () => {
-    dotEl.className = "";
-    statusTextEl.textContent = "reconnecting…";
-    setTimeout(connectWs, 1000);
+    if (socket !== ws) return;
+    socket = null;
+    scheduleReconnect();
   });
-
   ws.addEventListener("message", (event) => {
     if (event.data instanceof ArrayBuffer) {
-      const view = new DataView(event.data);
-      if (view.byteLength >= 20) {
-        const magic = String.fromCharCode(view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3));
-        if (magic === "CCFR") {
-          const frameIndex = view.getUint32(4);
-          const width = view.getUint32(8);
-          const height = view.getUint32(12);
-          const format = view.getUint8(16);
-          const blob = new Blob([new Uint8Array(event.data, 20)], { type: format === 1 ? "image/png" : "image/jpeg" });
-          const blobUrl = URL.createObjectURL(blob);
-          if (currentImg) {
-            currentImg.src = blobUrl;
-          }
-          currentFrame = frameIndex;
-          statusTextEl.textContent = `frame ${frameIndex} (${width}x${height})`;
-          return;
-        }
-      }
+      handleBinary(event.data);
+      return;
     }
     try {
-      const msg = JSON.parse(event.data);
-      if (msg.type === "welcome" || msg.type === "hello") {
-        nodes = Array.isArray(msg.nodes) ? msg.nodes : [];
-        buildNodeList();
-        if (msg.error) updateOverlay([{ code: "STARTUP", message: msg.error }]);
-      } else if (msg.type === "status") {
-        statusTextEl.textContent = `scale: ${msg.scale}x, cached: ${msg.cachedFrames}`;
-      } else if (msg.type === "update") {
-        statusTextEl.textContent = `updated ${new Date(msg.at || Date.now()).toLocaleTimeString()}`;
-        if (selectedNode && selectedNode.id === msg.node) {
-          renderNode(selectedNode, currentFrame);
-        } else {
-          staleNodes.add(msg.node);
-          const el = listEl.querySelector(`[data-id="${msg.node}"]`);
-          if (el) el.classList.add("stale");
-        }
-      } else if (msg.type === "error") {
-        statusTextEl.textContent = `error: ${msg.message}`;
-        dotEl.className = "err";
-      } else if (msg.type === "validation") {
-        const r = msg.report || {};
-        const issues = (r.errors || []).concat(r.warnings || []);
-        updateOverlay(issues);
-        if (r.ok && issues.length === 0) {
-          statusTextEl.textContent = "check passed";
-          dotEl.className = "on";
-        } else if (r.ok) {
-          statusTextEl.textContent = `check: ${issues.length} warning(s)`;
-        } else {
-          statusTextEl.textContent = `check failed: ${(r.errors || []).length} error(s)`;
-          dotEl.className = "err";
-        }
-      }
+      handleJson(JSON.parse(event.data));
     } catch {
-      // Non-JSON message ignored
-    }
-  });
-}
-      } else if (msg.type === "error") {
-        statusTextEl.textContent = `error: ${msg.message}`;
-        dotEl.className = "err";
-      } else if (msg.type === "validation") {
-        const r = msg.report || {};
-        const issues = (r.errors || []).concat(r.warnings || []);
-        updateOverlay(issues);
-        if (r.ok && issues.length === 0) {
-          statusTextEl.textContent = "check passed";
-          dotEl.className = "on";
-        } else if (r.ok) {
-          statusTextEl.textContent = `check: ${issues.length} warning(s)`;
-        } else {
-          statusTextEl.textContent = `check failed: ${(r.errors || []).length} error(s)`;
-          dotEl.className = "err";
-        }
-      }
-    } catch {
-      // Non-JSON message ignored
+      statusTextEl.textContent = "malformed server message";
     }
   });
 }
 
-initListeners();
-connectWs();
+function sendMessage(message) {
+  if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+}
+
+let cameraTimer = null;
+
+function sendCameraZoom() {
+  if (cameraTimer) clearTimeout(cameraTimer);
+  cameraTimer = setTimeout(() => sendMessage({ type: "camera:zoom", zoom }), 80);
+}
+
+frameEl.addEventListener("wheel", (event) => {
+  event.preventDefault();
+  const factor = event.deltaY < 0 ? 1.1 : 0.9;
+  applyZoom(zoom * factor);
+  if (selected && selected.kind === "3d") sendCameraZoom();
+}, { passive: false });
+
+frameEl.addEventListener("pointerdown", (event) => {
+  if (!selected || selected.kind !== "3d" || event.button !== 0) return;
+  dragging = true;
+  dragMoved = false;
+  dragStart = { x: event.clientX, y: event.clientY };
+  frameEl.setPointerCapture(event.pointerId);
+});
+
+frameEl.addEventListener("pointermove", (event) => {
+  if (!dragging) return;
+  const dx = event.clientX - dragStart.x;
+  const dy = event.clientY - dragStart.y;
+  if (Math.abs(dx) + Math.abs(dy) > 3) dragMoved = true;
+});
+
+frameEl.addEventListener("pointerup", (event) => {
+  if (!dragging) return;
+  dragging = false;
+  const dx = event.clientX - dragStart.x;
+  const dy = event.clientY - dragStart.y;
+  if (!dragMoved) return;
+  orbit = {
+    theta: orbit.theta + dx * 0.01,
+    phi: Math.max(-1.5, Math.min(1.5, orbit.phi + dy * 0.01)),
+  };
+  sendMessage({ type: "camera:orbit", theta: orbit.theta, phi: orbit.phi });
+});
+
+fitBtn.addEventListener("click", fitView);
+resetBtn.addEventListener("click", resetView);
+retryBtn.addEventListener("click", () => {
+  reconnectAttempts = 0;
+  state.connection = "connecting";
+  connect();
+});
+
+window.addEventListener("keydown", (event) => {
+  const key = event.key.toLowerCase();
+  if (key === "r") resetView();
+  if (key === "f") fitView();
+});
+
+renderStatus();
+connect();

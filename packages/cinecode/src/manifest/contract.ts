@@ -11,20 +11,20 @@ export function manifestShapeValidationCount(): number {
   return shapeValidations;
 }
 
-export function deepFreezeManifest<T extends MainManifest>(manifest: T): Readonly<T> {
-  if (!manifest || typeof manifest !== "object") return manifest;
-  for (const col of MANIFEST_COLLECTIONS) {
-    const list = (manifest as Record<string, unknown>)[col];
-    if (Array.isArray(list)) {
-      for (const item of list) {
-        if (item && typeof item === "object") {
-          Object.freeze(item);
-        }
-      }
-      Object.freeze(list);
+function deepFreeze<T>(obj: T): Readonly<T> {
+  if (obj === null || typeof obj !== "object") return obj;
+  if (Object.isFrozen(obj)) return obj;
+  Object.freeze(obj);
+  for (const value of Object.values(obj)) {
+    if (value !== null && typeof value === "object") {
+      deepFreeze(value);
     }
   }
-  return Object.freeze(manifest);
+  return obj;
+}
+
+export function deepFreezeManifest<T extends MainManifest>(manifest: T): Readonly<T> {
+  return deepFreeze(manifest);
 }
 
 /** Describes what the entry file exported, in authoring terms. */
@@ -38,6 +38,9 @@ export function describeShape(value: unknown): string {
   if (typeof value === "function") return "a function";
   if (typeof value !== "object") return `a primitive (${typeof value})`;
   const record = value as Record<string, unknown>;
+  if ("schemaVersion" in record || ("project" in record && !carriesKnownCollection(record))) {
+    return "a configuration object (defineConfig)";
+  }
   if ("rootTimeline" in record) return "a composition (rootTimeline)";
   if (Array.isArray(record.tracks)) return "a timeline (tracks array)";
   if (record.kind === "scene") return "a scene definition (defineScene)";
@@ -91,6 +94,7 @@ export function assertMainContract(raw: unknown, entryPath = "main.ts"): MainMan
     typeof raw === "object" &&
     raw !== null &&
     !Array.isArray(raw) &&
+    !("schemaVersion" in (raw as object)) &&
     !("rootTimeline" in (raw as object)) &&
     carriesKnownCollection(raw as Record<string, unknown>)
   ) {

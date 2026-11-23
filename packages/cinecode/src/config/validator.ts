@@ -39,6 +39,10 @@ export const REMOVED_CONFIG_KEYS: Readonly<Record<string, string>> = {
   composition: "Removed; select a composition with --composition or render the file directly.",
   telemetry: "Removed; telemetry is not supported.",
   pluginPermissions: "Removed; sandbox permissions are configured per plugin.",
+  sourceDir: "Top-level sourceDir is legacy (schemaVersion 1). Move to project.sourceDir or run `cinecode migrate`.",
+  mediaDir: "Top-level mediaDir is legacy (schemaVersion 1). Move to project.mediaDir or run `cinecode migrate`.",
+  outputDir: "Top-level outputDir is legacy (schemaVersion 1). Move to project.outputDir or run `cinecode migrate`.",
+  cacheDir: "Top-level cacheDir is legacy (schemaVersion 1). Move to project.cacheDir or run `cinecode migrate`.",
 };
 
 const SUPPORTED_KEYS_HINT = "Supported keys are listed in docs/config-reference.md.";
@@ -67,8 +71,10 @@ const KNOWN_CONFIG_KEYS: readonly string[] = [
   "images", "images.defaultFormat", "images.quality", "images.scaleFactor",
   "dev", "dev.port", "dev.host", "dev.open", "dev.hmr",
   "render", "render.fps", "render.resolution", "render.format", "render.quality", "render.codec", "render.crf",
-  "render.preset", "render.hardwareAcceleration", "render.concurrency", "render.chunkSize", "render.memoryBudgetMb",
-  "render.alpha", "render.twoPass", "render.platformPreset", "render.bitrate", "render.colorManagement",
+  "render.preset", "render.hardwareAcceleration", "render.concurrency", "render.chunkSize", "render.memoryBudget", "render.memoryBudgetMb",
+  "render.overwrite", "render.alpha", "render.twoPass", "render.platformPreset", "render.bitrate", "render.colorManagement",
+  "render.audioCodec", "render.audioBitrate", "render.gifQuality", "render.gifDither", "render.gifMaxFrames",
+  "render.seed", "render.effects", "render.noEffects", "render.strictFonts",
   "audio", "audio.sampleRate", "audio.channels", "audio.masterVolume",
   "binaries", "binaries.ffmpegPath", "binaries.ffprobePath",
   "allowCoLocatedMedia", "cloudMedia", "fonts", "concurrency", "overwrite", "gitignore",
@@ -154,8 +160,12 @@ function schemaError(issue: ZodValidationIssue, configPath: string | undefined):
     const key = issue.path ? `${issue.path}.${issue.keys?.[0]}` : issue.keys?.[0];
     const removedHint = REMOVED_CONFIG_KEYS[key ?? ""];
     let suggestion: string;
+    let fixHint: string | undefined;
     if (removedHint) {
       suggestion = removedHint;
+      if (removedHint.includes("migrate")) {
+        fixHint = "Run `cinecode migrate` to upgrade legacy configuration keys.";
+      }
     } else {
       const nearest = key ? suggestNearestKey(key) : undefined;
       suggestion = nearest ? `Did you mean '${nearest}'? ${SUPPORTED_KEYS_HINT}` : SUPPORTED_KEYS_HINT;
@@ -163,7 +173,7 @@ function schemaError(issue: ZodValidationIssue, configPath: string | undefined):
     return createError(
       ErrorCode.CC1002,
       { key: key ?? "config", suggestion },
-      { location: { file: configPath }, cause: issue },
+      { location: { file: configPath }, cause: issue, fixHint },
     );
   }
   const received = issue.received === undefined ? "" : JSON.stringify(issue.received);

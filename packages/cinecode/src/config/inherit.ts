@@ -3,9 +3,11 @@ import { dirname, resolve, isAbsolute, relative, join } from "node:path";
 import type { CinecodeConfig, Composition } from "../core/types/index.js";
 import { normalizeConfig } from "./schema.js";
 import { findMissingEnvVarsWithPaths, substituteEnvVarsDeep } from "./envsubst.js";
-import { hotReloadEnabled, isUserModuleFile, loadUserModule } from "../loader/index.js";
+import { isUserModuleFile, loadUserModule } from "../loader/index.js";
 import { createError, ErrorCode } from "../errors/index.js";
 import { PROJECT_MARKERS } from "./project.js";
+import { migrateV1ToV2Transform } from "./migration/engine.js";
+import { SCHEMA_VERSION } from "./zod-schema.js";
 
 export interface ResolvedInheritance {
   readonly merged: Record<string, unknown>;
@@ -21,9 +23,10 @@ function isPlainObject(value: unknown): value is RawRecord {
 export function deepMergeConfig(base: RawRecord, override: RawRecord): RawRecord {
   const result: RawRecord = { ...base };
   for (const [key, value] of Object.entries(override)) {
+    if (value === undefined) continue;
     const existing = result[key];
     if (isPlainObject(existing) && isPlainObject(value)) {
-      result[key] = deepMergeConfig(existing, value);
+      result[key] = { ...existing, ...value };
     } else {
       result[key] = value;
     }
@@ -33,7 +36,7 @@ export function deepMergeConfig(base: RawRecord, override: RawRecord): RawRecord
 
 async function readRawConfig(configPath: string): Promise<RawRecord> {
   if (isUserModuleFile(configPath)) {
-    const module = await loadUserModule<RawRecord>(configPath, dirname(configPath), { fresh: hotReloadEnabled() });
+    const module = await loadUserModule<RawRecord>(configPath, dirname(configPath), {});
     return module ?? {};
   }
   return JSON.parse(readFileSync(configPath, "utf-8")) as RawRecord;
@@ -41,6 +44,10 @@ async function readRawConfig(configPath: string): Promise<RawRecord> {
 
 async function readConfigDocument(configPath: string): Promise<RawRecord> {
   const raw = await readRawConfig(configPath);
+  if (raw.schemaVersion === 1) {
+    migrateV1ToV2Transform(raw);
+    raw.schemaVersion = SCHEMA_VERSION;
+  }
   const missing = findMissingEnvVarsWithPaths(raw);
   if (missing.length > 0) {
     const entry = missing[0]!;
@@ -115,7 +122,9 @@ async function resolveExtendsField(
   chain.push(target);
   const parentRaw = await readConfigDocument(target);
   const resolvedParent = await resolveExtendsField(target, parentRaw, chain, visited, boundary);
-  return deepMergeConfig(resolvedParent, raw);
+  const merged = deepMergeConfig(resolvedParent, raw);
+  delete merged.extends;
+  return merged;
 }
 
 export async function resolveConfigInheritance(

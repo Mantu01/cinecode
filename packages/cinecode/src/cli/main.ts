@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-import { guardRuntime } from "./runtime-guard.js";
+import { guardRuntime } from "./shared/runtime-guard.js";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { runCli } from "./program.js";
-import { RUNTIME_EXIT_CODE } from "./exit-codes.js";
+import { RUNTIME_EXIT_CODE } from "./shared/exit-codes.js";
 
 export { createProgram, runCli, type RunCliOptions } from "./program.js";
-export { MACHINE_SCHEMA_VERSION, runReport, validateMachineReport, type MachineReport } from "./run-report.js";
-export { EXIT_CODES, EXIT_CODE_MEANINGS, exitCodeForError, ExitSignal } from "./exit-codes.js";
+export { MACHINE_SCHEMA_VERSION, runReport, validateMachineReport, type MachineReport } from "./output/run-report.js";
+export { EXIT_CODES, EXIT_CODE_MEANINGS, exitCodeForError, ExitSignal } from "./shared/exit-codes.js";
 
 function isEntryPoint(): boolean {
   const entry = process.argv[1];

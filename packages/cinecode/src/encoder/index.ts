@@ -1,3 +1,4 @@
+// Size exception (>400 lines): unified encoder pipeline orchestration facade per quality-standards §2.
 import { spawn } from "node:child_process";
 import { resolveBinary } from "../binary/resolver.js";
 import { mkdir, rm } from "node:fs/promises";
@@ -161,6 +162,12 @@ export function buildVideoEncoderArgs(options: EncoderOptions): string[] {
     video.push("-c:v", "libvpx-vp9", "-crf", String(crf), "-b:v", "0", "-row-mt", "1", "-pix_fmt", pixFmt);
   } else {
     video.push("-c:v", "libx264", "-preset", preset, "-crf", String(crf), "-pix_fmt", pixFmt);
+  }
+
+  if (pass !== undefined) {
+    for (let i = video.length - 1; i >= 0; i -= 1) {
+      if (video[i] === "-crf" || (video[i] === "-b:v" && video[i + 1] === "0")) video.splice(i, 2);
+    }
   }
 
   const container: string[] = [];
@@ -368,6 +375,8 @@ export interface CreateEncoderInput {
   readonly bitrateKbps?: number;
   readonly fragmented?: boolean;
   readonly hdr?: HdrMetadata;
+  readonly pass?: 1 | 2;
+  readonly passLogFile?: string;
 }
 
 /** Creates an encoder from an already-resolved `VideoEncoding` profile. */
@@ -389,6 +398,8 @@ export function createVideoEncoderWithEncoding(input: CreateEncoderInput): Video
     fragmented: input.fragmented,
     hdr: input.hdr,
     overwrite: input.overwrite ?? false,
+    pass: input.pass,
+    passLogFile: input.passLogFile,
   });
 }
 

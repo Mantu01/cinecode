@@ -184,6 +184,7 @@ export interface TransportBudget {
 export interface TransportBudgetInput {
   readonly width: number;
   readonly height: number;
+  readonly frameCount?: number;
   readonly concurrency: number;
   readonly chunkSize: number;
   readonly maxBytes?: number;
@@ -198,6 +199,7 @@ export function resolveTransportBudget(input: TransportBudgetInput): TransportBu
   const plan = createResourcePlan({
     width: input.width,
     height: input.height,
+    frameCount: input.frameCount,
     concurrency: input.concurrency,
     chunkSize: input.chunkSize,
     memoryBudgetMb: input.maxBytes === undefined ? undefined : input.maxBytes / (1024 * 1024),

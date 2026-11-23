@@ -16,7 +16,9 @@ const CANONICAL_FILES = [
   "output/.gitkeep",
   "package.json",
   "README.md",
+  "src/components/title-card.ts",
   "src/scenes/intro.ts",
+  "src/timelines/main.ts",
   "tsconfig.json",
 ];
 
@@ -29,7 +31,9 @@ const EXPECTED = {
     "output/.gitkeep",
     "package.json",
     "README.md",
+    "src/components/title-card.ts",
     "src/scenes/intro.ts",
+    "src/timelines/main.ts",
     "tsconfig.json",
   ],
   javascript: [
@@ -41,7 +45,9 @@ const EXPECTED = {
     "output/.gitkeep",
     "package.json",
     "README.md",
+    "src/components/title-card.js",
     "src/scenes/intro.js",
+    "src/timelines/main.js",
   ],
 };
 
@@ -110,13 +116,16 @@ function buildVariants() {
     "README.md": readCanonical("README.md"),
     "media/README.md": readCanonical("media/README.md"),
     "output/.gitkeep": readCanonical("output/.gitkeep"),
-    "src/scenes/intro.ts": readCanonical("src/scenes/intro.ts"),
+    "src/components/title-card.ts": readCanonical("src/components/title-card.ts"),
   };
 
   const tsconfig = readCanonical("tsconfig.json");
   const jsconfig = readCanonical("jsconfig.json");
 
-  const jsPkg = JSON.parse(readCanonical("package.json").replaceAll("{{TYPECHECK_SCRIPT}}", "node --check main.js"));
+  const jsSyntaxCheck = ["main.js", "src/scenes/intro.js", "src/timelines/main.js", "src/components/title-card.js"]
+    .map((file) => `node --check ${file}`)
+    .join(" && ");
+  const jsPkg = JSON.parse(readCanonical("package.json").replaceAll("{{TYPECHECK_SCRIPT}}", jsSyntaxCheck));
   delete jsPkg.devDependencies?.typescript;
   delete jsPkg.devDependencies?.["typescript-eslint"];
 
@@ -129,7 +138,9 @@ function buildVariants() {
     "README.md": shared["README.md"],
     "media/README.md": shared["media/README.md"],
     "output/.gitkeep": shared["output/.gitkeep"],
-    "src/scenes/intro.ts": shared["src/scenes/intro.ts"],
+    "src/components/title-card.ts": shared["src/components/title-card.ts"],
+    "src/scenes/intro.ts": withExt("src/scenes/intro.ts", "ts"),
+    "src/timelines/main.ts": withExt("src/timelines/main.ts", "ts"),
   };
 
   const javascript = {
@@ -141,7 +152,9 @@ function buildVariants() {
     "README.md": shared["README.md"],
     "media/README.md": shared["media/README.md"],
     "output/.gitkeep": shared["output/.gitkeep"],
-    "src/scenes/intro.js": shared["src/scenes/intro.ts"],
+    "src/components/title-card.js": shared["src/components/title-card.ts"],
+    "src/scenes/intro.js": withExt("src/scenes/intro.ts", "js"),
+    "src/timelines/main.js": withExt("src/timelines/main.ts", "js"),
   };
 
   return { typescript, javascript };
@@ -186,7 +199,7 @@ function assertVariantParity(variants) {
     let same;
     if (rel === "package.json") {
       same = normalizedPackage(tsContent) === normalizedPackage(jsContent);
-    } else if (rel === "cinecode.config.ts" || rel === "main.ts") {
+    } else if (rel.endsWith(".ts")) {
       same = tsContent.replaceAll(".ts", ".js") === jsContent;
     } else {
       same = tsContent === jsContent;

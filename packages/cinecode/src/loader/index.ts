@@ -1,8 +1,10 @@
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { extname, isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { assertSupportedRuntime } from "./runtime.js";
 import { isCinecodeError } from "../errors/index.js";
+import { isVerbose } from "../observability/invocation-context.js";
 
 export * from "./runtime.js";
 
@@ -31,8 +33,45 @@ export interface LoadUserModuleOptions {
   readonly fresh?: boolean;
 }
 
-let reloadCounter = 0;
+interface CachedModule {
+  readonly digest: string;
+  readonly namespace: Record<string, unknown>;
+}
+
+const MODULE_CACHE_LIMIT = 500;
+const moduleCache = new Map<string, CachedModule>();
+let cacheHits = 0;
+let cacheMisses = 0;
 let hotReload = false;
+
+export function fileDigest(file: string): string {
+  const stat = statSync(file);
+  return createHash("sha1").update(`${stat.mtimeMs}:${stat.size}`).digest("hex").slice(0, 12);
+}
+
+export function invalidateUserModules(files: readonly string[]): void {
+  for (const file of files) moduleCache.delete(resolve(file));
+}
+
+export function disposeUserModuleCache(): void {
+  moduleCache.clear();
+  cacheHits = 0;
+  cacheMisses = 0;
+}
+
+export function getUserModuleCacheStats(): { readonly size: number; readonly hits: number; readonly misses: number } {
+  return { size: moduleCache.size, hits: cacheHits, misses: cacheMisses };
+}
+
+function cacheNamespace(resolved: string, digest: string, namespace: Record<string, unknown>): void {
+  moduleCache.delete(resolved);
+  moduleCache.set(resolved, { digest, namespace });
+  while (moduleCache.size > MODULE_CACHE_LIMIT) {
+    const oldest = moduleCache.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    moduleCache.delete(oldest);
+  }
+}
 
 export function setHotReload(enabled: boolean): void {
   hotReload = enabled;
@@ -113,10 +152,21 @@ export async function loadUserModule<T = unknown>(
   if (!existsSync(resolved)) {
     throw new UserModuleError("USER_MODULE_NOT_FOUND", resolved, `Module not found: ${resolved}`);
   }
+  const digest = fileDigest(resolved);
+  if (!options.fresh) {
+    const cached = moduleCache.get(resolved);
+    if (cached && cached.digest === digest) {
+      cacheHits += 1;
+      return (cached.namespace.default ?? cached.namespace) as T;
+    }
+  }
   const url = pathToFileURL(resolved);
-  if (options.fresh) url.searchParams.set("reload", `${process.pid}-${reloadCounter++}`);
+  url.searchParams.set("v", digest);
   try {
     const module = (await importFromRoot(url, rootDir)) as Record<string, unknown>;
+    cacheMisses += 1;
+    cacheNamespace(resolved, digest, module);
+    if (isVerbose()) process.stderr.write(`[loader] import ${resolved} (v=${digest})\n`);
     return (module.default ?? module) as T;
   } catch (error) {
     throw userModuleFailure(error, resolved);
@@ -133,10 +183,22 @@ export async function loadUserModuleNamespace<T = Record<string, unknown>>(
   if (!existsSync(resolved)) {
     throw new UserModuleError("USER_MODULE_NOT_FOUND", resolved, `Module not found: ${resolved}`);
   }
+  const digest = fileDigest(resolved);
+  if (!options.fresh) {
+    const cached = moduleCache.get(resolved);
+    if (cached && cached.digest === digest) {
+      cacheHits += 1;
+      return cached.namespace as T;
+    }
+  }
   const url = pathToFileURL(resolved);
-  if (options.fresh) url.searchParams.set("reload", `${process.pid}-${reloadCounter++}`);
+  url.searchParams.set("v", digest);
   try {
-    return (await importFromRoot(url, rootDir)) as T;
+    const module = (await importFromRoot(url, rootDir)) as Record<string, unknown>;
+    cacheMisses += 1;
+    cacheNamespace(resolved, digest, module);
+    if (isVerbose()) process.stderr.write(`[loader] import ${resolved} (v=${digest})\n`);
+    return module as T;
   } catch (error) {
     throw userModuleFailure(error, resolved);
   }

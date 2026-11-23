@@ -80,7 +80,7 @@ export interface ComponentDef<P> {
  * @param build - Function that builds a timeline from props
  * @returns A ComponentDef for use in timelines
  */
-export function defineComponent<P>(name: string, build: (props: P) => Timeline): ComponentDef<P> {
+export function defineComponent<P = any>(name: string, build: (props: P) => Timeline): ComponentDef<P> {
   return { kind: "component", name, build };
 }
 

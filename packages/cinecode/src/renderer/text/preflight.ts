@@ -148,6 +148,9 @@ export function preflightText(
       recordDegradation({
         code: ErrorCode.CC3006,
         what: "text font glyph fallback",
+        field: "fontFamily",
+        requested: family,
+        actual: fallbackList[0]?.resolvedFamily ?? "sans-serif",
         reason: !familyAvailable
           ? `Font "${family}" is not available on system and was substituted`
           : `Font "${family}" is missing glyphs: ${missingList.join(", ")}`,

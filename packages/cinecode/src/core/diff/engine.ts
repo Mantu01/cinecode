@@ -1,5 +1,9 @@
 import type { Composition } from "../types/index.js";
 
+interface EffectRef {
+  readonly type?: string;
+}
+
 export type DiffChangeType =
   | "clip_added"
   | "clip_removed"
@@ -188,8 +192,8 @@ export function diffCompositions(
       modified++;
     }
 
-    const effectsA = clipA.effects;
-    const effectsB = clipB.effects;
+    const effectsA = clipA.effects as readonly EffectRef[];
+    const effectsB = clipB.effects as readonly EffectRef[];
 
     if (effectsA.length !== effectsB.length || effectsA.some((e, i) => e.type !== effectsB[i]?.type)) {
       changes.push({

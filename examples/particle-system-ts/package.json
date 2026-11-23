@@ -1,0 +1,19 @@
+{
+  "name": "particle-system-ts",
+  "version": "1.0.0",
+  "description": "Cinecode Particle System Premium Demo",
+  "type": "module",
+  "scripts": {
+    "render": "cinecode render --config ./cinecode.config.ts",
+    "preview": "cinecode preview --config ./cinecode.config.ts",
+    "validate": "cinecode validate --config ./cinecode.config.ts",
+    "clean": "cinecode clean --all --yes"
+  },
+  "dependencies": {
+    "cinecode": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}

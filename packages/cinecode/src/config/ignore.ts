@@ -139,6 +139,17 @@ export class CinecodeIgnore {
     return ignored;
   }
 
+  /** The rule that decides the path, honoring later negation rules. */
+  matchRule(relativePath: string): IgnoreRule | null {
+    const normalized = normalizePath(relativePath);
+    if (normalized.length === 0) return null;
+    let matched: IgnoreRule | null = null;
+    for (const { rule, regex } of this.compiled) {
+      if (regex.test(normalized)) matched = rule;
+    }
+    return matched && !matched.isNegation ? matched : null;
+  }
+
   getRules(): readonly IgnoreRule[] {
     return this.rules;
   }

@@ -5,8 +5,9 @@ import { fileURLToPath } from "node:url";
 import { listPresetIds, PLATFORM_PRESET_MAP, getPreset, type PlatformPresetId } from "../platform-presets.js";
 import { PlatformPresetSchema, RenderInputSchema } from "../../config/zod-schema.js";
 import { normalizeConfig } from "../../config/schema.js";
-import { resolveRenderParameters } from "../../cli/precedence.js";
-import { createRenderCommand } from "../../cli/render.js";
+import { resolveRenderParameters } from "../../cli/resolve/precedence.js";
+import { buildCommanderCommand } from "../../cli/registry/build.js";
+import { findCommand } from "../../cli/registry/assemble.js";
 
 const commandReference = fileURLToPath(new URL("../../../../../docs/command-reference.md", import.meta.url));
 
@@ -60,7 +61,9 @@ test("selecting a preset through config or the CLI resolves identical parameters
 });
 
 test("help, listing and the generated reference agree with the table", () => {
-  const help = createRenderCommand().options.find((option) => option.long === "--preset");
+  const spec = findCommand("render");
+  assert.ok(spec);
+  const help = buildCommanderCommand(spec).options.find((option) => option.long === "--preset");
   assert.ok(help);
   for (const id of listPresetIds()) assert.match(help.description, new RegExp(id));
   const reference = readFileSync(commandReference, "utf8");

@@ -17,7 +17,7 @@ import {
 } from "../../core/output-plan.js";
 import { encodeAnimatedGif, writeSpriteSheet } from "../../encoder/outputs.js";
 import { PdfDocumentBuilder } from "../../pdf/index.js";
-import { assertFormatFlags } from "../../cli/render.js";
+import { assertFormatFlags } from "../../cli/pipeline/render-run.js";
 
 const WIDTH = 64;
 const HEIGHT = 48;

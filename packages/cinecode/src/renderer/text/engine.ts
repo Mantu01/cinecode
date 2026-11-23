@@ -69,6 +69,32 @@ export interface PreparedText {
 
 const fontCache = new Map<string, FontFace>();
 
+interface TextRun {
+  readonly text: string;
+  readonly fontFamily: string;
+  readonly width: number;
+}
+
+interface LayoutCacheEntry {
+  readonly metrics: TextMetricsResult;
+  readonly glyphs: readonly GlyphPosition[];
+  readonly words: readonly { text: string; x: number; y: number; width: number; height: number }[];
+  readonly lineRuns: ReadonlyArray<readonly TextRun[]>;
+}
+
+const TEXT_LAYOUT_CACHE_MAX = 500;
+const textLayoutCache = new Map<string, LayoutCacheEntry>();
+let textLayoutCacheHits = 0;
+let textLayoutCacheMisses = 0;
+
+export function clearTextLayoutCache(): void {
+  textLayoutCache.clear();
+}
+
+export function getTextLayoutCacheStats(): { size: number; hits: number; misses: number } {
+  return { size: textLayoutCache.size, hits: textLayoutCacheHits, misses: textLayoutCacheMisses };
+}
+
 /** Pooled 1×1 measurement canvas — reused across all text measurements to avoid per-call native allocation. */
 let _measureCanvas: Canvas | null = null;
 function _measureCtx(): CanvasRenderingContext2D {
@@ -81,6 +107,7 @@ function _measureCtx(): CanvasRenderingContext2D {
 export function registerFont(face: FontFace): void {
   const key = `${face.family}-${face.weight ?? "normal"}-${face.style ?? "normal"}`;
   fontCache.set(key, face);
+  clearTextLayoutCache();
 }
 
 export function getFontKey(style: TextStyle): string {
@@ -147,39 +174,68 @@ function getAlignOffset(width: number, align: TextStyle["align"], maxWidth: numb
 }
 
 export function prepareText(options: TextLayoutOptions): PreparedText {
-  const ctx = _measureCtx();
   const { style, text, characterAccess, wordAccess } = options;
-  ctx.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize}px "${style.fontFamily}"`;
-  ctx.textBaseline = "alphabetic";
-  ctx.letterSpacing = `${style.letterSpacing ?? 0}px`;
-  const metrics = measureText(ctx, text, style);
-  const glyphs: GlyphPosition[] = [];
-  const words: { text: string; x: number; y: number; width: number; height: number }[] = [];
-  let charIndex = 0;
-  for (const line of metrics.lines) {
-    const lineWords = line.text.split(/(\s+)/);
-    let wordX = line.x;
-    for (const word of lineWords) {
-      const wordMetrics = ctx.measureText(word);
-      if (wordAccess) {
-        words.push({ text: word, x: wordX, y: line.y - line.baseline, width: wordMetrics.width, height: line.height });
-      }
-      for (const char of word) {
-        const charWidth = getDefaultFontFallbackResolver().measure(style, char);
-        if (characterAccess) {
-          glyphs.push({
-            char,
-            x: wordX,
-            y: line.y - line.baseline,
-            width: charWidth,
-            height: line.height,
-            index: charIndex++,
-          });
+  const cacheKey = `${text}::${style.fontFamily}::${style.fontSize}::${style.fontWeight}::${style.fontStyle}::${style.letterSpacing ?? 0}::${style.lineHeight ?? 1.2}::${style.maxWidth ?? 0}::${style.align ?? "left"}::${characterAccess ? 1 : 0}::${wordAccess ? 1 : 0}`;
+
+  let entry = textLayoutCache.get(cacheKey);
+  if (entry) {
+    textLayoutCacheHits++;
+    textLayoutCache.delete(cacheKey);
+    textLayoutCache.set(cacheKey, entry);
+  } else {
+    textLayoutCacheMisses++;
+    const ctx = _measureCtx();
+    ctx.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize}px "${style.fontFamily}"`;
+    ctx.textBaseline = "alphabetic";
+    ctx.letterSpacing = `${style.letterSpacing ?? 0}px`;
+    const metrics = measureText(ctx, text, style);
+    const glyphs: GlyphPosition[] = [];
+    const words: { text: string; x: number; y: number; width: number; height: number }[] = [];
+    let charIndex = 0;
+    const resolver = getDefaultFontFallbackResolver();
+    const lineRuns: TextRun[][] = [];
+
+    for (const line of metrics.lines) {
+      const lineWords = line.text.split(/(\s+)/);
+      let wordX = line.x;
+      for (const word of lineWords) {
+        const wordMetrics = ctx.measureText(word);
+        if (wordAccess) {
+          words.push({ text: word, x: wordX, y: line.y - line.baseline, width: wordMetrics.width, height: line.height });
         }
-        wordX += charWidth;
+        for (const char of word) {
+          const charWidth = resolver.measure(style, char);
+          if (characterAccess) {
+            glyphs.push({
+              char,
+              x: wordX,
+              y: line.y - line.baseline,
+              width: charWidth,
+              height: line.height,
+              index: charIndex++,
+            });
+          }
+          wordX += charWidth;
+        }
       }
+
+      const runs: TextRun[] = [];
+      for (const run of resolver.segment(line.text, style)) {
+        ctx.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize}px "${run.fontFamily}"`;
+        runs.push({ text: run.text, fontFamily: run.fontFamily, width: ctx.measureText(run.text).width });
+      }
+      lineRuns.push(runs);
     }
+
+    entry = { metrics, glyphs, words, lineRuns };
+    if (textLayoutCache.size >= TEXT_LAYOUT_CACHE_MAX) {
+      const first = textLayoutCache.keys().next().value;
+      if (first !== undefined) textLayoutCache.delete(first);
+    }
+    textLayoutCache.set(cacheKey, entry);
   }
+
+  const { metrics, glyphs, words, lineRuns } = entry;
   const draw = (drawCtx: CanvasRenderingContext2D, x: number, y: number, opacity = 1): void => {
     drawCtx.save();
     drawCtx.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize}px "${style.fontFamily}"`;
@@ -201,12 +257,13 @@ export function prepareText(options: TextLayoutOptions): PreparedText {
         drawCtx.fillStyle = `rgba(${style.fill.r}, ${style.fill.g}, ${style.fill.b}, ${style.fill.a})`;
       }
     }
-    const resolver = getDefaultFontFallbackResolver();
-    for (const line of metrics.lines) {
+    for (let i = 0; i < metrics.lines.length; i++) {
+      const line = metrics.lines[i]!;
+      const runs = lineRuns[i] ?? [];
       const lineX = x + line.x;
       const lineY = y + line.y;
       let offset = 0;
-      for (const run of resolver.segment(line.text, style)) {
+      for (const run of runs) {
         drawCtx.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize}px "${run.fontFamily}"`;
         const runX = lineX + offset;
         if (style.fill) {
@@ -215,7 +272,7 @@ export function prepareText(options: TextLayoutOptions): PreparedText {
         if (style.stroke) {
           drawCtx.strokeText(run.text, runX, lineY);
         }
-        offset += drawCtx.measureText(run.text).width;
+        offset += run.width;
       }
     }
     drawCtx.restore();

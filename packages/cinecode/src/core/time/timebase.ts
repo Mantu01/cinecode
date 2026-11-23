@@ -1,6 +1,6 @@
 import type { Composition } from "../types/composition.js";
 import type { Clip } from "../types/clips.js";
-import { createConversion, type FrameConversion } from "./convert.js";
+import { createConversion, secondsToFrames, type FrameConversion } from "./convert.js";
 import { createVfrConversion, timeToFrames, framesToTime } from "./tempoMap.js";
 import { computeClipSpan } from "../validation/timeline.js";
 import { parseDurationInput } from "../time-input.js";
@@ -66,7 +66,8 @@ export function compositionTotalFrames(composition: Composition): number {
   const conversion = compositionConversion(composition);
   let clipMax = 0;
   for (const track of composition.rootTimeline.tracks) {
-    if (track.kind === "audio" || track.kind === "subtitle") continue;
+    if (track.kind === "subtitle") continue;
+    if (track.kind === "audio" && (composition.width > 0 || composition.height > 0)) continue;
     for (const clip of track.clips) {
       const span = computeClipSpan(clip as Clip, conversion);
       if (span.endFrames > clipMax) clipMax = span.endFrames;
@@ -76,7 +77,7 @@ export function compositionTotalFrames(composition: Composition): number {
   if (composition.duration !== undefined) {
     const durSeconds = parseCompositionDurationSeconds(composition.duration, conversion.fpsFloat);
     if (durSeconds !== undefined) {
-      const durFrames = durationToFrames(durSeconds, conversion);
+      const durFrames = secondsToFrames(durSeconds, conversion);
       return composition.boundaryBehavior === "extend"
         ? Math.max(clipMax, durFrames)
         : durFrames;
@@ -92,11 +93,12 @@ export function resolveFrameWindow(
   toFrame?: number,
 ): FrameWindow {
   const compTotal = compositionTotalFrames(composition);
+  const lastCompFrame = compTotal > 0 ? compTotal - 1 : 0;
   const reqFrom = fromFrame ?? 0;
-  const reqTo = toFrame ?? compTotal;
+  const reqTo = toFrame ?? lastCompFrame;
 
   const effectiveFrom = Math.max(0, Math.min(reqFrom, compTotal));
-  const effectiveTo = Math.max(effectiveFrom, Math.min(reqTo, compTotal));
+  const effectiveTo = Math.max(effectiveFrom, Math.min(reqTo, lastCompFrame));
   const clamped = effectiveFrom !== reqFrom || effectiveTo !== reqTo;
 
   if (clamped) {
@@ -109,7 +111,7 @@ export function resolveFrameWindow(
     });
   }
 
-  const totalFrames = Math.max(0, effectiveTo - effectiveFrom);
+  const totalFrames = compTotal === 0 ? 0 : Math.max(0, effectiveTo - effectiveFrom + 1);
   return {
     from: effectiveFrom,
     to: effectiveTo,

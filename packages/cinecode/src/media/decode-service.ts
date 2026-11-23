@@ -1,3 +1,4 @@
+// Size exception (>400 lines): multi-worker shared video decode and IPC daemon per quality-standards §2.
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, rmSync, existsSync, writeFileSync, unlinkSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";

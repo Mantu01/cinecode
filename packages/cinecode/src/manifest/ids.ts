@@ -32,6 +32,8 @@ export function idRule(id: string): string | null {
   if (TRAILING.test(id)) return "it ends with a dot or space";
   const stem = id.split(".")[0]!.toUpperCase();
   if (RESERVED_NAMES.has(stem)) return `it is the reserved Windows device name "${stem}"`;
+  if (!/^[a-z0-9]/.test(id)) return "it must start with a lowercase letter or digit";
+  if (!/^[a-z0-9-]+$/.test(id)) return "it must contain only lowercase letters, digits, and dashes";
   return null;
 }
 
@@ -39,7 +41,7 @@ export function idError(kind: string, id: string, rule: string): CinecodeError {
   return createError(
     ErrorCode.CC1003,
     { key: `${kind}[].id`, path: id, reason: `${kind} "${id}" is not a filesystem-safe id: ${rule}` },
-    { fixHint: "Use a name made of letters, digits and dashes; ids become file names in the output root." },
+    { fixHint: "Use a name made of lowercase letters, digits, and dashes (e.g. 'intro-2'); ids become file names in the output root." },
   );
 }
 

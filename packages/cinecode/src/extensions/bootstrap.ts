@@ -28,6 +28,7 @@ import { spinTransitionProcessor } from "../transitions/spin.js";
 import { zoomTransitionProcessor } from "../transitions/zoom.js";
 import { reverbProcessor } from "../audio/reverb/register.js";
 import { ExtensionRegistry, type AudioProcessorExtension } from "./registry.js";
+import { isVerbose } from "../observability/invocation-context.js";
 
 export const EXTENSION_REGISTRY_VERSION = "1";
 
@@ -85,7 +86,7 @@ export const BUILTIN_EXTENSION_INVENTORY = Object.freeze({
   audioProcessors: Object.freeze([reverbProcessor.name]),
 });
 
-export function createBuiltinRegistry(): ExtensionRegistry {
+export function createBuiltinRegistry(options: { readonly log?: boolean } = {}): ExtensionRegistry {
   const registry = new ExtensionRegistry();
   for (const processor of BUILTIN_EFFECT_PROCESSORS) {
     registry.register<EffectProcessor>("effect", processor.name, processor);
@@ -95,7 +96,7 @@ export function createBuiltinRegistry(): ExtensionRegistry {
   }
   registry.register<AudioProcessorExtension>("audioProcessor", reverbProcessor.name, reverbProcessor);
 
-  if (process.env.CINECODE_VERBOSE === "1" || process.env.CINECODE_LOG_LEVEL === "debug") {
+  if (options.log !== false && isVerbose()) {
     process.stderr.write(
       `cinecode: extension registry v${EXTENSION_REGISTRY_VERSION}: ${BUILTIN_EFFECT_NAMES.length} effects, ${BUILTIN_TRANSITION_NAMES.length} transitions\n`,
     );

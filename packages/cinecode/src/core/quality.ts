@@ -8,13 +8,13 @@ import type {
   RenderConfig,
   VideoCodec,
 } from "./types/config.js";
-import { STILL_FORMATS } from "./output-plan.js";
+import { codecPixFmt, STILL_FORMATS } from "./output-plan.js";
 import { createError, ErrorCode } from "../errors/codes.js";
 import { DEFAULT_IMAGES } from "../config/defaults.js";
 import { recordNote } from "../errors/degradations.js";
 
 /** Which physical encoder family a codec runs on. */
-export type EncoderBackend = "software" | "nvenc" | "videotoolbox" | "vaapi" | "qsv";
+export type EncoderBackend = "software" | "nvenc" | "videotoolbox" | "qsv";
 
 let cachedHardwareAcceleration: EncoderBackend | null = null;
 
@@ -123,24 +123,21 @@ const LEGACY_QUALITY_MAP: Readonly<Record<string, QualityPreset>> = {
   lossless: "lossless",
 };
 
-/** Normalizes any accepted quality spelling to a modern profile name. */
+/** Quality names the table maps; anything else is rejected, not silently defaulted. */
 export function normalizeQuality(setting: QualitySetting | undefined): QualityPreset {
   if (!setting) return "final";
-  return LEGACY_QUALITY_MAP[setting] ?? "final";
+  const mapped = LEGACY_QUALITY_MAP[setting];
+  if (!mapped) {
+    throw createError(ErrorCode.CC1012, {
+      reason: `unknown quality "${setting}"`,
+      supported: Object.keys(LEGACY_QUALITY_MAP).join(", "),
+    });
+  }
+  return mapped;
 }
 
-const DEFAULT_PIX_FMT: Readonly<Record<VideoCodec, string>> = {
-  h264: "yuv420p",
-  h265: "yuv420p",
-  av1: "yuv420p",
-  vp9: "yuv420p",
-  prores: "yuv422p10le",
-  ffv1: "yuv444p10le",
-  utvideo: "yuv422p",
-};
-
 function backendFor(
-  accel: HardwareAcceleration | undefined,
+  accel: HardwareAcceleration | EncoderBackend | undefined,
   codec: VideoCodec,
 ): EncoderBackend {
   if (codec === "prores" || codec === "ffv1" || codec === "utvideo") return "software";
@@ -175,12 +172,12 @@ export function resolveVideoEncoding(options: ResolveEncodingOptions = {}): Vide
   const av1Defaults = codec === "av1" ? AV1_QUALITY_PROFILES[profile] : undefined;
   const crf = clampCrf(render.crf ?? av1Defaults?.crf ?? defaults.crf, codec);
   const preset = render.preset ?? defaults.preset;
-  const pixFmt = DEFAULT_PIX_FMT[codec];
+  const pixFmt = codecPixFmt(codec);
 
   // Auto-detect hardware acceleration when not explicitly configured
-  let backend: HardwareAcceleration | undefined = render.hardwareAcceleration;
+  let backend: HardwareAcceleration | EncoderBackend | undefined = render.hardwareAcceleration;
   if (backend === "auto" || backend === undefined) {
-    backend = detectHardwareAcceleration() as HardwareAcceleration;
+    backend = detectHardwareAcceleration();
   }
 
   const chosenBackend = backendFor(backend, codec);

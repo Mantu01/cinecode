@@ -4,7 +4,13 @@ import type { EasingDescriptor } from "../types/easing.js";
 import { type FrameConversion, timeInputToFrames, createConversion } from "../time/convert.js";
 import { mixColors, parseColor } from "../easing/colors.js";
 import { interpolateKeyframeValue, keyframeProgress } from "./interpolate.js";
+import { namedEasingDescriptor } from "../easing/curve.js";
 import type { KeyframeInterpolationInput } from "./types.js";
+
+function resolveEasingInput(easing: unknown): EasingDescriptor | undefined {
+  if (typeof easing === "string") return namedEasingDescriptor(easing) ?? undefined;
+  return easing as EasingDescriptor | undefined;
+}
 
 export interface EngineKeyframe {
   readonly atFrames: number;
@@ -99,9 +105,9 @@ export function interpolateProperty(
   const from = keyframes[index]!;
   const to = keyframes[index + 1]!;
   const span = to.atFrames - from.atFrames;
-  const localTime = (clipFrame - from.atFrames) / span;
-  const progress = keyframeProgress(from.interpolation, from.easing, context.fps);
-  const eased = evaluationSafe(progress(localTime));
+  const localTime = span > 0 ? Math.min(1, Math.max(0, (clipFrame - from.atFrames) / span)) : 1;
+  const easing = keyframeProgress(from.interpolation, from.easing, context.fps);
+  const eased = evaluationSafe(easing(localTime));
   return interpolateValues(from.value, to.value, eased);
 }
 
@@ -154,17 +160,17 @@ export function resolveClipKeyframes<T extends Record<string, any>>(clip: T, fra
         : typeof t[0] === "string"
           ? timeInputToFrames(t[0], conversion)
           : Math.round(atTime * (atTime <= 60 ? fps : 1));
-      return createEngineKeyframe(atFrames, t[1], t[2]);
+      return createEngineKeyframe(atFrames, t[1] as AnimatableValue, resolveEasingInput(t[2]));
     });
-    const sorted = sortKeyframes(engineKfs);
+    const sorted = sortKeyframes(engineKfs as readonly EngineKeyframe[]) as readonly EngineKeyframe[];
     overrides[prop] = interpolateProperty(sorted, localFrame, ctx);
   }
 
-  const result = { ...clip } as Record<string, unknown>;
+  const result: Record<string, any> = { ...clip };
   for (const [prop, value] of Object.entries(overrides)) {
     if (prop.includes(".")) {
       const parts = prop.split(".");
-      let current = result;
+      let current: Record<string, any> = result;
       for (let i = 0; i < parts.length - 1; i++) {
         current[parts[i]!] = { ...current[parts[i]!] };
         current = current[parts[i]!];
@@ -178,5 +184,5 @@ export function resolveClipKeyframes<T extends Record<string, any>>(clip: T, fra
       result[prop] = value;
     }
   }
-  return result;
+  return result as T;
 }

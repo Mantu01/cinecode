@@ -40,6 +40,7 @@ export interface CompositionProps {
   readonly burnSubtitles?: boolean;
   /** How clips that extend past the composition duration are handled. */
   readonly boundaryBehavior?: "clamp" | "extend" | "strict";
+  readonly previewScale?: number;
   readonly scenes?: Readonly<Record<string, Timeline>>;
 }
 
@@ -102,5 +103,6 @@ export interface Composition {
   readonly postProcessing?: PostProcessingConfig;
   readonly burnSubtitles?: boolean;
   readonly boundaryBehavior?: "clamp" | "extend" | "strict";
+  readonly previewScale?: number;
   readonly scenes?: Readonly<Record<string, Timeline>>;
 }

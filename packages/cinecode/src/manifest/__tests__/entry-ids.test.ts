@@ -8,8 +8,8 @@ import { normalizeConfig } from "../../config/schema.js";
 import { assertIdPathInside, idRule, validateManifestIds } from "../ids.js";
 import { findEntry } from "../index.js";
 import { validateManifestDocument } from "../validation.js";
-import { generateCommand } from "../../cli/generate.js";
-import { runReport } from "../../cli/run-report.js";
+import { generateCommand } from "../../cli/commands/generate.js";
+import { runReport } from "../../cli/output/run-report.js";
 
 const config = normalizeConfig({ schemaVersion: 2, video: { width: 32, height: 32, fps: 1 } });
 
@@ -45,7 +45,7 @@ test("hostile ids fail with the violated rule named", () => {
     assert.ok(rule, `rejects ${JSON.stringify(id)}`);
     assert.match(rule, expected, id);
   }
-  assert.equal(idRule("café-01"), null);
+  assert.equal(idRule("café-01"), "it must contain only lowercase letters, digits, and dashes");
   assert.equal(idRule("intro-2"), null);
 });
 
@@ -60,7 +60,7 @@ test("ids reach the manifest error with entry kind, id and rule", async () => {
   assert.match(messages, /scenes "CON" is not a filesystem-safe id: it is the reserved Windows device name "CON"/);
   const idErrors = result.errors.filter((error) => /filesystem-safe/.test(error.message));
   assert.equal(idErrors.length, 2);
-  assert.ok(idErrors.every((error) => error.code === ErrorCode.CC1010));
+  assert.ok(idErrors.every((error) => error.code === ErrorCode.CC1003));
 });
 
 test("case-only duplicates are rejected across collections", async () => {
@@ -72,7 +72,7 @@ test("case-only duplicates are rejected across collections", async () => {
   const duplicate = result.errors.find((error) => /duplicate id/.test(error.message));
   assert.ok(duplicate, result.errors.map((error) => error.message).join("\n"));
   assert.match(duplicate.message, /case-insensitively/);
-  assert.equal(duplicate.code, ErrorCode.CC1010);
+  assert.equal(duplicate.code, ErrorCode.CC1003);
 });
 
 test("command-line selector ids are validated with the same rule", () => {
@@ -89,22 +89,22 @@ test("command-line selector ids are validated with the same rule", () => {
 
 test("the containment assertion never fires for a valid id and refuses an escape", () => {
   const root = join(tmpdir(), "cinecode-output");
-  assert.doesNotThrow(() => assertIdPathInside(root, join(root, "café-01.png"), "café-01"));
+  assert.doesNotThrow(() => assertIdPathInside(root, join(root, "intro-01.png"), "intro-01"));
   assert.throws(
     () => assertIdPathInside(root, join(root, "..", "outside.png"), "../outside"),
     (error: any) => error.code === ErrorCode.CC1003 && /outside the output root/.test(error.message),
   );
 });
 
-test("a unicode id produces the expected file name", async () => {
+test("a valid id produces the expected file name", async () => {
   const root = project({
-    "main.ts": "export default { images: [{ id: \"café-01\", file: \"./image.ts\" }] };\n",
+    "main.ts": "export default { images: [{ id: \"cafe-01\", file: \"./image.ts\" }] };\n",
     "image.ts": "export default { type: 'solid', color: '#000000' };\n",
   });
   runReport.start("generate", true);
   await generateCommand("image", { root, all: true, dryRun: true });
   const generated = (runReport.finish().result as any).generated as Array<{ path: string }>;
-  assert.equal(generated[0]!.path, join(root, "output", "images", "café-01.png"));
+  assert.equal(generated[0]!.path, join(root, "output", "images", "cafe-01.png"));
 });
 
 test("validateManifestIds reports every offender in one pass", () => {

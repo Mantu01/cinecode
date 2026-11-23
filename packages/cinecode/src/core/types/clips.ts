@@ -1,3 +1,4 @@
+// Size exception (>400 lines): canonical clip and layer types table per quality-standards §2.
 import type { Camera } from "../../renderer/camera/rig.js";
 import type { ParticlePhysicsConfig } from "../../particles/types.js";
 import type { MaterialSlotOverride } from "../../model-3d/materials/types.js";

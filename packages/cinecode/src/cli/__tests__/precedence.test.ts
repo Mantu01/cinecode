@@ -5,14 +5,11 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { explicitPathsOf, normalizeConfig } from "../../config/schema.js";
 import { ErrorCode } from "../../errors/index.js";
-import {
-  resolveRenderParameters,
-  formatExplainReport,
-  describeExplainReport,
-  validatePrecedenceConflicts,
-} from "../precedence.js";
-import { renderCommand } from "../render.js";
-import { runReport } from "../run-report.js";
+import { resolveRenderParameters } from "../resolve/precedence.js";
+import { formatExplainReport, describeExplainReport } from "../resolve/explain.js";
+import { validatePrecedenceConflicts } from "../resolve/precedence-validate.js";
+import { renderCommand } from "../commands/render.js";
+import { runReport } from "../output/run-report.js";
 
 function makeProject(files: Record<string, string> = {}): string {
   const root = mkdtempSync(join(tmpdir(), "cinecode-precedence-"));

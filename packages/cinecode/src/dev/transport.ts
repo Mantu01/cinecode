@@ -27,12 +27,14 @@ interface ClientState {
 }
 
 export type WsMessageHandler = (client: WsClient, data: unknown) => void;
+export type WsCloseHandler = (client: WsClient) => void;
 
 // Single-user protocol transport
 export class WebSocketHub {
   private readonly clients = new Map<number, ClientState>();
   private readonly ipCounts = new Map<string, number>();
   private readonly messageHandlers: WsMessageHandler[] = [];
+  private readonly closeHandlers: WsCloseHandler[] = [];
   private nextId = 1;
 
   readonly maxTotalConnections = 100;
@@ -41,6 +43,10 @@ export class WebSocketHub {
 
   onMessage(handler: WsMessageHandler): void {
     this.messageHandlers.push(handler);
+  }
+
+  onClose(handler: WsCloseHandler): void {
+    this.closeHandlers.push(handler);
   }
 
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): WsClient {
@@ -65,8 +71,6 @@ export class WebSocketHub {
         "Connection: Upgrade\r\n" +
         `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
     );
-    if (head.length > 0) this.consume(socket, head);
-
     const id = this.nextId++;
     this.ipCounts.set(ip, currentIpCount + 1);
 
@@ -97,6 +101,7 @@ export class WebSocketHub {
     socket.on("data", (chunk: Buffer) => this.consume(socket, chunk));
     socket.on("close", () => this.cleanupClient(state));
     socket.on("error", () => this.cleanupClient(state));
+    if (head.length > 0) this.consume(socket, head);
 
     return client;
   }
@@ -148,10 +153,13 @@ export class WebSocketHub {
   }
 
   private cleanupClient(client: ClientState): void {
-    this.clients.delete(client.id);
+    if (!this.clients.delete(client.id)) return;
     const count = this.ipCounts.get(client.ip) ?? 1;
     if (count <= 1) this.ipCounts.delete(client.ip);
     else this.ipCounts.set(client.ip, count - 1);
+    if (client.client) {
+      for (const handler of this.closeHandlers) handler(client.client);
+    }
   }
 
   private dispatchMessage(client: WsClient, body: Buffer): void {
@@ -198,22 +206,22 @@ export class WebSocketHub {
       let length = second & 0x7F;
       let headerSize = 2;
       if (length === 126) {
-        if (offset + 4 > frame.length) break;
-        length = frame.readUInt16BE(offset + 2);
+        if (frame.length < 4) break;
+        length = frame.readUInt16BE(2);
         headerSize = 4;
       } else if (length === 127) {
-        if (offset + 10 > frame.length) break;
-        length = Number(frame.readBigUInt64BE(offset + 2));
+        if (frame.length < 10) break;
+        length = Number(frame.readBigUInt64BE(2));
         headerSize = 10;
       }
-      let payloadStart = offset + headerSize;
+      let payloadStart = headerSize;
       let maskKeyOffset = -1;
       if (masked) {
-        if (payloadStart + 4 > frame.length) break;
+        if (frame.length < payloadStart + 4) break;
         maskKeyOffset = payloadStart;
         payloadStart += 4;
       }
-      if (payloadStart + length > frame.length) break;
+      if (frame.length < payloadStart + length) break;
       if (length > 1024 * 1024) {
         socket.write(Buffer.from([0x88, 0x02, 0x03, 0xe9]));
         socket.end();
@@ -226,7 +234,7 @@ export class WebSocketHub {
           body[index] = body[index]! ^ frame[maskKeyOffset + (index % 4)]!;
         }
       }
-      offset = payloadStart + length;
+      offset += payloadStart + length;
       if (opcode === 0x8) {
         state.closeCode = body.length >= 2 ? body.readUInt16BE(0) : null;
         socket.write(Buffer.concat([Buffer.from([0x88, body.length]), body]));

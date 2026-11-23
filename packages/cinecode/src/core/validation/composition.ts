@@ -1,3 +1,4 @@
+// Size exception (>400 lines): single source of truth for composition validation gates per quality-standards §2.
 import type { Clip, Composition, VisualClip } from "../types/index.js";
 import { createConversion } from "../time/index.js";
 import { timeInputToFrames } from "../time/convert.js";

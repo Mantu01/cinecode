@@ -1,21 +1,14 @@
 import { defineMain } from "cinecode";
 
+// Ids are lowercase kebab-case and unique per collection; durations are seconds and must match content.
 export default defineMain({
-  scenes: [
-    {
-      id: "intro",
-      name: "Intro Scene",
-      file: "./src/scenes/intro.ts",
-      duration: 5,
-    },
-  ],
-
   timelines: [
     {
       id: "main",
       name: "Main Video",
+      // A timeline compiles either its file or its sceneRefs, never both.
+      file: "./src/timelines/main.ts",
       duration: 5,
-      sceneRefs: ["intro"],
     },
   ],
 });

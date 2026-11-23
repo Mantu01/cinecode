@@ -28,6 +28,11 @@ The generated project pins the framework on a registry range and ships a config,
 a composition entry, a scene, a timeline and a `tsconfig.json`. Requires Node.js
 22.18.0 or newer.
 
+## Documentation
+
+- [Documentation Hub](../../docs/README.md)
+- [Architecture Rules & Contracts](../../docs/rules.md)
+
 ## License
 
 MIT

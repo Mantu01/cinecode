@@ -1,17 +1,16 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { collectHealth } from "../health.js";
-import { buildSyncReport } from "../sync.js";
+import { collectHealthReport } from "../shared/health/collect.js";
 import { parseVariantLabel, PREDEFINED_VARIANTS } from "../../pipeline/multiResolution.js";
-import { getBenchmarkHistoryPath } from "../benchmark.js";
-import { buildStoryboardClips, storyboardToComposition, type Storyboard } from "../story.js";
+import { getBenchmarkHistoryPath } from "../commands/benchmark.js";
+import { buildStoryboardClips, storyboardToComposition, type Storyboard } from "../commands/story.js";
 import { drawPath, type PathSegment } from "../../renderer/shapes/draw.js";
 import { createDefaultTransform, type DrawContext } from "../../renderer/shapes/primitives.js";
 import { Canvas } from "@napi-rs/canvas";
 
 describe("Phase 30: Auxiliary commands tell the truth", () => {
   it("health probe reports real facts offline without network", async () => {
-    const report = await collectHealth();
+    const report = await collectHealthReport(null);
     assert.ok(report.ffmpeg);
     assert.ok(typeof report.ffmpeg.version === "string");
     assert.ok(report.node);
@@ -19,17 +18,6 @@ describe("Phase 30: Auxiliary commands tell the truth", () => {
     assert.ok(report.workers.available > 0);
     assert.ok(report.diskSpace);
     assert.ok(report.gpu.available);
-  });
-
-  it("sync dry-run matches plan and only deletes with explicit confirmation", async () => {
-    const reportDry = await buildSyncReport({ dryRun: true, deleteOrphans: true });
-    assert.ok(reportDry.actions);
-    assert.deepEqual(reportDry.actions.upload, []);
-    assert.deepEqual(reportDry.actions.download, []);
-    assert.equal(reportDry.dryRun, true);
-
-    const reportUnconfirmed = await buildSyncReport({ dryRun: false, deleteOrphans: true, confirmed: false });
-    assert.deepEqual(reportUnconfirmed.actions?.delete, []);
   });
 
   it("multi-res validates variants against predefined variants and dimensions", () => {

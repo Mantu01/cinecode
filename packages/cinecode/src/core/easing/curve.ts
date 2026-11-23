@@ -175,6 +175,17 @@ function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
 
+const NAMED_EASING = /^ease(In|Out|InOut)(Sine|Quad|Cubic|Quart|Expo|Back|Elastic|Bounce)$/;
+
+export function namedEasingDescriptor(name: string): EasingDescriptor | null {
+  if (name === "linear" || name === "easeLinear") return { kind: "linear" };
+  const match = NAMED_EASING.exec(name);
+  if (!match) return null;
+  const family = (match[2]!.charAt(0).toLowerCase() + match[2]!.slice(1)) as EaseFamily;
+  const mode = (match[1] === "InOut" ? "in-out" : match[1]!.toLowerCase()) as EaseMode;
+  return { kind: "ease", family, mode };
+}
+
 export function curveProgress(descriptor: EasingDescriptor, fps: number): Progress {
   switch (descriptor.kind) {
     case "linear":

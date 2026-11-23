@@ -1,12 +1,11 @@
 import { createCanvas, createContext } from "./composite/engine.js";
 import { ByteBoundedCache, unregisterByteCache, type CacheStats } from "./pool.js";
-import type { Canvas } from "@napi-rs/canvas";
+import type { Canvas, SKRSContext2D, ImageData } from "@napi-rs/canvas";
 import type { ExtractedFrame } from "../media/frames.js";
 import type { CubeTexture } from "../model-3d/environment/cubeMap.js";
 import type { MediaCache } from "../media/cache.js";
-
-const POOL_CACHE_BYTES = 128 * 1024 * 1024;
-const DEFAULT_IMAGE_CACHE_BYTES = 64 * 1024 * 1024;
+import { getProcessCacheRegistry, releaseSessionCaches } from "./cache-registry.js";
+import { clearMultiCameraCache } from "./multi-camera.js";
 
 export function canvasBytes(canvas: Canvas): number {
   return canvas.width * canvas.height * 4;
@@ -47,6 +46,7 @@ export interface RenderSession {
   readonly scaledSurfaceCache: ByteBoundedCache<string, Canvas>;
   readonly matteCanvasPool: Map<string, Canvas>;
   readonly tempCanvasPool: Canvas[];
+  readonly imageDataPool: Map<string, ImageData>;
   readonly indexCache: WeakMap<object, any>;
 
   mediaCache: MediaCache | null;
@@ -62,6 +62,7 @@ export interface RenderSession {
   getChromaKeyCanvas(width: number, height: number): Canvas;
   getScaledSurface(width: number, height: number): Canvas;
   getTempCanvas(width: number, height: number): Canvas;
+  getImageData(ctx: SKRSContext2D, width: number, height: number): ImageData;
   clearTempCanvases(): void;
 
   getCacheStats(): readonly CacheStats[];
@@ -85,76 +86,34 @@ export function createRenderSession(id?: string): RenderSession {
   if (isJob) liveSessionCount++;
   const sessionId = id ?? `session-${++sessionCounter}`;
 
-  const imageCache = new ByteBoundedCache<string, Canvas>(
-    `${sessionId}:images`,
-    DEFAULT_IMAGE_CACHE_BYTES,
-    canvasBytes,
-  );
-  const rgbaBufferCache = new ByteBoundedCache<string, Uint8ClampedArray>(
-    `${sessionId}:rgba`,
-    DEFAULT_IMAGE_CACHE_BYTES,
-    (arr) => arr.byteLength,
-  );
-  const videoFrameCache = new ByteBoundedCache<string, ExtractedFrame>(
-    `${sessionId}:video-frames`,
-    POOL_CACHE_BYTES,
-    (f) => f.buffer.byteLength,
-  );
+  const registry = getProcessCacheRegistry();
+  const globalService = registry.getService();
+  const totalMax = globalService.maxBytes;
+
+  const imageLimit = Math.max(16 * 1024 * 1024, Math.floor(totalMax * 0.20));
+  const videoLimit = Math.max(32 * 1024 * 1024, Math.floor(totalMax * 0.35));
+  const rgbaLimit = Math.max(8 * 1024 * 1024, Math.floor(totalMax * 0.10));
+  const canvasLimit = Math.max(32 * 1024 * 1024, Math.floor(totalMax * 0.25));
+
+  const imageCache = new ByteBoundedCache<string, Canvas>(`${sessionId}:images`, imageLimit, canvasBytes, undefined, globalService);
+  const rgbaBufferCache = new ByteBoundedCache<string, Uint8ClampedArray>(`${sessionId}:rgba`, rgbaLimit, (arr) => arr.byteLength, undefined, globalService);
+  const videoFrameCache = new ByteBoundedCache<string, ExtractedFrame>(`${sessionId}:video-frames`, videoLimit, (f) => f.buffer.byteLength, undefined, globalService);
   const videoFrameOrigin = new Map<string, string>();
-  const drawBufferCache = new ByteBoundedCache<string, [Canvas, Canvas]>(
-    `${sessionId}:draw-buffers`,
-    POOL_CACHE_BYTES,
-    canvasPairBytes,
-  );
-  const renderTargetCache = new ByteBoundedCache<string, Canvas>(
-    `${sessionId}:render-targets`,
-    POOL_CACHE_BYTES,
-    canvasBytes,
-  );
-  const groupCanvasCache = new ByteBoundedCache<string, Canvas>(
-    `${sessionId}:group-canvases`,
-    POOL_CACHE_BYTES,
-    canvasBytes,
-  );
-  const transitionCanvasCache = new ByteBoundedCache<string, [Canvas, Canvas]>(
-    `${sessionId}:transition-buffers`,
-    POOL_CACHE_BYTES,
-    canvasPairBytes,
-  );
-  const transparentCanvasCache = new ByteBoundedCache<string, Canvas>(
-    `${sessionId}:transparent-canvases`,
-    POOL_CACHE_BYTES,
-    canvasBytes,
-  );
-  const particleCanvasCache = new ByteBoundedCache<string, Canvas>(
-    `${sessionId}:particle-canvases`,
-    POOL_CACHE_BYTES,
-    canvasBytes,
-  );
-  const noiseTextureCache = new ByteBoundedCache<string, Canvas>(
-    `${sessionId}:noise-textures`,
-    POOL_CACHE_BYTES,
-    canvasBytes,
-  );
+  const drawBufferCache = new ByteBoundedCache<string, [Canvas, Canvas]>(`${sessionId}:draw-buffers`, canvasLimit, canvasPairBytes, undefined, globalService);
+  const renderTargetCache = new ByteBoundedCache<string, Canvas>(`${sessionId}:render-targets`, canvasLimit, canvasBytes, undefined, globalService);
+  const groupCanvasCache = new ByteBoundedCache<string, Canvas>(`${sessionId}:group-canvases`, canvasLimit, canvasBytes, undefined, globalService);
+  const transitionCanvasCache = new ByteBoundedCache<string, [Canvas, Canvas]>(`${sessionId}:transition-buffers`, canvasLimit, canvasPairBytes, undefined, globalService);
+  const transparentCanvasCache = new ByteBoundedCache<string, Canvas>(`${sessionId}:transparent-canvases`, canvasLimit, canvasBytes, undefined, globalService);
+  const particleCanvasCache = new ByteBoundedCache<string, Canvas>(`${sessionId}:particle-canvases`, canvasLimit, canvasBytes, undefined, globalService);
+  const noiseTextureCache = new ByteBoundedCache<string, Canvas>(`${sessionId}:noise-textures`, canvasLimit, canvasBytes, undefined, globalService);
   const skyboxCache = new Map<string, Promise<CubeTexture>>();
-  const videoFrameCanvasPool = new ByteBoundedCache<string, Canvas>(
-    `${sessionId}:video-canvas-pool`,
-    POOL_CACHE_BYTES,
-    canvasBytes,
-  );
+  const videoFrameCanvasPool = new ByteBoundedCache<string, Canvas>(`${sessionId}:video-canvas-pool`, canvasLimit, canvasBytes, undefined, globalService);
   const model3dRendererCache = new Map<string, any>();
-  const chromaKeyCanvasCache = new ByteBoundedCache<string, Canvas>(
-    `${sessionId}:chromakey`,
-    POOL_CACHE_BYTES,
-    canvasBytes,
-  );
-  const scaledSurfaceCache = new ByteBoundedCache<string, Canvas>(
-    `${sessionId}:scaled-surfaces`,
-    POOL_CACHE_BYTES,
-    canvasBytes,
-  );
+  const chromaKeyCanvasCache = new ByteBoundedCache<string, Canvas>(`${sessionId}:chromakey`, canvasLimit, canvasBytes, undefined, globalService);
+  const scaledSurfaceCache = new ByteBoundedCache<string, Canvas>(`${sessionId}:scaled-surfaces`, canvasLimit, canvasBytes, undefined, globalService);
   const matteCanvasPool = new Map<string, Canvas>();
   const tempCanvasPool: Canvas[] = [];
+  const imageDataPool = new Map<string, ImageData>();
   const indexCache = new WeakMap<object, any>();
 
   const allCaches = [
@@ -197,6 +156,7 @@ export function createRenderSession(id?: string): RenderSession {
     scaledSurfaceCache,
     matteCanvasPool,
     tempCanvasPool,
+    imageDataPool,
     indexCache,
 
     mediaCache: null,
@@ -304,6 +264,16 @@ export function createRenderSession(id?: string): RenderSession {
       return canvas;
     },
 
+    getImageData(ctx, width, height) {
+      const key = `${width}x${height}`;
+      let imgData = imageDataPool.get(key);
+      if (!imgData) {
+        imgData = ctx.createImageData(width, height);
+        imageDataPool.set(key, imgData);
+      }
+      return imgData;
+    },
+
     clearTempCanvases() {
       tempCanvasPool.length = 0;
     },
@@ -321,11 +291,21 @@ export function createRenderSession(id?: string): RenderSession {
         c.clear();
         unregisterByteCache(c);
       }
+      for (const renderer of model3dRendererCache.values()) {
+        try {
+          renderer?.dispose?.();
+        } catch {
+          // Note: best-effort disposal
+        }
+      }
+      model3dRendererCache.clear();
       videoFrameOrigin.clear();
       skyboxCache.clear();
-      model3dRendererCache.clear();
       matteCanvasPool.clear();
       tempCanvasPool.length = 0;
+      imageDataPool.clear();
+      clearMultiCameraCache();
+      releaseSessionCaches(sessionId);
       this.mediaCache = null;
     },
   };

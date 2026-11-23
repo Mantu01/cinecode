@@ -11,7 +11,7 @@ export {
   BUILTIN_TRANSITION_NAMES,
 } from "./transitions/index.js";
 export type { TransitionDefinition } from "./transitions/index.js";
-export { defineConfig } from "./config/scaffold.js";
+export { defineConfig } from "./core/define/definitions.js";
 export {
   definePlugin,
   defineManifest,
@@ -158,7 +158,7 @@ export {
   pendingDegradations,
 } from "./errors/degradations.js";
 export type { Degradation } from "./errors/degradations.js";
-export { exitCodeForError, EXIT_CODES } from "./cli/exit-codes.js";
+export { exitCodeForError, EXIT_CODES } from "./cli/shared/exit-codes.js";
 
 // Binary resolution
 export {

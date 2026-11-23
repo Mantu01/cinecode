@@ -22,7 +22,14 @@ const warnings: WarningRecord[] = [];
 const notes: string[] = [];
 
 export function recordDegradation(degradation: Degradation): void {
-  degradations.push(degradation);
+  const seen = degradations.some(
+    (entry) =>
+      entry.code === degradation.code &&
+      entry.what === degradation.what &&
+      entry.reason === degradation.reason &&
+      entry.input === degradation.input,
+  );
+  if (!seen) degradations.push(degradation);
 }
 
 export function recordWarning(warning: WarningRecord): void {

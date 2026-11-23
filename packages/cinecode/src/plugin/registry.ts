@@ -34,6 +34,39 @@ export interface PluginRegistryOptions {
   readonly precedence?: readonly string[];
 }
 
+export function assertFrameCapability(plugin: CinecodePlugin): void {
+  const permissions = plugin.manifest.permissions;
+  if (permissions && !permissions.includes("frame:process")) {
+    throw createError(ErrorCode.CC8002, {
+      plugin: plugin.manifest.name,
+      reason: "plugin registers frame processors but its permissions do not include frame:process",
+    });
+  }
+}
+
+export function registerPluginExtensions(
+  registry: ExtensionRegistry,
+  plugin: CinecodePlugin,
+  effects: readonly string[] = (plugin.effects ?? []).map((effect) => effect.name),
+  transitions: readonly string[] = (plugin.transitions ?? []).map((transition) => transition.name),
+): void {
+  const name = plugin.manifest.name;
+  const selectedEffects = new Set(effects);
+  const selectedTransitions = new Set(transitions);
+  for (const effect of plugin.effects ?? []) {
+    const slot = registry.slot<EffectProcessor>("effect");
+    if (selectedEffects.has(effect.name)) slot.register(effect.name, effect);
+    slot.register(`${name}/${effect.name}`, effect);
+    slot.register(`${name}:${effect.name}`, effect);
+  }
+  for (const transition of plugin.transitions ?? []) {
+    const slot = registry.slot<TransitionProcessor>("transition");
+    if (selectedTransitions.has(transition.name)) slot.register(transition.name, transition);
+    slot.register(`${name}/${transition.name}`, transition);
+    slot.register(`${name}:${transition.name}`, transition);
+  }
+}
+
 interface RegisteredFeature {
   pluginName: string;
   handler: unknown;
@@ -225,6 +258,7 @@ export class PluginRegistry {
   async init(extensionRegistry: ExtensionRegistry = getExtensions()): Promise<void> {
     for (const entry of this.plugins.values()) {
       if (entry.state !== "registered") continue;
+      assertFrameCapability(entry.plugin);
       if (entry.plugin.effects) {
         for (const effect of entry.plugin.effects) {
           this.registerFeature(effect.name, entry.plugin.manifest.name, effect);
@@ -333,7 +367,7 @@ export class PluginRegistry {
     const timeout = new Promise<void>((resolvePromise) => {
       timer = setTimeout(() => {
         recordDegradation({
-          code: "CC7001",
+          code: "CC8003",
           what: "plugin hook timeout",
           reason: `${pluginName} hook ${hook} exceeded ${timeoutMs}ms; continuing`,
           instead: "hook execution skipped",
@@ -386,4 +420,8 @@ export function getPluginRegistry(): PluginRegistry {
 
 export function setPluginRegistry(registry: PluginRegistry | null): void {
   defaultRegistry = registry;
+}
+
+export async function teardownPluginRegistry(): Promise<void> {
+  if (defaultRegistry) await defaultRegistry.teardown();
 }

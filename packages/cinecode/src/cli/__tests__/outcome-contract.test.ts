@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { COMMANDS } from "../command-registry.js";
-import { EXIT_CODES, EXIT_CODE_RULES, exitCodeForError, type ExitCodeName } from "../exit-codes.js";
+import { COMMANDS } from "../registry/assemble.js";
+import { EXIT_CODES, EXIT_CODE_RULES, exitCodeForError, type ExitCodeName } from "../shared/exit-codes.js";
 import { ErrorCode } from "../../errors/codes.js";
-import { runReport } from "../run-report.js";
+import { runReport } from "../output/run-report.js";
 
 test("the exit-code table covers every error code and maps to one documented exit", () => {
   const codes = Object.values(ErrorCode);

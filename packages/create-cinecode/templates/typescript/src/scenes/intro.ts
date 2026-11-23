@@ -1,13 +1,23 @@
-import { defineScene, shape, text, timeline, track, anchorPosition } from "cinecode";
+import { defineScene, shape, timeline, track, anchorPosition } from "cinecode";
+import titleCard from "../components/title-card.ts";
 
 const WIDTH = {{WIDTH}};
 const HEIGHT = {{HEIGHT}};
 const DURATION = 5;
 
+// A scene duration must equal its timeline content; keyframes are sorted and deterministic.
 export default defineScene("intro", DURATION, () => {
   const container = { width: WIDTH, height: HEIGHT };
   const cardSize = { width: Math.round(WIDTH * 0.7), height: Math.round(HEIGHT * 0.5) };
   const cardPos = anchorPosition(container, cardSize, "center");
+
+  const card = titleCard.build({
+    label: "Hello, Cinecode",
+    width: WIDTH,
+    height: HEIGHT,
+    start: 2.5,
+    duration: 2.5,
+  });
 
   return timeline(
     track("main", [
@@ -29,24 +39,7 @@ export default defineScene("intro", DURATION, () => {
         start: 0,
         duration: 3,
       }),
-      text("Hello, Cinecode", Math.round(HEIGHT * 0.08), {
-        fontFamily: "sans-serif",
-        fill: "#ffffff",
-        align: "center",
-        transform: { x: Math.round(WIDTH / 2), y: Math.round(HEIGHT / 2) },
-        opacity: 0,
-        transitionIn: { name: "fade", duration: 0.5 },
-        keyframes: {
-          opacity: [
-            [0, 0],
-            [0.5, 1, "easeOutCubic"],
-            [2, 1],
-            [2.5, 0, "easeInCubic"],
-          ],
-        },
-        start: 2.5,
-        duration: 2.5,
-      }),
     ]),
+    card,
   );
 });

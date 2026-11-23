@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { ErrorCode } from "../../errors/index.js";
-import { exitCodeForError } from "../../cli/exit-codes.js";
+import { exitCodeForError } from "../../cli/shared/exit-codes.js";
 import { loadConfig } from "../schema.js";
 import { validateManifestDocument } from "../../manifest/validation.js";
 import { normalizeConfig } from "../schema.js";

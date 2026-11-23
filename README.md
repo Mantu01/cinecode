@@ -160,7 +160,9 @@ For all 30 canonical commands and detailed flag options, see the [CLI Command Re
 
 ## Documentation
 
+- [Documentation Hub](docs/README.md) — Complete documentation directory, quick-reference tables, and agent navigation.
 - [CLI Command Reference](docs/command-reference.md) — Exhaustive reference of all 30 commands, flags, and exit codes.
+- [Architecture Rules & Contracts](docs/rules.md) — Single source of truth for filesystem shape, four roots, determinism, and CLI/preview contracts.
 - [Configuration Reference](docs/config-reference.md) — Field-by-field reference for `cinecode.config.ts` and `main.ts`.
 - [Support Matrix & Limits](docs/support-matrix.md) — Supported Node versions, OS platforms, video/audio formats, and limitations.
 - [Architecture & Invariants](docs/architecture.md) — Design contracts, precedence order, zero-copy pipeline, and determinism.

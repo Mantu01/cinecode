@@ -2,7 +2,7 @@ import { pathToFileURL } from "node:url";
 import { resolve, isAbsolute } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { createError, ErrorCode } from "../errors/codes.js";
-import { recordDegradation } from "../errors/degradations.js";
+import { degradationCode, recordDegradation } from "../errors/degradations.js";
 import type { CinecodeConfig } from "../core/types/index.js";
 import type { CinecodePlugin, PluginKind, PluginManifest } from "./types.js";
 import { PluginRegistry } from "./registry.js";
@@ -136,7 +136,7 @@ function validatePlugin(plugin: unknown, source: string): CinecodePlugin {
   const deprecation = checkPluginDeprecation(resolved.manifest as PluginManifest);
   if (deprecation.isDeprecated || deprecation.isIncompatible) {
     recordDegradation({
-      code: "CC7001",
+      code: "CC8006",
       what: "deprecated or incompatible plugin",
       reason: formatDeprecationNotice(resolved.manifest as PluginManifest, deprecation),
       instead: "plugin loaded with deprecation notice",
@@ -252,8 +252,23 @@ export async function loadPluginsFromConfig(
   const loaded: CinecodePlugin[] = [];
   for (const entry of entries ?? []) {
     if (entry.enabled === false) continue;
-    const plugin = await loadPlugin(entry.source, { options: entry.options ?? {}, registry, rootDir: options.rootDir });
-    loaded.push(plugin);
+    try {
+      const plugin = await loadPlugin(entry.source, { options: entry.options ?? {}, registry, rootDir: options.rootDir });
+      loaded.push(plugin);
+    } catch (error) {
+      if (entry.options?.strict === true) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      const code = error && typeof error === "object" && typeof (error as { code?: unknown }).code === "string"
+        ? String((error as { code: string }).code)
+        : degradationCode(message);
+      recordDegradation({
+        code,
+        what: "plugin load failed",
+        reason: message,
+        input: entry.source,
+        instead: "the render continues without this plugin",
+      });
+    }
   }
 
   if (options.autoDiscover !== false) {

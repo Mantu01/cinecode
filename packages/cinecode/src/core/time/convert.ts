@@ -1,6 +1,7 @@
 import type { FramesMarker } from "./values.js";
 import { isFrames, parseTimecode } from "./values.js";
 import { type Rational, resolveFps, rationalDiv } from "./rational.js";
+import { parseTimeInput } from "../time-input.js";
 
 export type Fps = number | Rational;
 
@@ -46,6 +47,8 @@ export function timeInputToFrames(value: number | string | FramesMarker, convers
     return value.__cinecode_frames;
   }
   if (typeof value === "string") {
+    const parsed = parseTimeInput(value, conversion.fpsFloat);
+    if (parsed.ok) return parsed.time.frame;
     return timecodeToFrames(value, conversion);
   }
   return secondsToFrames(value, conversion);

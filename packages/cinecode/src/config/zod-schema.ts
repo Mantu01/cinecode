@@ -1,6 +1,8 @@
+// Size exception (>400 lines): one schema table keeps config, CLI and docs in sync.
 import { z } from "zod";
 import { MANIFEST_SCHEMA_VERSION } from "../contracts.js";
-import { OUTPUT_FORMATS } from "../core/output-plan.js";
+import { ALL_AUDIO_CODECS, ALL_VIDEO_CODECS, GIF_DITHER_MODES, OUTPUT_FORMATS } from "../core/output-plan.js";
+import { parseMemoryBudgetMb } from "./defaults.js";
 import { PLATFORM_PRESET_IDS } from "../encoder/platform-presets.js";
 import { idRule } from "../manifest/ids.js";
 
@@ -16,11 +18,12 @@ export const RESOLUTION_PRESETS = Object.keys(RESOLUTION_DIMENSIONS) as Array<ke
 export const SCHEMA_VERSION: 2 = MANIFEST_SCHEMA_VERSION;
 export const SCHEMA_VERSIONS = [1, SCHEMA_VERSION] as const;
 export const ASPECT_RATIOS = ["16:9", "9:16", "1:1", "4:3", "21:9"] as const;
-export const VIDEO_CODECS = ["h264", "h265", "av1", "prores", "vp9", "ffv1", "utvideo"] as const;
+export const VIDEO_CODECS = ALL_VIDEO_CODECS;
 export const RENDER_FORMATS = OUTPUT_FORMATS;
 export const QUALITY_SETTINGS = ["draft", "preview", "medium", "final", "lossless", "low", "high"] as const;
 export const ENCODER_PRESETS = ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"] as const;
 export const HARDWARE_ACCELERATION = ["auto", "nvenc", "videotoolbox", "qsv", "off"] as const;
+export const COLOR_SPACES = ["srgb", "linear"] as const;
 /** Derived from the one preset table: config, CLI and docs share these ids. */
 export const PLATFORM_PRESETS = PLATFORM_PRESET_IDS;
 export const AUDIO_CHANNELS = [1, 2, 6] as const;
@@ -89,6 +92,23 @@ export const ColorManagementInputSchema = z.object({
   enabled: z.boolean().optional(),
 }).strict();
 
+export const AudioCodecSchema = z.enum(ALL_AUDIO_CODECS as unknown as [string, ...string[]]);
+export const GifDitherModeSchema = z.enum(GIF_DITHER_MODES as unknown as [string, ...string[]]);
+
+export const MemoryBudgetSchema = z.union([
+  z.number().min(16),
+  z.string().min(1).refine(
+    (val) => {
+      try {
+        return parseMemoryBudgetMb(val) >= 16;
+      } catch {
+        return false;
+      }
+    },
+    { message: "Memory budget must be >= 16MB, e.g. 1024, '1GB', '512MB'" },
+  ),
+]);
+
 export const RenderInputSchema = z.object({
   fps: z.number().positive().max(120).optional(),
   resolution: ResolutionSchema.optional(),
@@ -99,13 +119,25 @@ export const RenderInputSchema = z.object({
   preset: EncoderPresetSchema.optional(),
   hardwareAcceleration: HardwareAccelerationSchema.optional(),
   concurrency: ConcurrencySchema.optional(),
-  chunkSize: z.number().int().positive().optional(),
-  memoryBudgetMb: z.number().int().positive().optional(),
+  chunkSize: z.number().int().min(1).max(10000).optional(),
+  memoryBudget: MemoryBudgetSchema.optional(),
+  memoryBudgetMb: z.number().int().min(16).optional(),
+  overwrite: z.boolean().optional(),
   alpha: z.boolean().optional(),
   twoPass: z.boolean().optional(),
   platformPreset: PlatformPresetSchema.optional(),
   bitrate: z.number().int().positive().optional(),
   colorManagement: ColorManagementInputSchema.optional(),
+  audioCodec: AudioCodecSchema.optional(),
+  audioBitrate: z.number().int().min(8).max(1024).optional(),
+  gifQuality: z.number().int().min(1).max(8).optional(),
+  gifDither: GifDitherModeSchema.optional(),
+  gifMaxFrames: z.number().int().positive().optional(),
+  seed: z.number().int().min(0).optional(),
+  effects: z.array(z.string().min(1)).optional(),
+  noEffects: z.boolean().optional(),
+  strictFonts: z.boolean().optional(),
+  frameErrorPolicy: z.enum(["placeholder", "repeat-previous", "abort"]).optional(),
 }).strict();
 
 export const AudioInputSchema = z.object({
@@ -146,10 +178,6 @@ export const CinecodeConfigInputSchema = z.object({
   video: VideoInputSchema.optional(),
   images: ImageInputSchema.optional(),
   dev: DevInputSchema.optional(),
-  sourceDir: z.string().optional(),
-  mediaDir: z.string().optional(),
-  outputDir: z.string().optional(),
-  cacheDir: z.string().optional(),
   binaries: BinaryConfigSchema.optional(),
   allowCoLocatedMedia: z.boolean().optional(),
   cloudMedia: z.array(CloudMediaEntrySchema).optional(),

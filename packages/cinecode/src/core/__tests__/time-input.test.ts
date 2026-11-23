@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseDurationInput, parseTimeInput, TIME_GRAMMAR } from "../time-input.js";
-import { parseTimeArgument } from "../../cli/shared.js";
-import { UsageError } from "../../cli/usage-error.js";
+import { parseTimeArgument } from "../../cli/shared/shared.js";
+import { UsageError } from "../../cli/shared/usage-error.js";
 
 const ACCEPTED: ReadonlyArray<readonly [string, number, number, number]> = [
   ["00:00:01:15", 30, 45, 1.5],

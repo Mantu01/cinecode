@@ -241,6 +241,20 @@ export function evictOldest<K, V>(map: Map<K, V>, maxSize: number): void {
   }
 }
 
+export function evictOldestWithDispose<K, V extends { dispose?: () => void }>(map: Map<K, V>, maxSize: number): void {
+  while (map.size >= maxSize) {
+    const firstKey = map.keys().next().value;
+    if (firstKey === undefined) break;
+    const value = map.get(firstKey);
+    map.delete(firstKey);
+    try {
+      value?.dispose?.();
+    } catch {
+      // Note: best-effort disposal
+    }
+  }
+}
+
 export interface BufferPool {
   acquire(width: number, height: number): Uint8ClampedArray;
   release(buffer: Uint8ClampedArray): void;

@@ -10,8 +10,14 @@ export interface AuditIssue {
   remediation?: string;
 }
 
+export interface AuditScanOptions {
+  readonly projectDir?: string;
+  readonly mediaDir?: string;
+}
+
 export interface AuditReport {
   timestamp: string;
+  scannedRoots: { readonly project: string; readonly media: string };
   scannedDependencies: number;
   scannedAssets: number;
   issues: AuditIssue[];
@@ -45,7 +51,9 @@ const COPYLEFT_LICENSES = new Set([
   "mpl-2.0",
 ]);
 
-export async function runSecurityAudit(projectDir = process.cwd()): Promise<AuditReport> {
+export async function runSecurityAudit(options: string | AuditScanOptions = process.cwd()): Promise<AuditReport> {
+  const projectDir = typeof options === "string" ? options : (options.projectDir ?? process.cwd());
+  const mediaDir = typeof options === "string" ? path.join(projectDir, "media") : (options.mediaDir ?? path.join(projectDir, "media"));
   const issues: AuditIssue[] = [];
   let scannedDeps = 0;
   let scannedAssets = 0;
@@ -98,7 +106,6 @@ export async function runSecurityAudit(projectDir = process.cwd()): Promise<Audi
     }
   }
 
-  const mediaDir = path.join(projectDir, "assets");
   if (fs.existsSync(mediaDir)) {
     try {
       const files = fs.readdirSync(mediaDir, { recursive: true }) as string[];
@@ -131,6 +138,7 @@ export async function runSecurityAudit(projectDir = process.cwd()): Promise<Audi
 
   return {
     timestamp: new Date().toISOString(),
+    scannedRoots: { project: projectDir, media: mediaDir },
     scannedDependencies: scannedDeps,
     scannedAssets: scannedAssets,
     issues,

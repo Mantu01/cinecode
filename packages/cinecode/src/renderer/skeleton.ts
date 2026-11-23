@@ -1,5 +1,5 @@
 import type { Canvas, SKRSContext2D } from "@napi-rs/canvas";
-import type { Point, Stroke } from "./shapes/primitives.js";
+import type { Point, Stroke } from "./shapes/index.js";
 
 /**
  * Stick-figure and skeletal drawing primitives.

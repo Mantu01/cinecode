@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { ByteBudget, resolveTransportBudget, estimateFrameBytes, estimateChunkBytes } from "../memory.js";
-import { createWorkerManager, createChunks, resolveConcurrency } from "../workers.js";
+import { createWorkerManager, createChunks, createChunkIdentity, resolveConcurrency } from "../workers.js";
 import { analyzeWorkload, tuneConcurrency } from "../concurrency-tuner.js";
 import { renderVideo } from "../index.js";
 import type { Composition } from "../../core/types/index.js";
@@ -158,7 +158,7 @@ test("a chunk larger than budget limit is either split or refused with clear nam
 
   try {
     // A chunk with 6 frames exceeds the 2-frame chunk limit; processChunks splits it into 2-frame chunks
-    const bigChunk = { startFrame: 0, endFrame: 6, frames: [0, 1, 2, 3, 4, 5] };
+    const bigChunk = { identity: createChunkIdentity(0, 0, 0, 6), startFrame: 0, endFrame: 6, frames: [0, 1, 2, 3, 4, 5] };
     const results = await manager.processChunks([bigChunk]);
     const totalFrames = results.reduce((sum, r) => sum + r.frames.length, 0);
     assert.equal(totalFrames, 6);
@@ -180,7 +180,7 @@ test("a chunk larger than budget limit is either split or refused with clear nam
 
   try {
     await assert.rejects(
-      failingManager.processChunks([{ startFrame: 0, endFrame: 1, frames: [0] }]),
+      failingManager.processChunks([{ identity: createChunkIdentity(0, 0, 0, 1), startFrame: 0, endFrame: 1, frames: [0] }]),
       (err: Error) =>
         err.message.includes("Render chunk needs") &&
         err.message.includes("chunk budget"),

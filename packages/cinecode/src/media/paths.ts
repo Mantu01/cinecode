@@ -2,7 +2,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { CinecodeConfig } from "../core/types/index.js";
 import { createError, ErrorCode } from "../errors/codes.js";
-import { runReport } from "../cli/run-report.js";
+import { runReport } from "../cli/output/run-report.js";
 
 /** Converts backslashes to forward slashes for POSIX-compliant relative paths. */
 export function toPosixPath(filePath: string): string {

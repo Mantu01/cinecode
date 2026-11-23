@@ -1,5 +1,6 @@
 import { existsSync, watch, type FSWatcher } from "node:fs";
 import { resolve } from "node:path";
+import { CONFIG_FILENAMES } from "../config/project.js";
 
 export interface ProjectWatcherOptions {
   readonly rootDir: string;
@@ -11,16 +12,6 @@ export interface ProjectWatcherOptions {
   readonly onChange: (files: readonly string[]) => void;
   readonly debounceMs?: number;
 }
-
-const CONFIG_FILENAMES = [
-  "cinecode.config.ts",
-  "cinecode.config.js",
-  "cinecode.config.mjs",
-  "cinecode.config.cjs",
-  "cinecode.config.mts",
-  "cinecode.config.cts",
-  "cinecode.config.json",
-];
 
 // Watches project source root, media root, configuration files and individual tracked import files
 export class ProjectWatcher {

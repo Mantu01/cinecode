@@ -94,10 +94,9 @@ export class MediaIndex {
           const relPath = relative(rootBase, fullPath).replace(/\\/g, "/");
           if (this.ignore?.(relPath)) continue;
 
+          // Only media files belong in the index; docs and source files are not media.
           const type = getExtendedMediaType(fullPath);
-          if (rootType === "source" && (type === "unknown" || fullPath.endsWith(".ts") || fullPath.endsWith(".js") || fullPath.endsWith(".json"))) {
-            continue;
-          }
+          if (type === "unknown") continue;
 
           let size = 0;
           try {

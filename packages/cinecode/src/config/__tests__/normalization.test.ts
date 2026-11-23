@@ -19,10 +19,6 @@ const FULL: Record<string, unknown> = {
   video: { width: 1280, height: 720, fps: 24, defaultDuration: 12, background: "#112233" },
   images: { defaultFormat: "webp", quality: 80, scaleFactor: 2 },
   dev: { port: 4100, host: "127.0.0.1", open: true, hmr: false },
-  sourceDir: "./src",
-  mediaDir: "./media",
-  outputDir: "./output",
-  cacheDir: "./.cache",
   allowCoLocatedMedia: true,
   cloudMedia: [{ url: "https://example.com/a.png", name: "a", sha256: "abc" }],
   render: {

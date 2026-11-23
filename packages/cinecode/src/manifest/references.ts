@@ -57,21 +57,5 @@ export function referenceWarnings(manifest: MainManifest): CinecodeError[] {
   for (const entry of manifest.audio ?? []) report("audio", entry.id, graph.audio.has(entry.id.toLowerCase()), "generate");
   for (const entry of manifest.scenes ?? []) report("scene", entry.id, graph.scenes.has(entry.id.toLowerCase()), "render");
 
-  for (const override of graph.overridden) {
-    const key = `override:${override.timeline}:${override.scene}`;
-    if (reported.has(key)) continue;
-    reported.add(key);
-    warnings.push(
-      createError(
-        ErrorCode.CC3010,
-        { timeline: override.timeline, scene: override.scene },
-        {
-          fixHint: `Remove "sceneRefs" from timeline "${override.timeline}" to keep its file, or remove "file" to keep the scene references.`,
-          severity: "warning",
-        },
-      ),
-    );
-  }
-
   return warnings;
 }

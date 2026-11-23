@@ -7,6 +7,7 @@ export interface CacheGcOptions {
   readonly cacheDir: string;
   readonly maxSizeBytes?: number;
   readonly maxAgeDays?: number;
+  readonly deleteOrphans?: boolean;
   readonly dryRun?: boolean;
   readonly now?: number;
 }
@@ -15,6 +16,8 @@ export interface CacheGcResult {
   readonly removedObjects: number;
   readonly removedBytes: number;
   readonly removedIndexes: number;
+  readonly removedOrphans: number;
+  readonly orphanBytes: number;
   readonly retainedBytes: number;
   readonly scannedObjects: number;
   readonly dryRun: boolean;
@@ -167,6 +170,23 @@ export async function collectFrameCacheGarbage(options: CacheGcOptions): Promise
     if (!dryRun) await rm(entry.path, { force: true });
   }
 
+  let removedOrphans = 0;
+  let orphanBytes = 0;
+  if (options.deleteOrphans === true) {
+    const activeHashes = new Set<string>();
+    for (const state of states) {
+      for (const entry of Object.values(state.index.frames)) activeHashes.add(entry.hash);
+      for (const chunk of Object.values(state.index.chunks)) if (chunk.payloadHash) activeHashes.add(chunk.payloadHash);
+    }
+    for (const [hash, entry] of objects) {
+      if (!activeHashes.has(hash) && !evicted.has(hash)) {
+        removedOrphans += 1;
+        orphanBytes += entry.size;
+        if (!dryRun) await rm(entry.path, { force: true });
+      }
+    }
+  }
+
   if (evicted.size > 0) {
     const reloaded = await loadIndexFiles(options.cacheDir);
     for (const state of reloaded) {
@@ -184,7 +204,7 @@ export async function collectFrameCacheGarbage(options: CacheGcOptions): Promise
     void hash;
   }
 
-  return { removedObjects, removedBytes, removedIndexes, retainedBytes, scannedObjects, dryRun };
+  return { removedObjects, removedBytes, removedIndexes, removedOrphans, orphanBytes, retainedBytes, scannedObjects, dryRun };
 }
 
 export async function pruneStaleEntries(

@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { ErrorCode } from "../../errors/index.js";
 import { pendingDegradations, pendingNotes } from "../../errors/degradations.js";
 import { normalizeConfig } from "../../config/schema.js";
-import { runReport } from "../../cli/run-report.js";
+import { runReport } from "../../cli/output/run-report.js";
 import {
   assembleTimelineComposition,
   composeSceneComposition,

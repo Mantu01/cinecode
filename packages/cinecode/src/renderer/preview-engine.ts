@@ -53,7 +53,7 @@ function isExpensive(name: string): boolean {
  */
 export function buildFastPreviewComposition(
   composition: Composition,
-  _scale: number,
+  scale = 1,
   bypassEffects = true,
   camera?: PreviewCameraState,
 ): Composition {
@@ -84,12 +84,14 @@ export function buildFastPreviewComposition(
   const postProcessing = scaled.postProcessing;
   return {
     ...scaled,
+    previewScale: scale,
     rootTimeline: { ...scaled.rootTimeline, tracks },
     ...(postProcessing
       ? {
           postProcessing: {
             ...postProcessing,
             previewMode: true,
+            resolutionScale: scale,
             effects: bypassEffects
               ? (postProcessing.effects ?? []).filter((effect) => !isExpensive(effect.name))
               : postProcessing.effects,

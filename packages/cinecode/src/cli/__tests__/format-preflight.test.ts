@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { explicitPathsOf, normalizeConfig } from "../../config/schema.js";
-import { resolveRenderParameters } from "../precedence.js";
-import { assertRenderableFormat } from "../format-preflight.js";
-import { renderCommand } from "../render.js";
-import { UsageError } from "../usage-error.js";
+import { resolveRenderParameters } from "../resolve/precedence.js";
+import { assertRenderableFormat } from "../gate/format-preflight.js";
+import { renderCommand } from "../commands/render.js";
+import { UsageError } from "../shared/usage-error.js";
 
 function preflight(input: Parameters<typeof assertRenderableFormat>[0]): void {
   assertRenderableFormat(input);

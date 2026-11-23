@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { ErrorCode } from "../../errors/index.js";
 import { configValidationCounts } from "../validator.js";
 import { explicitPathsOf, loadConfig, loadConfigDocument, normalizeConfig } from "../schema.js";
-import { resolveRenderParameters } from "../../cli/precedence.js";
+import { resolveRenderParameters } from "../../cli/resolve/precedence.js";
 
 function dir(): string {
   return mkdtempSync(join(tmpdir(), "cinecode-boundary-"));

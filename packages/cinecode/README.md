@@ -178,7 +178,7 @@ Environment variables are substituted at load time, with optional fallbacks:
 outputDir: "${OUTPUT_DIR:-./output}",
 ```
 
-A missing variable without a fallback fails loading with the variable name and a fix hint. A `.cinecodeignore` file excludes media from sync and scanning using gitignore-style patterns with `!` negation.
+A missing variable without a fallback fails loading with the variable name and a fix hint. A `.cinecodeignore` file excludes media from scanning using gitignore-style patterns with `!` negation.
 
 ## Dev server
 
@@ -213,7 +213,7 @@ Command aliases are opt-in: set `CINECODE_ALIASES=1` to expand them from
 `cinecode.json`, `package.json#cinecode.aliases` and `~/.cinecode/config.json`
 (project tables win over the global table). An alias never rewrites a known
 command, expansion is bounded and cycle-safe, and an alias that resolves to no
-command fails with a suggestion. Canonical aliases: `render-multi` -> `render`, `check` -> `validate`, `sync` -> `clean`, `health` -> `doctor`, `create` -> `init`.
+command fails with a suggestion. Canonical aliases: `render-multi` -> `render`, `check` -> `validate`, `health` -> `doctor`, `create` -> `init`.
 
 ## Advanced usage
 
@@ -315,7 +315,9 @@ pnpm --filter cinecode generate:schema
 
 ## Documentation
 
+- [Documentation Hub](../../docs/README.md)
 - [CLI command reference](../../docs/command-reference.md)
+- [Architecture Rules & Contracts](../../docs/rules.md)
 - [Configuration reference](../../docs/config-reference.md)
 - [Support matrix](../../docs/support-matrix.md)
 - [Output formats](../../docs/output-formats.md)

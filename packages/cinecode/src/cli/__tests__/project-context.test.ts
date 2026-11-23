@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { resolveProjectLocation } from "../../config/project.js";
 import { ErrorCode } from "../../errors/index.js";
-import { loadProjectContext } from "../project-context.js";
+import { loadProjectContext } from "../resolve/project-context.js";
 import { renderSync } from "../../api/render.js";
 
 const cli = fileURLToPath(new URL("../main.js", import.meta.url));
